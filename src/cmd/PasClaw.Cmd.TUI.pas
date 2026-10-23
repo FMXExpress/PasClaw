@@ -206,6 +206,14 @@ begin
       if not NewProviderFromConfig(Cfg, Name, Provider, Err) then
         LogWarn('tui: provider unavailable (%s)', [Err]);
 
+    { Loaded whatever --no-tools says: the manifests feed two things, and
+      only one of them needs a registry. /name in the chat input expands a
+      prompt skill into the turn's message -- no tool involved -- so with
+      the load inside the block below, `tui --no-tools` reported every
+      prompt skill as an unknown command. The agent REPL already loads its
+      slash skills on their own. (Codex P2 on #614.) }
+    Skills := LoadSkillManifests(GetHome);
+
     Reg := nil;
     if not A.NoTools then
     begin
@@ -240,7 +248,6 @@ begin
         notification tool is silently missing on the surface the
         operator actually uses. }
       RegisterSendMessageTool(Reg);
-      Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }
       RegisterSkillManageTool(Reg, Cfg);

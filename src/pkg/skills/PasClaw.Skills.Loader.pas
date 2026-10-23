@@ -272,73 +272,114 @@ begin
     if (Template[i] = '$') and (Template[i + 1] in ['0'..'9']) then Exit(True);
 end;
 
+{ The highest $1..$9 the template uses: that one absorbs the rest. }
+function HighestArgIndex(const Template: string): Integer;
+var
+  i: Integer;
+begin
+  Result := 0;
+  for i := 1 to Length(Template) - 1 do
+    if (Template[i] = '$') and (Template[i + 1] in ['1'..'9']) then
+      if Ord(Template[i + 1]) - Ord('0') > Result then Result := Ord(Template[i + 1]) - Ord('0');
+end;
+
+(* A $ARGUMENTS / $0..$9 placeholder at Template[i]: True with what it
+   renders to and how many characters it spans. Toks and MaxN come from
+   the argument string and the TEMPLATE -- never from text already
+   substituted -- so a value cannot turn into a placeholder. *)
+function ArgPlaceholderAt(const Template: string; i: Integer;
+                          const Arguments: string; const Toks: TStringArray;
+                          MaxN: Integer; out Value: string; out Len: Integer): Boolean;
+var
+  N: Integer;
+begin
+  Value := '';
+  Len := 0;
+  Result := False;
+  if Template[i] <> '$' then Exit;
+  if Copy(Template, i, 10) = '$ARGUMENTS' then
+  begin
+    Value := Arguments;
+    Len := 10;
+    Exit(True);
+  end;
+  if (i >= Length(Template)) or not (Template[i + 1] in ['0'..'9']) then Exit;
+  N := Ord(Template[i + 1]) - Ord('0');
+  if N = 0 then Value := Arguments
+  else if N <= Length(Toks) then
+  begin
+    if N = MaxN then
+    begin
+      { tokens N..end, rejoined with single spaces }
+      while N <= Length(Toks) do
+      begin
+        if Value <> '' then Value := Value + ' ';
+        Value := Value + Toks[N - 1];
+        Inc(N);
+      end;
+    end
+    else
+      Value := Toks[N - 1];
+  end;
+  Len := 2;
+  Result := True;
+end;
+
 function RenderSkillArguments(const Template, Arguments: string): string;
 var
   Toks: TStringArray;
-  MaxN, i, N: Integer;
+  MaxN, i, Len: Integer;
   Val: string;
 begin
   if not TemplateUsesArguments(Template) then Exit(Template);
   Toks := SplitSkillArgs(Arguments);
-  { The highest $N present absorbs the rest. }
-  MaxN := 0;
-  for i := 1 to Length(Template) - 1 do
-    if (Template[i] = '$') and (Template[i + 1] in ['1'..'9']) then
-      if Ord(Template[i + 1]) - Ord('0') > MaxN then MaxN := Ord(Template[i + 1]) - Ord('0');
+  MaxN := HighestArgIndex(Template);
   Result := '';
   i := 1;
   while i <= Length(Template) do
-  begin
-    if (Template[i] = '$') and (Copy(Template, i, 10) = '$ARGUMENTS') then
+    if ArgPlaceholderAt(Template, i, Arguments, Toks, MaxN, Val, Len) then
     begin
-      Result := Result + Arguments;
-      Inc(i, 10);
-      Continue;
-    end;
-    if (Template[i] = '$') and (i < Length(Template)) and (Template[i + 1] in ['0'..'9']) then
-    begin
-      N := Ord(Template[i + 1]) - Ord('0');
-      if N = 0 then Val := Arguments
-      else if N <= Length(Toks) then
-      begin
-        if N = MaxN then
-        begin
-          Val := '';
-          { tokens N..end, rejoined with single spaces }
-          while N <= Length(Toks) do
-          begin
-            if Val <> '' then Val := Val + ' ';
-            Val := Val + Toks[N - 1];
-            Inc(N);
-          end;
-        end
-        else
-          Val := Toks[N - 1];
-      end
-      else
-        Val := '';
       Result := Result + Val;
-      Inc(i, 2);
-      Continue;
+      Inc(i, Len);
+    end
+    else
+    begin
+      Result := Result + Template[i];
+      Inc(i);
     end;
-    Result := Result + Template[i];
-    Inc(i);
-  end;
 end;
 
+(* {{key}} from the JSON and $ARGUMENTS / $N from its "arguments" string,
+   in ONE pass over the template. Two passes -- keys first, then the
+   argument placeholders over the result -- read a substituted value as
+   template: "Pay {{amount}}" with {"amount":"$50"} became "Pay 0", and a
+   value holding $ARGUMENTS pulled the arguments in. (Codex P2 on #614.)
+   Only placeholders written in the template are placeholders. *)
 function RenderTemplate(const Template, ArgsJSON: string): string;
 var
   Obj: TJsonObject;
   Out_: string;
-  i: Integer;
-  Token, Key, Value: string;
-  InToken: Boolean;
+  i, MaxN, Len: Integer;
+  Token, Key, Value, Arguments: string;
+  Toks: TStringArray;
+  InToken, UsesArgs: Boolean;
 begin
   Result := Template;
   if (Template = '') or (ArgsJSON = '') then Exit;
   Obj := TJsonObject.Parse(ArgsJSON);
   if Obj = nil then Exit;
   try
+    { Command-style arguments ride in as one string ("arguments"), the
+      way a slash invocation or a model call with a single free-text
+      argument supplies them. }
+    Arguments := Obj.GetStr('arguments', '');
+    UsesArgs := TemplateUsesArguments(Template);
+    MaxN := 0;
+    if UsesArgs then
+    begin
+      Toks := SplitSkillArgs(Arguments);
+      MaxN := HighestArgIndex(Template);
+    end;
     Out_ := '';
     Token := '';
     InToken := False;
@@ -363,14 +404,18 @@ begin
         Inc(i, 2);
         Continue;
       end;
+      if (not InToken) and UsesArgs and
+         ArgPlaceholderAt(Template, i, Arguments, Toks, MaxN, Value, Len) then
+      begin
+        Out_ := Out_ + Value;
+        Inc(i, Len);
+        Continue;
+      end;
       if InToken then Token := Token + Template[i]
       else Out_ := Out_ + Template[i];
       Inc(i);
     end;
-    { Command-style arguments ride in as one string ("arguments"), the
-      way a slash invocation or a model call with a single free-text
-      argument supplies them. }
-    Result := RenderSkillArguments(Out_, Obj.GetStr('arguments', ''));
+    Result := Out_;
   finally
     Obj.Free;
   end;

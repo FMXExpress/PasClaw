@@ -83,6 +83,8 @@ A prompt skill's template can take command-style arguments as well as JSON keys:
 
 The free text arrives as the JSON key `arguments`. A template that uses `$ARGUMENTS` / `$N` and declares no schema gets a one-string `arguments` schema automatically, so the model can call `skill_deploy` with the same text an operator would type.
 
+Only placeholders written in the template are filled. A substituted value is text, never template: `Pay {{amount}}` with `{"amount":"$50"}` renders `Pay $50`, and an argument string containing `{{key}}` stays literal. A `$5` written in the template itself is a placeholder, so put a literal dollar amount in through a JSON key.
+
 **Slash commands.** In `pasclaw agent` and the TUI, `/name rest of line` runs the installed prompt skill `name` (case-insensitive; `-` and `_` match) with `rest of line` as its arguments. Built-in commands (`/help`, `/mode`, …) win on a name clash. `/help` lists the prompt skills it knows. Three optional frontmatter fields say where the result runs:
 
 ```yaml
@@ -97,7 +99,9 @@ subagent: true      # no agent named: run in a fresh child loop on the current t
 ---
 ```
 
-In the line REPL `agent:` goes through `spawn`, `subagent:` runs a child loop, and both record the typed command plus the child's reply in the transcript (not the child's tool traffic). The TUI honours `model:` and turns `agent:` / `subagent:` into an instruction at the top of the message. Source: `src/pkg/skills/PasClaw.Skills.Slash.pas`, `RenderSkillArguments` in `PasClaw.Skills.Loader`.
+In the line REPL `agent:` goes through `spawn`, `subagent:` runs a child loop, and both record the typed command plus the child's reply in the transcript (not the child's tool traffic). The TUI honours `model:` and turns `agent:` / `subagent:` into an instruction at the top of the message. Prompt skills answer to `/name` in `pasclaw tui --no-tools` too; only their `skill_<name>` tools need the registry.
+
+`model:` applies to the turn the command starts, and only that turn. The auto-router leaves that turn alone (it would otherwise swap in its easy model for a short command). In the TUI, a skill typed while a turn is running joins that turn as steering, on the model it already has, and the footer says so. Source: `src/pkg/skills/PasClaw.Skills.Slash.pas`, `RenderSkillArguments` in `PasClaw.Skills.Loader`.
 
 ## Install from GitHub
 

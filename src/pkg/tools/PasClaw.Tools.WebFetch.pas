@@ -48,8 +48,9 @@ procedure RegisterWebFetchTool(R: TToolRegistry);
 { A text GET through the same gates web_fetch uses -- scheme check, the
   SSRF pre-check and the redirect guard -- for callers that are not the
   model: the `instructions` URLs the system prompt loads. Body is the
-  UTF-8 decoded response, cut at MaxBytes. False with Err on refusal,
-  network failure or a non-2xx status. }
+  UTF-8 decoded response, cut at MaxBytes -- the download stops there,
+  so no more than MaxBytes is ever held (MaxBytes <= 0: no cap). False
+  with Err on refusal, network failure or a non-2xx status. }
 function FetchTextGuarded(const URL: string; MaxBytes: Integer;
                           out Body, Err: string): Boolean;
 
@@ -236,15 +237,118 @@ begin
             (Pos('application/xhtml',      ContentType) > 0);
 end;
 
+type
+  (* The response body, kept to at most Limit bytes WHILE it downloads.
+
+     FetchTextGuarded used to download into a TMemoryStream and cut at
+     MaxBytes afterwards, so an instructions URL answering with a huge
+     body -- or one that never ends -- was buffered whole before the cap
+     applied: unbounded memory for a ~128 KB budget. (Codex P2 on #614.)
+     Here the write that would cross the limit keeps what fits, sets
+     Full and raises, which ends the transfer: Indy offers no cancel hook
+     on the content stream, so this is the same exception-unwind
+     TEventStream in PasClaw.Client.Api uses.
+
+     Indy pre-sizes its target from Content-Length (AdjustStreamSize sets
+     Size), which on a memory stream reserves the whole declared length
+     before a byte arrives. SetSize is a no-op here, and Seek answers 0
+     like the other sink streams in this codebase: a declared length is
+     the server's claim, not memory to hand it -- nor, past 2 GB, a reason
+     for TStream's own SetSize to raise and fail the fetch. *)
+  TCappedBodyStream = class(TStream)
+  private
+    FData:  TBytes;
+    FLen:   Integer;
+    FLimit: Integer;
+    FFull:  Boolean;
+  protected
+    procedure SetSize(const NewSize: Int64); override;
+  public
+    constructor Create(ALimit: Integer);
+    function Write(const Buffer; Count: Longint): Longint; override;
+    function Read(var Buffer; Count: Longint): Longint; override;
+    function Seek(Offset: Longint; Origin: Word): Longint; override;
+    function Bytes: TBytes;
+    property Full: Boolean read FFull;
+  end;
+
+constructor TCappedBodyStream.Create(ALimit: Integer);
+begin
+  inherited Create;
+  if ALimit > 0 then FLimit := ALimit else FLimit := MaxInt;
+end;
+
+function TCappedBodyStream.Write(const Buffer; Count: Longint): Longint;
+var
+  Take, NewCap: Integer;
+begin
+  Result := Count;
+  if Count <= 0 then Exit;
+  Take := Count;
+  if Take > FLimit - FLen then Take := FLimit - FLen;
+  if Take > 0 then
+  begin
+    if FLen + Take > Length(FData) then
+    begin
+      NewCap := Length(FData) * 2;
+      if NewCap < FLen + Take then NewCap := FLen + Take;
+      if NewCap > FLimit then NewCap := FLimit;
+      SetLength(FData, NewCap);
+    end;
+    Move(Buffer, FData[FLen], Take);
+    Inc(FLen, Take);
+  end;
+  if Take < Count then
+  begin
+    FFull := True;
+    raise EAbort.CreateFmt('response body over %d bytes; cut there', [FLimit]);
+  end;
+end;
+
+function TCappedBodyStream.Read(var Buffer; Count: Longint): Longint;
+begin
+  Result := 0;
+end;
+
+function TCappedBodyStream.Seek(Offset: Longint; Origin: Word): Longint;
+begin
+  Result := 0;
+end;
+
+procedure TCappedBodyStream.SetSize(const NewSize: Int64);
+begin
+  { Deliberately nothing: see the type comment. }
+end;
+
+function TCappedBodyStream.Bytes: TBytes;
+begin
+  Result := Copy(FData, 0, FLen);
+end;
+
+{ The response's Content-Length, or -1 when it has none (or is chunked,
+  where the header would not describe the body). }
+function DeclaredContentLength(const H: THeaderPairs): Int64;
+var
+  i: Integer;
+begin
+  Result := -1;
+  for i := 0 to High(H) do
+    if SameText(H[i].Name, 'Transfer-Encoding') and
+       (Pos('chunked', LowerCase(H[i].Value)) > 0) then
+      Exit(-1);
+  for i := 0 to High(H) do
+    if SameText(H[i].Name, 'Content-Length') then
+      Result := StrToInt64Def(Trim(H[i].Value), -1);
+end;
+
 function FetchTextGuarded(const URL: string; MaxBytes: Integer;
                           out Body, Err: string): Boolean;
 var
   Guard: TWebFetchRedirectGuard;
   Resp: THTTPResult;
   Headers: array of THeaderPair;
-  MS: TMemoryStream;
-  Bytes: TBytes;
-  N: Integer;
+  Sink: TCappedBodyStream;
+  Declared: Int64;
 begin
   Result := False;
   Body := '';
@@ -261,35 +365,59 @@ begin
     Exit;
   end;
   Err := '';
+  Resp := Default(THTTPResult);
   Guard := TWebFetchRedirectGuard.Create;
-  MS := TMemoryStream.Create;
+  Sink := TCappedBodyStream.Create(MaxBytes);
   try
     try
-      Resp := GetURLToStreamGuarded(URL, MS, Headers, 20,
+      Resp := GetURLToStreamGuarded(URL, Sink, Headers, 20,
                                     'Mozilla/5.0 (PasClaw instructions)', 'text/*, */*',
                                     Guard.OnRedirect);
     except
       on E: Exception do
-      begin
-        Err := E.Message;
-        Exit;
-      end;
+        if not Sink.Full then
+        begin
+          Err := E.Message;
+          Exit;
+        end;
     end;
-    if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
+    (* A full sink ended the transfer on purpose, and the body is cut at
+       MaxBytes as documented. The client wrapper reports that abort as
+       an error -- Indy with the status it had already read, the
+       System.Net backend with status 0 -- so 0 counts as success here;
+       a real error status still fails. *)
+    if not (Sink.Full and (Resp.StatusCode = 0)) and
+       ((Resp.StatusCode < 200) or (Resp.StatusCode >= 300)) then
     begin
       Err := 'HTTP ' + IntToStr(Resp.StatusCode);
       if Resp.ErrorMsg <> '' then Err := Err + ': ' + Resp.ErrorMsg;
       Exit;
     end;
-    N := MS.Size;
-    if (MaxBytes > 0) and (N > MaxBytes) then N := MaxBytes;
-    SetLength(Bytes, N);
-    MS.Position := 0;
-    if N > 0 then MS.ReadBuffer(Bytes[0], N);
-    Body := TEncoding.UTF8.GetString(Bytes);
+    (* Under the cap, a transfer that died mid-body is a failure: what
+       arrived is a fragment, and the caller caches a success for a day as
+       the project's instructions (a failure serves the stale copy, if
+       any, instead). Two ways it shows: an error with a 2xx status (a
+       read timeout), or -- since Indy stops quietly when the peer hangs
+       up -- fewer bytes than the response declared. *)
+    if not Sink.Full then
+    begin
+      if Resp.ErrorMsg <> '' then
+      begin
+        Err := Resp.ErrorMsg;
+        Exit;
+      end;
+      Declared := DeclaredContentLength(Resp.RespHeaders);
+      if (Declared >= 0) and (Length(Sink.Bytes) < Declared) then
+      begin
+        Err := Format('connection closed after %d of %d bytes',
+                      [Length(Sink.Bytes), Declared]);
+        Exit;
+      end;
+    end;
+    Body := TEncoding.UTF8.GetString(Sink.Bytes);
     Result := True;
   finally
-    MS.Free;
+    Sink.Free;
     Guard.Free;
   end;
 end;

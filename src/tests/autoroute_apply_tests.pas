@@ -137,6 +137,18 @@ begin
     AssertTrue(LoopCfg.Provider = Primary, 'plan mode -> provider untouched');
     AssertTrue(LoopCfg.Model = 'claude-opus-4-7', 'plan mode -> model untouched');
 
+    { ---- A model picked for this turn on purpose (a slash skill's model:)
+      is kept: an easy score does not overrule it. (Codex P2 on #614.) ---- }
+    LoopCfg := Default(TToolLoopConfig);
+    LoopCfg.Provider    := Primary;
+    LoopCfg.Model       := 'skill-model';
+    LoopCfg.ModelPinned := True;
+    AssertTrue(not ApplyAutoRoute(LoopCfg, Cfg, Msgs, Routed),
+      'pinned model -> never routes');
+    AssertTrue(LoopCfg.Provider = Primary, 'pinned model -> provider untouched');
+    AssertTrue(LoopCfg.Model = 'skill-model', 'pinned model -> the skill''s model survives');
+    AssertTrue(Length(LoopCfg.Fallbacks) = 0, 'pinned model -> fallbacks untouched');
+
     { ---- Second route reuses the per-thread easy-provider cache (same name +
       fingerprint) and must still route correctly. ---- }
     LoopCfg := Default(TToolLoopConfig);

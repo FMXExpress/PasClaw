@@ -18,7 +18,7 @@ program skill_args_tests;
 {$IFDEF FPC}{$CODEPAGE UTF8}{$ENDIF}
 
 uses
-  SysUtils,
+  SysUtils, Classes,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
   PasClaw.Skills.Loader,
@@ -76,6 +76,17 @@ begin
   AssertEqStr(RenderTemplate('Hi {{name}}, do $1 and $2', '{"name":"Eli","arguments":"this \"that thing\""}'),
               'Hi Eli, do this and that thing', 'both substitutions');
   AssertEqStr(RenderTemplate('plain {{k}}', '{"k":"v"}'), 'plain v', 'no arguments key is fine');
+  (* A JSON value is substituted, never re-read as template (Codex P2 on
+     #614). Rendering keys first and then the $-placeholders over the
+     RESULT turned each of these into something else. *)
+  AssertEqStr(RenderTemplate('Pay {{amount}}', '{"amount":"$50"}'),
+              'Pay $50', 'a $ in a value is the value');
+  AssertEqStr(RenderTemplate('Note: {{n}} for $1', '{"n":"$ARGUMENTS","arguments":"x"}'),
+              'Note: $ARGUMENTS for x', '$ARGUMENTS in a value stays text');
+  AssertEqStr(RenderTemplate('a=$1 v={{v}}', '{"v":"$2","arguments":"p q"}'),
+              'a=p q v=$2', 'a $N in a value neither renders nor steals the rest');
+  AssertEqStr(RenderTemplate('do $1', '{"k":"SECRET","arguments":"{{k}}"}'),
+              'do {{k}}', 'the arguments string is not re-read for keys either');
   WriteLn('  ok: RenderSkillArguments / RenderTemplate');
 end;
 
@@ -159,9 +170,77 @@ begin
   WriteLn('  ok: frontmatter, slash resolution, expansion, registration schema');
 end;
 
+function ReadSource(const Path: string): string;
+var
+  Sl: TStringList;
+begin
+  Sl := TStringList.Create;
+  try
+    Sl.LoadFromFile(Path);
+    Result := Sl.Text;
+  finally
+    Sl.Free;
+  end;
+end;
+
+(* Every place a slash skill's model: is applied to a turn must also pin it,
+   or the auto-router replaces it on an easy-looking message. (Codex P2 on
+   #614.) The rule itself is tested in autoroute_apply_tests; what is
+   checked here is that each surface sets the flag -- two of the three are
+   the Delphi-only positioned TUI and the line REPL, neither drivable from
+   a test. Each applying line must be followed, within a few lines, by the
+   pin. *)
+procedure CheckPinnedAfter(const Path, Applies, Pin: string);
+var
+  Src, Rest: string;
+  P, Found: Integer;
+begin
+  Src := ReadSource(Path);
+  Found := 0;
+  P := Pos(Applies, Src);
+  while P > 0 do
+  begin
+    Inc(Found);
+    Rest := Copy(Src, P, 200);
+    if Pos(Pin, Rest) = 0 then
+      Fail_(Path + ': "' + Applies + '" is not followed by "' + Pin + '"');
+    Src := Copy(Src, P + Length(Applies), MaxInt);
+    P := Pos(Applies, Src);
+  end;
+  if Found = 0 then Fail_(Path + ': "' + Applies + '" not found -- update this check');
+end;
+
+procedure TestSurfacesPinTheSkillModel;
+var
+  Tui: string;
+begin
+  if not FileExists('src/pkg/tui/PasClaw.TUI.pas') then
+  begin
+    WriteLn('  skipping surface checks: run from the repo root');
+    Exit;
+  end;
+  CheckPinnedAfter('src/cmd/PasClaw.Cmd.Agent.pas', 'LoopCfg.Model := SkModel;',
+                   'LoopCfg.ModelPinned := True;');
+  CheckPinnedAfter('src/pkg/tui/PasClaw.TUI.pas', 'Cfg.Model := TurnModel;',
+                   'Cfg.ModelPinned := True;');
+  (* Positioned TUI: the skill model used to wait in a field until a turn
+     started, so a skill typed while a turn ran (queued as steering, no
+     turn started) put the NEXT turn on its model. It is a StartTurn
+     argument now; the field must not come back. (Codex P2 on #614.) *)
+  Tui := ReadSource('src/pkg/tui/PasClaw.TUI.pas');
+  AssertTrue(Pos('FTurnModel', Tui) = 0,
+             'PasClaw.TUI keeps a skill model in a field again -- it outlives the turn');
+  AssertTrue(Pos('StartTurn(Text, SkModel);', Tui) > 0,
+             'SubmitInput no longer hands the skill model to the turn it starts');
+  AssertTrue(Pos('HandleUserInput(Expanded, SkSpec.Model);', Tui) > 0,
+             'the line REPL no longer hands the skill model to its turn');
+  WriteLn('  ok: every surface pins a slash skill''s model, and only for the turn it starts');
+end;
+
 begin
   TestSplit;
   TestRender;
   TestFrontmatterAndSlash;
+  TestSurfacesPinTheSkillModel;
   WriteLn('PASS');
 end.

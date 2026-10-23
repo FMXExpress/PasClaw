@@ -1937,7 +1937,11 @@ begin
       end;
 
       LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, Line);
-      if SkModel <> '' then LoopCfg.Model := SkModel;   { a slash skill's model: for this turn }
+      if SkModel <> '' then
+      begin
+        LoopCfg.Model := SkModel;       { a slash skill's model: for this turn }
+        LoopCfg.ModelPinned := True;    { ...which the auto-router below keeps }
+      end;
       { After the first compaction the summary lives in
         LiveOptions.SystemPrompt inside RunToolLoop and gets returned
         via Loop.FinalSystemPrompt. We override here so the next turn

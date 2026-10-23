@@ -10,6 +10,10 @@ program instructions_tests;
     - an http URL with a fresh cache file is served from the cache (no
       network in the test); an empty list yields ''
     - config round-trip of "instructions"
+    - a URL whose body is far over the cap (a server declaring 3 GB) is
+      served cut at MaxBytes, and the download stops there instead of
+      being buffered whole; one the server cuts short under the cap fails
+      rather than being cached as the instructions
   Warm:
     - WarmPingDue table: before idle, in window, every-N spacing, after stop
     - WarmTick with a fake provider: disabled -> no call; enabled and due
@@ -22,8 +26,11 @@ program instructions_tests;
 {$IFDEF FPC}{$CODEPAGE UTF8}{$ENDIF}
 
 uses
-  SysUtils, Classes, DateUtils,
+  {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
+  SysUtils, Classes, DateUtils, SyncObjs,
+  IdHTTPServer, IdContext, IdCustomHTTPServer, IdGlobal,
   PasClaw.Utils,
+  PasClaw.Tools.WebFetch,
   PasClaw.Config,
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
@@ -222,8 +229,137 @@ begin
   WriteLn('  ok: WarmPingDue table, WarmTick with a counting provider');
 end;
 
+{ ---- the instructions download stops at its cap ---- }
+
+const
+  FloodTotal = 256 * 1024 * 1024;   { what the server is willing to send }
+
+type
+  (* Declares a body of Declared bytes, streams up to ToSend of it until
+     the client hangs up, then disconnects -- counting what it got out. *)
+  TFloodServer = class
+  public
+    Server: TIdHTTPServer;
+    Done: TEvent;
+    Sent, Declared, ToSend: Int64;
+    constructor Create(ADeclared, AToSend: Int64);
+    destructor Destroy; override;
+    procedure Get(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo;
+                  AResponseInfo: TIdHTTPResponseInfo);
+  end;
+
+constructor TFloodServer.Create(ADeclared, AToSend: Int64);
 begin
+  inherited Create;
+  Declared := ADeclared;
+  ToSend := AToSend;
+  Done := TEvent.Create(nil, True, False, '');
+  Server := TIdHTTPServer.Create(nil);
+  Server.DefaultPort := 0;
+  with Server.Bindings.Add do
+  begin
+    IP := '127.0.0.1';
+    Port := 0;
+  end;
+  Server.OnCommandGet := Get;
+  Server.Active := True;
+end;
+
+destructor TFloodServer.Destroy;
+begin
+  Server.Active := False;
+  Server.Free;
+  Done.Free;
+  inherited;
+end;
+
+procedure TFloodServer.Get(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo;
+                           AResponseInfo: TIdHTTPResponseInfo);
+var
+  Chunk: TIdBytes;
+  N: Int64;
+begin
+  N := 0;
+  try
+    AResponseInfo.ResponseNo := 200;
+    AResponseInfo.ContentType := 'text/plain';
+    AResponseInfo.ContentLength := Declared;
+    AResponseInfo.CloseConnection := True;
+    AResponseInfo.WriteHeader;
+    SetLength(Chunk, 65536);
+    FillChar(Chunk[0], Length(Chunk), Ord('a'));
+    try
+      while N < ToSend do
+      begin
+        if ToSend - N < Length(Chunk) then SetLength(Chunk, ToSend - N);
+        AContext.Connection.IOHandler.Write(Chunk);
+        Inc(N, Length(Chunk));
+      end;
+      AContext.Connection.Disconnect;
+    except
+      { the client hung up -- the point }
+    end;
+  finally
+    Sent := N;
+    Done.SetEvent;
+  end;
+end;
+
+(* An instructions URL answering with an enormous body -- here one that
+   claims 3 GB -- used to be downloaded whole into memory and only then
+   cut to MaxBytes. (Codex P2 on #614.) Now the transfer ends at the cap:
+   the body is MaxBytes long, and the server could get out only what the
+   socket buffers held before the client hung up, not the 256 MB it had
+   ready. *)
+procedure TestInstructionsDownloadCap;
+var
+  Flood: TFloodServer;
+  Body, Err: string;
+  Ok: Boolean;
+  Sent: Int64;
+begin
+  Sent := 0;
+  Flood := TFloodServer.Create(Int64(3) * 1024 * 1024 * 1024, FloodTotal);
+  try
+    Ok := FetchTextGuarded('http://127.0.0.1:' + IntToStr(Flood.Server.Bindings[0].Port) + '/rules.md',
+                           100000, Body, Err);
+    AssertTrue(Ok, 'a body over the cap is served cut, not failed: ' + Err);
+    AssertEqInt(Length(Body), 100000, 'the body is exactly MaxBytes');
+    AssertTrue(Body[1] = 'a', 'and it is the response');
+    AssertTrue(Flood.Done.WaitFor(15000) = wrSignaled, 'the server saw the client hang up');
+    Sent := Flood.Sent;
+    AssertTrue(Sent < 64 * 1024 * 1024,
+               Format('the download stopped at the cap (server sent %d of %d bytes)',
+                      [Sent, FloodTotal]));
+  finally
+    Flood.Free;
+  end;
+  WriteLn(Format('  ok: an instructions download stops at its cap (server got out %d KB of %d MB)',
+                 [Sent div 1024, FloodTotal div (1024 * 1024)]));
+
+  (* Under the cap, a transfer that dies mid-body is a failure, not a
+     fragment: the caller caches a success for a day as the project's
+     instructions (and serves a stale copy on failure instead). *)
+  Flood := TFloodServer.Create(1000, 500);
+  try
+    Ok := FetchTextGuarded('http://127.0.0.1:' + IntToStr(Flood.Server.Bindings[0].Port) + '/rules.md',
+                           100000, Body, Err);
+    AssertTrue(not Ok, 'a body cut short by the server is not a success (got ' +
+               IntToStr(Length(Body)) + ' bytes)');
+    AssertTrue(Err <> '', 'and says why');
+  finally
+    Flood.Free;
+  end;
+  WriteLn('  ok: a transfer that dies mid-body fails instead of caching a fragment');
+end;
+
+begin
+  {$IFDEF UNIX}
+  { The flood server writes into a socket the client has closed. }
+  fpSignal(SIGPIPE, SignalHandler(SIG_IGN));
+  {$ENDIF}
   TestInstructions;
   TestWarm;
+  TestInstructionsDownloadCap;
   WriteLn('PASS');
 end.
