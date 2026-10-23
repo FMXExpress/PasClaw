@@ -34,7 +34,7 @@ const
   {$ELSE}
   VersionRaw = '';
   {$ENDIF}
-  VersionFallback = '0.1.4';
+  VersionFallback = '0.1.5';
 
   EnvHome   = 'PASCLAW_HOME';
   EnvConfig = 'PASCLAW_CONFIG';
@@ -1286,7 +1286,7 @@ uses
   PasClaw.JSON,
   PasClaw.Config.Profile,     { ResolveProfileBodies / ExtractProfileField -- PR #291 }
   PasClaw.Logger,             { LogWarn / LogInfo on the profile-apply path }
-  PasClaw.Platform,           { SetShellTimeoutMs -- shell_timeout_sec's process mirror }
+  PasClaw.Platform,           { SetShellToolTimeoutMs -- the tool shells' default }
   PasClaw.Promptware,         { LoadConfig propagates promptware_enabled --
                                 see the comment inside LoadConfig }
   PasClaw.Tools.OutputCache,  { LoadConfig propagates condense_reversible
@@ -1531,7 +1531,17 @@ begin
   Result.PutStr('model',    P.Model);
 end;
 
-function MCPToJSON(const M: TMCPServer): TJsonObject;
+(* Default is the value of mcp_codemode_default at save time, so a
+   server that simply follows the default writes no `codemode` key at
+   all and keeps following it. Emitting it unconditionally FROZE the
+   value: a record created by `mcp add` / `mcp install` / onboarding is
+   zero-initialised, so every supported setup flow persisted
+   "codemode": false and pinned that server to classic exposure no
+   matter what mcp_codemode_default said afterwards. (Codex P1 on #609.)
+
+   This also matches how the rest of this file serialises -- a setting
+   left at its default is omitted rather than written out. *)
+function MCPToJSON(const M: TMCPServer; CodeModeDefault: Boolean): TJsonObject;
 begin
   Result := TJsonObject.Create;
   Result.PutStr ('name',    M.Name);
@@ -1539,7 +1549,8 @@ begin
   Result.PutStr ('args',    M.Args);
   Result.PutStr ('env',     M.Env);
   Result.PutBool('enabled', M.Enabled);
-  Result.PutBool('codemode', M.CodeMode);
+  if M.CodeMode <> CodeModeDefault then
+    Result.PutBool('codemode', M.CodeMode);
 end;
 
 function CronToJSON(const C: TCronEntry): TJsonObject;
@@ -2070,7 +2081,7 @@ begin
     Arr := TJsonArray.Create;
     for i := 0 to High(MCPServers) do
     begin
-      Tmp := MCPToJSON(MCPServers[i]);
+      Tmp := MCPToJSON(MCPServers[i], MCPCodeModeDefault);
       Arr.AddObject(Tmp);
     end;
     Root.PutArray('mcp_servers', Arr);
@@ -2959,9 +2970,13 @@ begin
   { Symmetric propagation of the reversible-condensation flag -- OutputCache
     holds the same process-global mirror. }
   SetCondenseReversible(C.CondenseReversible);
-  { The shell wall-clock bound lives in PasClaw.Platform, which every shell
-    path (local, docker exec, skills) runs through. }
-  SetShellTimeoutMs(C.ShellTimeoutSec * 1000);
+  (* The TOOL shells' wall-clock bound: shell_exec, execute_code and
+     shell skills. Stored here, applied by the *ViaBackend wrappers in
+     PasClaw.Shell.Backend that those three run through -- deliberately
+     not by RunOneShot itself, which is also how an app build and a
+     benchmark agent are spawned and which must not inherit a shell
+     command's bound. *)
+  SetShellToolTimeoutMs(C.ShellTimeoutSec * 1000);
   { The permission rule list is read at every tool dispatch, on whichever
     thread dispatches, so it is a locked process-global in
     PasClaw.Permissions rather than a field threaded through every loop

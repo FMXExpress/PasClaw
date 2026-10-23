@@ -71,9 +71,9 @@ Six tiers of optimisation layered on the recursive scan:
 
 Runs `/bin/sh -c <cmd>` on POSIX or `cmd.exe /C <cmd>` on Windows. Output capped at 1 MiB. Denylist-gated via `PasClaw.Tools.Sandbox.ShellAllowed`. Per-command condensers run on successful output (tee-on-failure: full output passes through on non-zero exit). Filter coverage: `git status/diff/log`, `pytest`/`cargo test`/`npm test`/`go test`, `grep`/`Select-String`/`findstr`, recursive `ls`/`find`/`Get-ChildItem`, tabular CLIs (`docker ps`, `kubectl get`, `gh`), `docker build`, log tails, compiler walls, linters, package managers, build systems, IaC, `aws` JSON. PowerShell-alias normalisation included. See [`src/pkg/tools/PasClaw.Tools.Shell.Filters.pas`](../src/pkg/tools/PasClaw.Tools.Shell.Filters.pas).
 
-`shell_background` runs the same kind of command as a job and returns an `sh-<hex>` handle immediately: the output (exit code on line 1) is delivered to the model at the top of its next turn as a `[background shell results]` block, `spawn_status` / `spawn_wait` / `spawn_cancel` take the handle, and cancel kills the process (on the local backend; on Docker it is advisory). Same denylist, cwd rules and default timeout as `shell_exec`. The TUI flashes a completion in its footer and the gateway publishes a `background_done` desktop event. Subagent and shell jobs share one cap, `background_jobs_max` (default 6).
+`shell_background` is a shell tool, not a subagent one: it registers whatever `subagents_enabled` says, together with `spawn_status` / `spawn_wait` / `spawn_cancel`, which take handles of either kind. It runs the same kind of command as a job and returns an `sh-<hex>` handle immediately: the output (exit code on line 1) is delivered to the model at the top of its next turn as a `[background shell results]` block, `spawn_status` / `spawn_wait` / `spawn_cancel` take the handle, and cancel kills the process tree (on the local backend; on Docker it is advisory). Same denylist, cwd rules and default timeout as `shell_exec`. The TUI flashes a completion in its footer and the gateway publishes a `background_done` desktop event. Subagent and shell jobs share one cap, `background_jobs_max` (default 6).
 
-`timeout_sec` bounds one call in wall-clock seconds (default: `shell_timeout_sec` in config, 600). On expiry the process is killed and line 1 reads `exit=124` with a "timed out after N s" note. Before 0.1.6 there was no bound at all.
+`timeout_sec` bounds one call in wall-clock seconds (default: `shell_timeout_sec` in config, 600). On expiry the process **and its descendants** are killed and line 1 reads `exit=124` with a "timed out after N s" note. Before 0.1.6 there was no bound at all.
 
 ### `execute_code`
 
@@ -169,7 +169,7 @@ Parallel work wants parallel checkouts. Three tools wrap `git worktree` (source:
 
 Typical flow: `worktree_create("feature/x")`, then either pass the path as `cwd` to `shell_exec`, or `spawn` / `spawn_background` a subagent with `worktree: "feature/x"` and let it commit on that branch. A `permissions` rule can gate the destructive half, e.g. `{"tool":"worktree_remove","effect":"ask"}`.
 
-Registered when `worktree.enabled` is true (the default). Sessions remember the directory they worked in (`session list` shows it, `pasclaw resume` returns to it).
+Registered when `worktree.enabled` is true (the default). `false` takes the whole feature away, not just these three tools: `spawn` and `spawn_background` stop offering the `worktree` argument and refuse it if it is passed anyway. A spawn that is refused for any reason — an unknown agent, no prompt, the background-job cap — creates no branch and no worktree; the checks run first. Sessions remember the directory they worked in (`session list` shows it, `pasclaw resume` returns to it).
 
 ## Parallel dispatch
 

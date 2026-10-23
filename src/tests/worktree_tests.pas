@@ -15,6 +15,12 @@ program worktree_tests;
     - spawn(worktree:"<branch>") runs the child in the worktree: an
       fs_write with a relative path lands there, not in the parent tree,
       and the result names the worktree
+    - worktree.enabled:false is honoured by spawn and spawn_background
+      too (no schema property, the argument refused) -- not only by the
+      worktree_* tools (Codex P2 on #612)
+    - a spawn that is refused -- at the background-job cap, an unknown
+      agent, no prompt -- creates no branch and no worktree first (Codex
+      P2 on #612)
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -34,6 +40,7 @@ uses
   PasClaw.Tools.FS,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Subagent,
+  PasClaw.Agent.SubagentBg,
   PasClaw.Tools.Worktree;
 
 procedure Fail_(const Msg: string); begin WriteLn('FAIL: ' + Msg); Halt(1); end;
@@ -329,6 +336,169 @@ begin
   WriteLn('  ok: spawn(worktree) runs the child in its own checkout');
 end;
 
+
+function BranchExists(const Branch: string): Boolean;
+begin
+  Result := Trim(Sh(Repo, 'git branch --list ' + Branch)) <> '';
+end;
+
+procedure AssertNothingCreated(const Branch, Why: string);
+begin
+  AssertTrue(not DirectoryExists(JoinPath(WtBase, Branch)),
+             Why + ': no worktree directory was created for ' + Branch);
+  AssertTrue(not BranchExists(Branch),
+             Why + ': no branch ' + Branch + ' was created');
+end;
+
+function WriterSpecs: TSubagentSpecArray;
+begin
+  SetLength(Result, 1);
+  Result[0].Name := 'writer';
+  Result[0].Description := 'writes';
+  Result[0].SystemPrompt := 'You write files.';
+  SetLength(Result[0].Tools, 1);
+  Result[0].Tools[0] := 'fs_write';
+  Result[0].MaxIter := 3;
+end;
+
+procedure TestWorktreeFlagIsHonouredBySpawn;
+(* worktree.enabled:false has to take away every way to make a worktree.
+
+   Only the standalone worktree_* tools used to go: spawn and
+   spawn_background still advertised a `worktree` argument and still made
+   a branch and a checkout when it was passed. (Codex P2 on #612.) *)
+var
+  Parent: TToolRegistry;
+  Ctx: TSubagentContext;
+  Tool: TSpawnTool;
+  Coord: TBackgroundSpawnCoordinator;
+  Cfg: TConfig;
+  Prov: ILLMProvider;
+  Res, Err: string;
+  T: TTool;
+begin
+  Prov := TWriterProvider.Create;
+  Parent := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.Worktree.Enabled := False;
+    RegisterFSTools(Parent, False);
+    Ctx := Default(TSubagentContext);
+    Ctx.Provider := Prov;
+    Ctx.ParentRegistry := Parent;
+    Ctx.DefaultModel := 'fake';
+    Ctx.Cfg := Cfg;
+
+    { spawn }
+    Tool := TSpawnTool.Create(Ctx, WriterSpecs);
+    try
+      AssertTrue(Pos('"worktree"', Tool.Schema) = 0,
+                 'spawn does not offer worktree when the feature is off');
+      Res := Tool.Run('{"agent":"writer","prompt":"x","worktree":"flag-off-a"}', Err);
+      AssertContains(Err, 'worktrees are turned off', 'spawn refuses the argument');
+      AssertNothingCreated('flag-off-a', 'spawn with worktree.enabled:false');
+    finally
+      Tool.Free;
+    end;
+
+    { spawn_background }
+    Coord := RegisterBackgroundSpawnTools(Parent, Ctx, WriterSpecs);
+    AssertTrue(Parent.Find('spawn_background', T), 'spawn_background registered');
+    AssertTrue(Pos('"worktree"', T.Schema) = 0,
+               'spawn_background does not offer worktree when the feature is off');
+    Res := Coord.HandleSpawnBackground(
+             '{"agent":"writer","prompt":"x","worktree":"flag-off-b"}', Err);
+    AssertContains(Err, 'worktrees are turned off', 'spawn_background refuses it too');
+    AssertNothingCreated('flag-off-b', 'spawn_background with worktree.enabled:false');
+
+    { With the feature on (the default) both offer it again. }
+    Cfg.Worktree.Enabled := True;
+    Tool := TSpawnTool.Create(Ctx, WriterSpecs);
+    try
+      AssertContains(Tool.Schema, '"worktree"', 'and spawn offers it when on');
+    finally
+      Tool.Free;
+    end;
+  finally
+    Parent.Free;
+    Cfg.Free;
+  end;
+  WriteLn('  ok: worktree.enabled:false is honoured by spawn and spawn_background');
+end;
+
+procedure TestRejectedSpawnTouchesNoRepo;
+(* A spawn that is going to be refused must not create anything first.
+
+   spawn_background made the worktree, THEN checked the job cap, so a
+   spawn the cap was always going to refuse still left a branch and a
+   checkout behind. spawn did the same with its cheap checks: no prompt,
+   or a misspelt agent, made a worktree on the way to being refused.
+   (Codex P2 on #612.) *)
+var
+  Parent: TToolRegistry;
+  Ctx: TSubagentContext;
+  Tool: TSpawnTool;
+  Coord: TBackgroundSpawnCoordinator;
+  Cfg: TConfig;
+  Prov: ILLMProvider;
+  Res, Err, H: string;
+  i, P: Integer;
+begin
+  Prov := TWriterProvider.Create;
+  Parent := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.BackgroundJobsMax := 1;
+    RegisterFSTools(Parent, False);
+    Ctx := Default(TSubagentContext);
+    Ctx.Provider := Prov;
+    Ctx.ParentRegistry := Parent;
+    Ctx.DefaultModel := 'fake';
+    Ctx.Cfg := Cfg;
+
+    { spawn: refused for a bad agent name, before any git. }
+    Tool := TSpawnTool.Create(Ctx, WriterSpecs);
+    try
+      Res := Tool.Run('{"agent":"no-such-agent","prompt":"x","worktree":"reject-a"}', Err);
+      AssertContains(Err, 'no subagent named', 'spawn refuses the agent');
+      AssertNothingCreated('reject-a', 'spawn with an unknown agent');
+      Res := Tool.Run('{"agent":"writer","prompt":"","worktree":"reject-b"}', Err);
+      AssertContains(Err, 'prompt required', 'spawn refuses an empty prompt');
+      AssertNothingCreated('reject-b', 'spawn with no prompt');
+    finally
+      Tool.Free;
+    end;
+
+    { spawn_background at the cap: one shell job holds the only slot. }
+    Coord := RegisterBackgroundSpawnTools(Parent, Ctx, WriterSpecs);
+    Coord.SetKey('cap-test');
+    Res := Coord.HandleShellBackground('{"command":"sleep 30"}', Err);
+    AssertEqStr(Err, '', 'the slot-holder starts');
+    H := '';
+    P := Pos('handle=', Res);
+    if P > 0 then
+    begin
+      i := P + 7;
+      while (i <= Length(Res)) and (Res[i] in ['a'..'z', '0'..'9', '-']) do
+      begin
+        H := H + Res[i];
+        Inc(i);
+      end;
+    end;
+    AssertTrue(H <> '', 'slot-holder handle: ' + Res);
+    Res := Coord.HandleSpawnBackground(
+             '{"agent":"writer","prompt":"x","worktree":"reject-cap"}', Err);
+    AssertContains(Err, 'already running', 'spawn_background refused at the cap');
+    AssertNothingCreated('reject-cap',
+      'spawn_background at the cap -- the refusal used to come after git');
+    Coord.HandleCancel('{"handle":"' + H + '"}', Err);
+  finally
+    Parent.Free;
+    Cfg.Free;
+  end;
+  WriteLn('  ok: a refused spawn creates no branch and no worktree');
+end;
+
 begin
   MakeRepo;
   try
@@ -337,6 +507,8 @@ begin
     TestTools;
     TestThreadOverride;
     TestSpawnWorktree;
+    TestWorktreeFlagIsHonouredBySpawn;
+    TestRejectedSpawnTouchesNoRepo;
     WriteLn('PASS');
   finally
     Sh(GetTempDir, 'rm -rf ' + Root);

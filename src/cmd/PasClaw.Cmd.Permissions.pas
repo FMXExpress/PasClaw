@@ -81,6 +81,10 @@ begin
     if Sub = 'list' then
     begin
       PrintRules('policies  (' + PolicyFilePath(GetHome) + ')', PolicyRules);
+      if PolicyLoadFailures > 0 then
+        PrintLn(Ansi.Yellow + '  ! the last read of that file was unusable; ' +
+                'these are the rules still in force, not what is on disk' +
+                Ansi.Reset);
       PrintLn;
       PrintRules('config    (' + GetConfigPath + ' "permissions")', PermissionRules);
       PrintLn;
