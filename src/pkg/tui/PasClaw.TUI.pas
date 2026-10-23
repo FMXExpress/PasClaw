@@ -47,6 +47,8 @@ uses
                                      just the implementation's. FPC was
                                      permissive about this; dcc64 is not. }
   PasClaw.Permissions,             { TAskAnswer -- the footer permissions asker }
+  PasClaw.Skills.Loader,           { TSkillSpecArray -- prompt skills as slash commands }
+  PasClaw.Skills.Slash,
   PasClaw.Tools.ToolLoop,          { TToolLoopResult -- referenced by the
                                      AccumulateLoopStats method declaration
                                      in the TTUI class; same dcc64
@@ -217,7 +219,10 @@ type
     procedure OpenThemeMenu;
     procedure ApplyTheme(const Name: string; ForcePreview: Boolean);
     procedure SubmitInput;
-    procedure StartTurn(const UserText: string);
+    { TurnModel: a slash skill's model: for this turn only, '' = FModel.
+      A parameter, not a field, so it cannot outlive the turn it was
+      typed for -- see SubmitInput. }
+    procedure StartTurn(const UserText, TurnModel: string);
     procedure PollLoopWorker;
     procedure RefreshSessions;
     procedure SelectSession(Id: string);
@@ -247,7 +252,8 @@ type
     procedure HandleUndoCommand(const Args: string);
     procedure HandleInitCommand(const Args: string);
     procedure HandleRedoCommand(const Args: string);
-    procedure HandleUserInput(const Text: string);
+    { TurnModel as for StartTurn: a slash skill's model:, '' = FModel. }
+    procedure HandleUserInput(const Text, TurnModel: string);
     { Live tool activity for the line-based REPL: print each call/result as it
       happens (the worker fires these while the main thread blocks in WaitFor,
       so it's the sole stdout writer -- no locking needed). }
@@ -313,6 +319,9 @@ type
        session switches -- they belong to the process, not the
        session pane selection). *)
     BgCoordinator:      TBackgroundSpawnCoordinator;
+    { Installed skills; prompt skills answer to /name in the chat input
+      (PasClaw.Skills.Slash). Set by Cmd.TUI after loading manifests. }
+    Skills:             TSkillSpecArray;
     constructor Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
     {$IFNDEF FPC}destructor Destroy; override;{$ENDIF}
     procedure Run;
@@ -1558,7 +1567,7 @@ begin
   end;
 end;
 
-procedure TTUI.StartTurn(const UserText: string);
+procedure TTUI.StartTurn(const UserText, TurnModel: string);
 var
   WorkingState: string;
   Cfg: TToolLoopConfig;
@@ -1589,6 +1598,11 @@ begin
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
+  if TurnModel <> '' then
+  begin
+    Cfg.Model := TurnModel;    { a slash skill's model:, this turn only }
+    Cfg.ModelPinned := True;   { ...which ApplyAutoRoute below keeps }
+  end;
   Cfg.CompactModel  := BackgroundModelOn(RouteConfig, ProviderName);
   Cfg.MaxIterations := 6;
   Cfg.Parallel      := True;
@@ -1861,9 +1875,14 @@ procedure TTUI.SubmitInput;
 var
   Text: string;
   ModeArg: TPasClawMode;
+  SkSpec: TSkillSpec;
+  SkArgs, SkModel: string;
+  SkExpanded: Boolean;
 begin
   Text := Trim(FInputBuf);
   if Text = '' then Exit;
+  SkExpanded := False;
+  SkModel := '';
 
   { Slash-command shortcuts -- without these the model gets "/quit"
     as a literal user message because StartTurn doesn't filter. The
@@ -1927,10 +1946,29 @@ begin
       HandleInitCommand(Copy(Text, 7, MaxInt))
     else if (Text = '/redo') or (Copy(Text, 1, 6) = '/redo ') then
       HandleRedoCommand(Copy(Text, 7, MaxInt))
+    { Not a built-in: an installed prompt skill? Expand it into this
+      turn's message and fall through to the normal send path below.
+      model: is honoured for the turn; agent: / subagent: become a hint
+      in the message on this surface. }
+    else if ResolveSlashSkill(Text, Skills, SkSpec, SkArgs) then
+    begin
+      SkModel := SkSpec.Model;
+      Text := ExpandSlashSkill(SkSpec, SkArgs);
+      if SkSpec.Agent <> '' then
+        Text := 'Use the spawn tool with agent "' + SkSpec.Agent + '" for this task:' + sLineBreak + sLineBreak + Text
+      else if SkSpec.Subagent then
+        Text := 'Delegate this task to a background subagent if one is available, else do it yourself:' +
+                sLineBreak + sLineBreak + Text;
+      Flash('skill /' + SkSpec.Name);
+      SkExpanded := True;
+    end
     else
       Flash('unknown: ' + Text);
-    FInputBuf := '';
-    Exit;
+    if not SkExpanded then
+    begin
+      FInputBuf := '';
+      Exit;
+    end;
   end;
 
   { When a loop is already running, queue the input as steering so
@@ -1938,17 +1976,24 @@ begin
     (PR #120 mechanism). Route to FLoopSessionId -- the originating
     session -- not FSession.Meta.Id, in case the user swapped panes
     while the loop was in flight. Same Codex P1 fix as PollLoopWorker. }
+  (* A skill's model: belongs to a turn that STARTS here. Steering joins
+     the turn already running, on that turn's model, so it is dropped
+     (and said so) -- held in a field instead, it used to wait there and
+     put the NEXT, unrelated turn on the skill's model. (Codex P2 on
+     #614.) *)
   if FLoopThread <> nil then
   begin
-    if PushSteering(FLoopSessionId, Text) then
-      Flash('steering queued')
+    if not PushSteering(FLoopSessionId, Text) then
+      Flash('steer push failed')
+    else if SkModel <> '' then
+      Flash('steering queued (the running turn keeps its model, not ' + SkModel + ')')
     else
-      Flash('steer push failed');
+      Flash('steering queued');
     FInputBuf := '';
     Exit;
   end;
 
-  StartTurn(Text);
+  StartTurn(Text, SkModel);
   FInputBuf := '';
 end;
 
@@ -3085,6 +3130,8 @@ end;
 procedure TTUI.HandleSlashCommand(const Cmd: string);
 var
   Arg: string;
+  SkSpec: TSkillSpec;
+  SkArgs, Expanded: string;
 begin
   if (Cmd = '/quit') or (Cmd = '/exit') or (Cmd = '/q') then begin FQuit := True; Exit; end;
   if Cmd = '/clear' then begin Print(#27'[2J' + #27'[H'); DrawHeader; Exit; end;
@@ -3110,6 +3157,21 @@ begin
   if (Cmd = '/redo') or (Copy(Cmd, 1, 6) = '/redo ') then
   begin
     HandleRedoCommand(Copy(Cmd, 7, MaxInt));
+    Exit;
+  end;
+  { Not a built-in: an installed prompt skill? Expand and run it as this
+    turn's message (model: honoured for the turn; agent: / subagent: as
+    a hint in the message on this surface). }
+  if ResolveSlashSkill(Cmd, Skills, SkSpec, SkArgs) then
+  begin
+    Expanded := ExpandSlashSkill(SkSpec, SkArgs);
+    if SkSpec.Agent <> '' then
+      Expanded := 'Use the spawn tool with agent "' + SkSpec.Agent + '" for this task:' + sLineBreak + sLineBreak + Expanded
+    else if SkSpec.Subagent then
+      Expanded := 'Delegate this task to a background subagent if one is available, else do it yourself:' +
+                  sLineBreak + sLineBreak + Expanded;
+    PrintLn(Ansi.Dim + '(skill /' + SkSpec.Name + ')' + Ansi.Reset);
+    HandleUserInput(Expanded, SkSpec.Model);
     Exit;
   end;
   PrintLn(Ansi.Yellow + 'unknown command: ' + Cmd + Ansi.Reset);
@@ -3231,7 +3293,7 @@ begin
     PrintLn(Ansi.Dim + '  ✓ ' + FlattenClip(ResultText, 200) + Ansi.Reset);
 end;
 
-procedure TTUI.HandleUserInput(const Text: string);
+procedure TTUI.HandleUserInput(const Text, TurnModel: string);
 var
   Msgs: array of TMessage;
   Loop: TToolLoopResult;
@@ -3262,6 +3324,11 @@ begin
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
+  if TurnModel <> '' then
+  begin
+    Cfg.Model := TurnModel;    { a slash skill's model:, this turn only }
+    Cfg.ModelPinned := True;   { ...which ApplyAutoRoute below keeps }
+  end;
   Cfg.CompactModel  := BackgroundModelOn(RouteConfig, ProviderName);
   Cfg.MaxIterations := 6;
   Cfg.Parallel := True;
@@ -3385,7 +3452,7 @@ begin
       HandleSlashCommand(Line);
       Continue;
     end;
-    HandleUserInput(Line);
+    HandleUserInput(Line, '');
   end;
   FRouteCfg.Free;   { FPC has no TTUI destructor override; free the cache here }
   FRouteCfg := nil;

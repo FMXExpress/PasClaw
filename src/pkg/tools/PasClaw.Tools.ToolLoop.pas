@@ -36,6 +36,13 @@ type
     Provider:      ILLMProvider;
     Registry:      TToolRegistry;
     Model:         string;
+    (* Model was chosen for THIS turn on purpose -- a slash skill's
+       `model:` -- so the auto-router leaves the turn alone
+       (ApplyAutoRoute). Routing would replace it with the easy model,
+       and re-applying it afterwards would send a model name meant for
+       this provider to the cheap one. False (the Default) routes as
+       before. *)
+    ModelPinned:   Boolean;
     MaxIterations: Integer;
     Options:       TChatOptions;
     OnText:        procedure(const S: string) of object;   { streaming-ish stdout }

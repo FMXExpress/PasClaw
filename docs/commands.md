@@ -86,7 +86,7 @@ pasclaw agent --attach                                      # client of the runn
 pasclaw agent --attach --session <id> -m "..."              # one turn on a gateway session
 ```
 
-Persists conversation history to `$PASCLAW_HOME/workspace/sessions/<id>.json` after every turn by default. Interactive slash commands: `/help`, `/status`, `/new`, `/reset`, `/compact`, `/think`, `/tools`, `/mode [plan|build]`, `/steer <msg>`, `/quit`. See [Sessions](./sessions.md).
+Persists conversation history to `$PASCLAW_HOME/workspace/sessions/<id>.json` after every turn by default. Interactive slash commands: `/help`, `/status`, `/new`, `/reset`, `/compact`, `/think`, `/tools`, `/mode [plan|build]`, `/steer <msg>`, `/quit`, plus every installed prompt skill as `/<name> <args>` (see [Skills → Arguments and slash commands](./skills.md#arguments-and-slash-commands)). See [Sessions](./sessions.md).
 
 ### `--attach`: the terminal as a gateway client
 

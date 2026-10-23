@@ -700,6 +700,7 @@ uses
                               tasks, jobs, apps, pages }
   PasClaw.Desktop.Events,   { the /v1/desktop/events fan-out }
   PasClaw.Gateway.RunFile,  { StopRequested -- WaitForStop returns on SIGINT/SIGTERM }
+  PasClaw.Gateway.Warm,     { prompt_cache.warm keep-alive pings }
   PasClaw.Agents,           { standing agents: roster, mailbox, run state }
   PasClaw.Agents.Tools,     { SetCallingAgent -- who a `send` is from }
   PasClaw.Projects.Store,   { job/task records the desktop callbacks write }
@@ -3922,6 +3923,9 @@ begin
       Root.PutInt ('turns',                    Turns);
       Root.PutInt ('tool_calls',               ToolCalls);
       Root.PutInt ('truncation_bytes_saved',   BytesSaved);
+      { Keep-alive requests sent since start (prompt_cache.warm); each is
+        a billed call, so the count sits beside the token totals. }
+      Root.PutInt ('prompt_cache_warm_pings',  WarmPingCount);
 
       ProviderArr := TJsonArray.Create;
       try
@@ -5347,6 +5351,10 @@ begin
     Flush := TCompactFlush.Create(ReqSession);
     LocalCfg.CompactOpts.OnBefore := Flush.OnBefore;
   end;
+  { The keep-alive copies this turn's provider / model / system block /
+    tools so its pings hit the same cached prefix. Cheap; no-op unless
+    prompt_cache.warm is on (WarmTick checks). }
+  WarmNoteTurn(LocalCfg);
   try
     if FCfg.CheckpointsEnabled then
     begin
@@ -7354,6 +7362,13 @@ begin
       Sleep(1000);
     end;
     if GDesktopGateway = nil then Continue;
+    { Prompt-cache keep-alive rides the same 30 s clock. }
+    try
+      WarmTick(GDesktopGateway.FCfg.PromptCache.Warm);
+    except
+      on E: Exception do
+        LogWarn('prompt-cache warm: %s: %s', [E.ClassName, E.Message]);
+    end;
     try
       TeamTickPass;
     except

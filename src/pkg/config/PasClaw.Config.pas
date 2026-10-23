@@ -531,6 +531,13 @@ type
   TPromptCacheConfig = record
     Enabled: Boolean;
     TTL:     string;
+    (* Keep-alive (PasClaw.Gateway.Warm): after four idle minutes the
+       gateway sends one minimal request every four minutes, same system
+       block and tools, until thirty minutes after the last real turn,
+       so a short TTL does not throw the cached prefix away between
+       turns. Each ping is a billed request; counted in /v1/stats. Off
+       by default -- worth little with the default 1h TTL. *)
+    Warm:    Boolean;
   end;
 
   (* TStreamReliabilityConfig is declared in PasClaw.Stream.Reliability
@@ -982,6 +989,11 @@ type
     PermissionsAskTimeoutSec: Integer;
     Worktree:              TWorktreeConfig;
     Cli:                   TCliConfig;
+    (* Instruction sources appended to the Project Rules section after
+       AGENTS.md: files and globs relative to the workspace
+       ("docs/style.md", "rules/*.md") and http(s) URLs (fetched through
+       the SSRF guard, cached 24 h). See BuildInstructionsSection. *)
+    Instructions:          array of string;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -1457,6 +1469,8 @@ begin
   Worktree.Enabled   := True;      { worktree_* tools + spawn worktree:"<branch>" }
   Worktree.Directory := '';        { beside the repo: <repo>-worktrees/ }
   Cli.Attach         := 'off';     { the terminal runs its own loop unless asked }
+  PromptCache.Warm   := False;     { keep-alive pings cost requests; opt in }
+  SetLength(Instructions, 0);
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1728,11 +1742,13 @@ begin
       operator setting TTL back to "5m" or any other non-default needs
       the value to round-trip; same for the explicit-off path. Reading
       back: missing object => defaults (enabled, 1h). }
-    if (not PromptCache.Enabled) or ((PromptCache.TTL <> '') and (PromptCache.TTL <> '1h')) then
+    if (not PromptCache.Enabled) or ((PromptCache.TTL <> '') and (PromptCache.TTL <> '1h'))
+       or PromptCache.Warm then
     begin
       Tmp := TJsonObject.Create;
       Tmp.PutBool('enabled', PromptCache.Enabled);
       Tmp.PutStr ('ttl',     PromptCache.TTL);
+      if PromptCache.Warm then Tmp.PutBool('warm', True);
       Root.PutObject('prompt_cache', Tmp);
     end;
 
@@ -1861,6 +1877,12 @@ begin
       finally
         Tmp.Free;
       end;
+    end;
+    if Length(Instructions) > 0 then
+    begin
+      Arr := TJsonArray.Create;
+      for i := 0 to High(Instructions) do Arr.AddStr(Instructions[i]);
+      Root.PutArray('instructions', Arr);
     end;
     if (Maintenance.KeepSupersededDays <> 30) or (Maintenance.UnusedSkillDays <> 30)
        or Maintenance.Review or Maintenance.Backup then
@@ -2375,6 +2397,7 @@ begin
     try
       PromptCache.Enabled := Obj.GetBool('enabled', PromptCache.Enabled);
       PromptCache.TTL     := Obj.GetStr ('ttl',     PromptCache.TTL);
+      PromptCache.Warm    := Obj.GetBool('warm',    PromptCache.Warm);
     finally
       Obj.Free;
     end;
@@ -2475,6 +2498,14 @@ begin
       if (Cli.Attach <> 'on') and (Cli.Attach <> 'auto') then Cli.Attach := 'off';
     finally
       Obj.Free;
+    end;
+    Arr := Root.ChildArray('instructions');
+    if Arr <> nil then
+    try
+      SetLength(Instructions, Arr.Count);
+      for i := 0 to Arr.Count - 1 do Instructions[i] := Trim(Arr.ItemStr(i, ''));
+    finally
+      Arr.Free;
     end;
     Obj := Root.ChildObject('maintenance');
     if Obj <> nil then

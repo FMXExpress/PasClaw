@@ -62,6 +62,7 @@ uses
   PasClaw.MCP.Bridge,
   PasClaw.MCP.Disclosure,   { tool_search must exist even with --no-mcp }
   PasClaw.Skills.Loader,
+  PasClaw.Skills.Slash,       { /name -> prompt skill expansion in the REPL }
   PasClaw.Skills.Manage,
   PasClaw.Skills.Disclosure,
   PasClaw.Agent.SkillDistiller,
@@ -1400,6 +1401,13 @@ var
   PrimaryFallbacks:  TLLMProviderArray;
   RoutedProviderNm:  string;
   RoutedModelOverride: string;
+  { Prompt skills as slash commands (PasClaw.Skills.Slash). }
+  SlashSkills: TSkillSpecArray;
+  SkSpec: TSkillSpec;
+  SkArgs, SkModel, SkOut, SkErr: string;
+  SkChildCfg: TToolLoopConfig;
+  SkChildHist: TMessageArray;
+  SkChildLoop: TToolLoopResult;
   RoutedScoreVal:    Double;
   RoutedThisTurn:    Boolean;
   CompactOptsLocal: TCompactOptions;
@@ -1660,8 +1668,14 @@ begin
               ' -- pasclaw resume ' + Session.Meta.Id + ' to continue later' +
               ProfileSuffix(Session.Meta.Profile) + ')' + Ansi.Reset);
 
+    { Installed prompt skills answer to /name (after the built-ins
+      below). Loaded once; `skills_manage` installs mid-session show up
+      on the next start, like the tool registration they get. }
+    SlashSkills := LoadSkillManifests(GetHome);
+    SkModel := '';
     while True do
     begin
+      SkModel := '';
       Print(Ansi.Bold + '> ' + Ansi.Reset);
       if EOF then Break;
       ReadLn(Line);
@@ -1734,6 +1748,11 @@ begin
         PrintLn('  /goal [--max N] <objective>');
         PrintLn('               auto-continue turns until a judge model says MET / FAILED (budget N, default 5)');
         PrintLn('  /quit        exit (alias: /exit)');
+        if SlashSkillHelp(SlashSkills) <> '' then
+        begin
+          PrintLn('  prompt skills (installed SKILL.md files with kind: prompt):');
+          PrintLn(SlashSkillHelp(SlashSkills));
+        end;
         Continue;
       end;
       if (Line = '/mode') or (Copy(Line, 1, 6) = '/mode ') then
@@ -1861,6 +1880,51 @@ begin
       end;
       if Line = '' then Continue;
 
+      (* A slash that is not a built-in but names an installed prompt
+         skill: expand the template with the rest of the line. Where it
+         runs comes from the skill's frontmatter -- agent: through the
+         spawn tool, subagent: in a fresh child loop on this registry,
+         else as this turn's user message; model: overrides the model
+         for that run. The transcript records the command the operator
+         typed and the child's reply, so the main conversation knows
+         what was done without carrying the child's tool traffic. *)
+      if (Line[1] = '/') and ResolveSlashSkill(Line, SlashSkills, SkSpec, SkArgs) then
+      begin
+        SkModel := SkSpec.Model;
+        if (SkSpec.Agent <> '') and (not Offline) and (Reg <> nil) then
+        begin
+          PrintLn(Ansi.Dim + '(skill /' + SkSpec.Name + ' -> subagent ' + SkSpec.Agent + ')' + Ansi.Reset);
+          SkOut := Reg.RunTool('spawn', SlashSkillSpawnArgs(SkSpec, ExpandSlashSkill(SkSpec, SkArgs)), SkErr);
+          if SkErr <> '' then SkOut := '(spawn failed: ' + SkErr + ')';
+          PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' > ' + SkOut);
+          SetLength(Msgs, Length(Msgs) + 2);
+          Msgs[High(Msgs) - 1] := MakeMessage(mrUser, Line);
+          Msgs[High(Msgs)]     := MakeMessage(mrAssistant, SkOut);
+          PersistSession;
+          Continue;
+        end;
+        if SkSpec.Subagent and (not Offline) then
+        begin
+          PrintLn(Ansi.Dim + '(skill /' + SkSpec.Name + ' -> child session)' + Ansi.Reset);
+          SkChildCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, Line);
+          if SkModel <> '' then SkChildCfg.Model := SkModel;
+          SetLength(SkChildHist, 1);
+          SkChildHist[0] := MakeMessage(mrUser, ExpandSlashSkill(SkSpec, SkArgs));
+          if RunToolLoop(SkChildCfg, SkChildHist, SkChildLoop) then
+            SkOut := SkChildLoop.Content
+          else
+            SkOut := '(child session failed)';
+          PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' > ' + SkOut);
+          SetLength(Msgs, Length(Msgs) + 2);
+          Msgs[High(Msgs) - 1] := MakeMessage(mrUser, Line);
+          Msgs[High(Msgs)]     := MakeMessage(mrAssistant, SkOut);
+          PersistSession;
+          Continue;
+        end;
+        PrintLn(Ansi.Dim + '(skill /' + SkSpec.Name + ')' + Ansi.Reset);
+        Line := ExpandSlashSkill(SkSpec, SkArgs);
+      end;
+
       SetLength(Msgs, Length(Msgs) + 1);
       Msgs[High(Msgs)] := MakeMessage(mrUser, Line);
 
@@ -1873,6 +1937,11 @@ begin
       end;
 
       LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, Line);
+      if SkModel <> '' then
+      begin
+        LoopCfg.Model := SkModel;       { a slash skill's model: for this turn }
+        LoopCfg.ModelPinned := True;    { ...which the auto-router below keeps }
+      end;
       { After the first compaction the summary lives in
         LiveOptions.SystemPrompt inside RunToolLoop and gets returned
         via Loop.FinalSystemPrompt. We override here so the next turn
