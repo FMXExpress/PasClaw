@@ -214,7 +214,7 @@ begin
     Spawn   := nil;
     BgCoord := nil;
     SubSpecs := ResolveSubagentSpecs(Cfg);   { configured + built-in general-purpose; empty when disabled }
-    if (Reg <> nil) and (Provider <> nil) and (Length(SubSpecs) > 0) then
+    if (Reg <> nil) and (Provider <> nil) then
     begin
       SubCtx.Provider       := Provider;
       SubCtx.Fallbacks      := ResolveFallbacks(Cfg, SubCtx.FallbackModels);
@@ -222,7 +222,12 @@ begin
       SubCtx.DefaultModel   := Model;
       SubCtx.PromptCache    := Cfg.PromptCache;
       SubCtx.Cfg            := Cfg;
-      Spawn   := RegisterSpawnTool(Reg, SubCtx, SubSpecs);
+      { `spawn` needs a subagent to spawn; the background coordinator
+        also carries shell_background and the handle verbs, which are
+        shell tools and must not disappear with subagents. (Codex P2 on
+        #619.) }
+      if Length(SubSpecs) > 0 then
+        Spawn := RegisterSpawnTool(Reg, SubCtx, SubSpecs);
       BgCoord := RegisterBackgroundSpawnTools(Reg, SubCtx, SubSpecs);
     end;
 

@@ -221,7 +221,9 @@ procedure FireBackgroundDone(const Key, Handle, Summary: string);
   Reg, for surfaces that don't track the returned tool/coordinator (serve,
   gateway). Builds the TSubagentContext from Cfg/Provider/Reg, resolves the
   effective specs (built-in general-purpose + any configured; empty when
-  subagents are disabled), and registers both. No-op when subagents are off or
+  subagents are disabled), and registers both. With subagents off only
+  `spawn` and `spawn_background` are skipped -- shell_background and the
+  handle verbs still register, since they are shell tools. No-op when
   there's no provider/registry. The created tools live for the process (Reg
   dispatches through their method pointers), which is the server lifetime. }
 procedure RegisterSubagentTools(Cfg: TConfig; Provider: ILLMProvider;
@@ -1247,7 +1249,7 @@ var
   i: Integer;
 begin
   Result := nil;
-  if (Reg = nil) or (Length(Specs) = 0) then Exit;
+  if Reg = nil then Exit;
 
   Result := TBackgroundSpawnCoordinator.Create(Ctx, Specs);
   if GCoordinators = nil then GCoordinators := TList.Create;
@@ -1260,25 +1262,35 @@ begin
     Names := Names + '"' + Specs[i].Name + '"';
   end;
 
-  T.Name        := 'spawn_background';
-  T.Description := 'Start a subagent in the BACKGROUND and keep working -- ' +
-                   'returns a handle immediately instead of blocking like ' +
-                   '`spawn` does. The result is delivered to you ' +
-                   'automatically when the job finishes (you''ll see a ' +
-                   '[background subagent results] block). Use for slow ' +
-                   'research / analysis you don''t need before your next ' +
-                   'step. Available subagents: ' + Names + '. ' +
-                   'Cap: ' + IntToStr(MaxConcurrentBackground) + ' concurrent.';
-  T.Schema      :=
-    '{"type":"object","properties":{' +
-    '"agent":{"type":"string","description":"Name of the subagent to spawn."},' +
-    '"prompt":{"type":"string","description":"The prompt to hand the subagent."}},' +
-    '"required":["agent","prompt"]}';
-  T.Handler     := nil;
-  T.HandlerObj  := Result.HandleSpawnBackground;
-  T.IsCore      := True;
-  T.Category    := tcMutating;
+  (* spawn_background is the only tool here that needs a subagent to
+     spawn, so it is the only one Specs gates. shell_background and the
+     three handle verbs are shell features that happen to share this
+     coordinator's handle space, and gating the whole routine on Specs
+     meant subagents_enabled:false silently took the background shell
+     away with them -- which the docs describe as a shell tool with no
+     such dependency. (Codex P2 on #619.) *)
+  if Length(Specs) > 0 then
+  begin
+    T.Name        := 'spawn_background';
+    T.Description := 'Start a subagent in the BACKGROUND and keep working -- ' +
+                     'returns a handle immediately instead of blocking like ' +
+                     '`spawn` does. The result is delivered to you ' +
+                     'automatically when the job finishes (you''ll see a ' +
+                     '[background subagent results] block). Use for slow ' +
+                     'research / analysis you don''t need before your next ' +
+                     'step. Available subagents: ' + Names + '. ' +
+                     'Cap: ' + IntToStr(MaxConcurrentBackground) + ' concurrent.';
+    T.Schema      :=
+      '{"type":"object","properties":{' +
+      '"agent":{"type":"string","description":"Name of the subagent to spawn."},' +
+      '"prompt":{"type":"string","description":"The prompt to hand the subagent."}},' +
+      '"required":["agent","prompt"]}';
+    T.Handler     := nil;
+    T.HandlerObj  := Result.HandleSpawnBackground;
+    T.IsCore      := True;
+    T.Category    := tcMutating;
   Reg.Register(T);
+  end;
 
   T.Name        := 'shell_background';
   T.Description := 'Run a shell command in the BACKGROUND and keep working -- ' +
@@ -1357,15 +1369,16 @@ var
   Specs: TSubagentSpecArray;
 begin
   if (Reg = nil) or (Provider = nil) then Exit;
-  Specs := ResolveSubagentSpecs(Cfg);
-  if Length(Specs) = 0 then Exit;   { subagents disabled }
+  Specs := ResolveSubagentSpecs(Cfg);   { empty when subagents are disabled }
   Ctx.Provider       := Provider;
   Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := DefaultModel;
   Ctx.PromptCache    := Cfg.PromptCache;
   Ctx.Cfg            := Cfg;
-  RegisterSpawnTool(Reg, Ctx, Specs);
+  { `spawn` needs a subagent; the background tools include the shell
+    ones, which do not -- see the note in RegisterBackgroundSpawnTools. }
+  if Length(Specs) > 0 then RegisterSpawnTool(Reg, Ctx, Specs);
   RegisterBackgroundSpawnTools(Reg, Ctx, Specs);
 end;
 

@@ -510,7 +510,11 @@ var
 begin
   Result := nil;
   Specs := ResolveSubagentSpecs(Cfg);
-  if (Reg = nil) or (Length(Specs) = 0) then Exit;
+  { NOT gated on Specs: with subagents disabled this still registers
+    shell_background and the handle verbs, which are shell tools.
+    RegisterBackgroundSpawnTools skips only spawn_background. (Codex P2
+    on #619.) }
+  if Reg = nil then Exit;
   Ctx.Provider       := Provider;
   Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
   Ctx.ParentRegistry := Reg;
