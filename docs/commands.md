@@ -82,9 +82,21 @@ pasclaw agent --quiet -m "..."                              # machine-readable
 pasclaw agent --backend docker -m "..."                     # per-run override
 pasclaw agent --plan -m "review the gateway auth flow"      # read-only Plan mode
 pasclaw agent --mode build -m "..."                         # full-access (default)
+pasclaw agent --attach                                      # client of the running gateway
+pasclaw agent --attach --session <id> -m "..."              # one turn on a gateway session
 ```
 
 Persists conversation history to `$PASCLAW_HOME/workspace/sessions/<id>.json` after every turn by default. Interactive slash commands: `/help`, `/status`, `/new`, `/reset`, `/compact`, `/think`, `/tools`, `/mode [plan|build]`, `/steer <msg>`, `/quit`. See [Sessions](./sessions.md).
+
+### `--attach`: the terminal as a gateway client
+
+When a gateway is already running (serving the web UI, the desktop, a channel), a second loop in another process means two writers on one session store. `--attach` makes this terminal a client of it instead: nothing runs locally, each line is one turn through `/v1/chat/completions` with `X-PasClaw-Session` and `session_context`, so the gateway holds the transcript and the turn lock, and the reply streams back with one-line tool traces. `/sessions`, `/new`, `/resume <id>`, `/delete <id>` go through `/v1/sessions`; `/quit` leaves. With `-m` it sends one turn and exits.
+
+The gateway is found through `$PASCLAW_HOME/run/gateway.json`, which `pasclaw gateway` / `pasclaw serve` write on start and remove on stop (a file naming a dead pid is ignored). `--attach` with no running gateway is an error.
+
+**Flags on an attached turn.** The turn runs on the gateway, so a flag only means something if the request can carry it. These are sent with every turn: `--plan` / `--build` / `--mode` (as `mode` — without it the gateway would run build mode), `--model`, `--system` (composed into the gateway's prompt, as it is locally), `--max-tokens`, `--no-tools`. These cannot be sent and are **refused** rather than silently dropped: `--provider`, `--thinking`, `--max-iterations`, `--no-mcp`, `--no-hashline`, `--no-plan`, `--orient` / `--no-orient`, `--goal-objective` / `--goal-max-iters`, `--backend`, `--profile` (on `tui`: `--provider`, `--no-mcp`, `--no-hashline`, `--backend`, `--profile`). Display flags (`-q`, `--verbose`, `--brief`, `--theme`) stay local.
+
+`cli.attach` in config makes it the default: `auto` attaches when a gateway is up and runs locally otherwise, `on` always attaches, `off` (default) never. The bearer token comes from this config's `gateway.token`; a mismatch with the running gateway is warned about up front. The same flag exists on `pasclaw tui`, where v1 is this line client on both builds.
 
 ### Agent modes (build / plan / improve / space)
 
@@ -164,7 +176,7 @@ Focused wrapper around the same `TGatewayServer` for OpenAI-compatible clients. 
 pasclaw status
 ```
 
-Prints provider + model + gateway + MCP + cron + skill counts. Read-only.
+Prints provider + model + gateway + MCP + cron + skill counts, whether a gateway is running right now (from `$PASCLAW_HOME/run/gateway.json`: URL, pid, start time; a stale file from a dead pid is named as such) and the `cli.attach` setting. Read-only.
 
 ## cron
 

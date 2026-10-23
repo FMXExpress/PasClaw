@@ -212,6 +212,16 @@ type
     Directory: string;
   end;
 
+  (* Terminal behaviour. Attach: should `pasclaw agent` / `pasclaw tui`
+     become a client of a running gateway instead of running their own
+     loop? 'off' (default) never; 'auto' when <home>/run/gateway.json
+     names a live gateway, else local; 'on' always, and an error when
+     none is running. --attach on the command line is 'on' for one run.
+     See PasClaw.Gateway.RunFile and PasClaw.Cmd.Attach. *)
+  TCliConfig = record
+    Attach: string;
+  end;
+
   TSandboxPolicy = record
     RestrictToWorkspace:       Boolean;
     AllowReadOutsideWorkspace: Boolean;
@@ -971,6 +981,7 @@ type
        waits for POST /v1/permissions/<id>. *)
     PermissionsAskTimeoutSec: Integer;
     Worktree:              TWorktreeConfig;
+    Cli:                   TCliConfig;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -1445,6 +1456,7 @@ begin
   PermissionsAskTimeoutSec := 300; { five minutes to answer an ask; then deny }
   Worktree.Enabled   := True;      { worktree_* tools + spawn worktree:"<branch>" }
   Worktree.Directory := '';        { beside the repo: <repo>-worktrees/ }
+  Cli.Attach         := 'off';     { the terminal runs its own loop unless asked }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1838,6 +1850,16 @@ begin
         Root.PutObject('worktree', Tmp);
       finally
         Tmp.Free;   { nil after PutObject took ownership }
+      end;
+    end;
+    if Cli.Attach <> 'off' then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutStr('attach', Cli.Attach);
+        Root.PutObject('cli', Tmp);
+      finally
+        Tmp.Free;
       end;
     end;
     if (Maintenance.KeepSupersededDays <> 30) or (Maintenance.UnusedSkillDays <> 30)
@@ -2443,6 +2465,14 @@ begin
     try
       Worktree.Enabled   := Obj.GetBool('enabled', Worktree.Enabled);
       Worktree.Directory := Trim(Obj.GetStr('directory', Worktree.Directory));
+    finally
+      Obj.Free;
+    end;
+    Obj := Root.ChildObject('cli');
+    if Obj <> nil then
+    try
+      Cli.Attach := LowerCase(Trim(Obj.GetStr('attach', Cli.Attach)));
+      if (Cli.Attach <> 'on') and (Cli.Attach <> 'auto') then Cli.Attach := 'off';
     finally
       Obj.Free;
     end;

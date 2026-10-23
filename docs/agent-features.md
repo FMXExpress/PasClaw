@@ -485,7 +485,7 @@ field treats as the default.
 | **LSP-backed symbol tools for agents**: find_symbol, find_referencing_symbols, insert_after_symbol | Serena (MCP, 40+ languages) [S] | ❌ text grep only — and this is the concrete form of the "symbol/AST index" gap the survey has ranked #1 since pass 2 |
 | Semantic edit at symbol granularity, not text match | Serena [S] | ❌ `edit_file` is exact-text |
 | Language-server support **including Pascal** | Serena's language list [S] | — meaning the #1 gap has an off-the-shelf MCP answer PasClaw could consume today [P] |
-| tmux as the agent runtime: process isolation, output capture, detach/reattach survival | tmux-agents pattern, "tmux became the runtime for AI agent teams" [S] | ⚠️ shell sessions exist per-session; no detachable live terminal [P] |
+| tmux as the agent runtime: process isolation, output capture, detach/reattach survival | tmux-agents pattern, "tmux became the runtime for AI agent teams" [S] | ⚠️ shell sessions exist per-session; no detachable live terminal. `pasclaw agent --attach` / `tui --attach` make a terminal a client of the running gateway (discovered via `run/gateway.json`), so the gateway owns the session and a terminal can leave and come back; watching a turn another surface started is not in yet [P] |
 | Driving interactive TUIs/REPLs by keystroke + pane read | tmux skills [S] | ❌ |
 | Supervisor over parallel agent panes with test gating | Herdr-style [S] | ⚠️ `spawn_status` is polling, not a live view [P] |
 

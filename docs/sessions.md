@@ -6,6 +6,8 @@
 
 Format: `yyyymmddTHHMMSS-<8 hex>` (e.g. `20260601T093015-1a2b3c4d`). Sortable, collision-safe.
 
+One store, several writers: the CLI, the TUI, the gateway's web UI and the desktop all read and write these files, and only the gateway serialises turns per session (its turn lock is in-process). When a gateway is running, `pasclaw agent --attach` / `pasclaw tui --attach` make the terminal a client of it instead of a second writer; see [Commands → `--attach`](./commands.md#--attach-the-terminal-as-a-gateway-client).
+
 ## Commands
 
 ```sh
