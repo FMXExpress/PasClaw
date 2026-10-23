@@ -5659,6 +5659,18 @@ begin
   Writer.Conn := AContext.Connection;
   Sub := DesktopSubscribe;
   Idle := 0;
+  (* A desktop is running, so the `desktop` tool is the one it needs. That
+     tool is in the built-in long tail (its schema withheld behind
+     tool_search), which is right for an API caller, a channel or a plain
+     chat -- it does nothing without a desktop -- and wrong here: the
+     shell's prompt routes every screen request through it, so the model
+     would spend a tool_search turn before it could tile a window. Only
+     the two desktop clients subscribe to this feed (the browser /desktop
+     and the native app), so this is the signal to reveal it. A reveal is
+     registry-wide and lasts the process, exactly as the model's own
+     tool_search would; this only saves that turn. No-op when the tool is
+     not deferred (builtin_progressive_disclosure off) or not registered. *)
+  if FRegistry <> nil then FRegistry.Reveal('desktop');
   try
     { Tell the client it is connected before anything happens, so a UI can
       show "live" without waiting for the first board change. }

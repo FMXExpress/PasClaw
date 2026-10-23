@@ -138,11 +138,36 @@ implementation
 
 function ToolIsLongTail(const Name: string): Boolean;
 const
+  { Families a turn rarely reaches for (prefix-matched so a new db_ /
+    workflow_ / spawn / session_ tool inherits the decision). }
   P: array[0..3] of string = ('db_', 'workflow_', 'spawn', 'session_');
+  { Single tools: only `desktop`, the desktop screen tool. It does nothing
+    without a desktop, and a desktop needs it from its first turn, so the
+    gateway reveals it the moment one subscribes to /v1/desktop/events
+    (TGatewayServer.HandleDesktopEvents).
+
+    Tried and put back visible, each because a hidden tool is a tool the
+    model stops choosing, not one it searches for:
+      - shell_background: hidden, the model runs the build in shell_exec
+        and blocks on it, without a word -- no error ever says the
+        background path existed. (The spawn_* verbs that take its handle
+        stay deferred with the spawn family; its result arrives in the
+        next turn on its own.)
+      - memory_fetch: hidden, "remember this page" becomes web_fetch plus
+        memory_write by hand, or nothing.
+      - memory_write: rule 5 of the system prompt tells the model to use
+        it for dated facts, and a tool the prompt recommends must be
+        callable without a search turn.
+    bench/ragbench/README.md has the request bytes for each set. The one
+    set is read by the registry's DeferLongTail latch and by
+    DeferBuiltinTools, so the two can never disagree. }
+  N: array[0..0] of string = ('desktop');
 var
   i: Integer;
 begin
   Result := False;
+  for i := 0 to High(N) do
+    if SameText(Name, N[i]) then Exit(True);
   for i := 0 to High(P) do
     if (Length(Name) >= Length(P[i]))
        and SameText(Copy(Name, 1, Length(P[i])), P[i]) then
