@@ -142,7 +142,10 @@ const
     workflow_ / spawn / session_ tool inherits the decision). }
   P: array[0..3] of string = ('db_', 'workflow_', 'spawn', 'session_');
   { Single tools that act on the agent's own state or UI rather than on
-    the task: the desktop board, URL-to-memory fetch, background shells.
+    the task: the desktop screen tool, URL-to-memory fetch, background
+    shells. `desktop` does nothing without a desktop, and a desktop needs
+    it from its first turn, so the gateway reveals it the moment one
+    subscribes to /v1/desktop/events (TGatewayServer.HandleDesktopEvents).
     NOT memory_write: rule 5 of the system prompt tells the model to use
     it for dated facts, and a tool the prompt recommends must be callable
     without a search turn. Measured on the RAG-pipeline bench (6 turns,
