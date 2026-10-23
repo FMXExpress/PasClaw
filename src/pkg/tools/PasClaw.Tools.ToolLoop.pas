@@ -28,6 +28,7 @@ uses
   PasClaw.Agent.Steering,
   PasClaw.Identity,
   PasClaw.Stream.Reliability,
+  PasClaw.Permissions,   { the ordered allow/deny/ask gate + TPermAskFn }
   PasClaw.Config;   { TConfig + SetActiveConfig for the per-dispatch override }
 
 type
@@ -184,6 +185,13 @@ type
        set this to ~8192 and register the OutputCache tool on the
        same registry. *)
     ToolOutputCap:  Integer;
+    (* Who answers when a permission rule says "ask". Called on the
+       dispatching thread and expected to block until a human answers
+       (TUI footer, CLI prompt, gateway permission_request event, the
+       component's OnAsk). nil means nobody is there, and an ask rule
+       then refuses: it must never quietly become allow. "Allow for
+       this session" is remembered under SteeringKey. *)
+    OnAsk:          TPermAskFn;
     { Bounded same-provider retry on a transient HTTP status. 0 disables.
       Populated from TConfig; see the field comments there for why this
       excludes status <= 0. }
@@ -749,6 +757,44 @@ begin
   else Result := GDispatchingCfg^.BackgroundDrainKey;
 end;
 
+{ True = proceed. False = refused; Refusal holds the tool result. }
+function PermissionGate(const Cfg: TToolLoopConfig; const ToolName, ArgsJSON: string;
+                        out Refusal: string): Boolean;
+var
+  Res: string;
+  Dec: TPermDecision;
+  Ans: TAskAnswer;
+begin
+  Result := True;
+  Refusal := '';
+  Res := ResourceOf(ToolName, ArgsJSON);
+  Dec := Decide(ToolName, Res);
+  case Dec.Effect of
+    peDeny:
+      begin
+        Refusal := PermissionRefusal(ToolName, Res, Dec);
+        Result := False;
+      end;
+    peAsk:
+      begin
+        if SessionAllowed(Cfg.SteeringKey, ToolName, Res) then Exit;
+        if not Assigned(Cfg.OnAsk) then
+        begin
+          Refusal := PermissionAskRefusal(ToolName, Res, True);
+          Exit(False);
+        end;
+        Ans := Cfg.OnAsk(ToolName, ArgsJSON, Res, PermissionAskReason(Dec));
+        case Ans of
+          aaAllowOnce: ;
+          aaAllowSession: RememberSessionAllow(Cfg.SteeringKey, ToolName, Res);
+        else
+          Refusal := PermissionAskRefusal(ToolName, Res, False);
+          Result := False;
+        end;
+      end;
+  end;
+end;
+
 procedure DispatchOneToolCall(const Cfg: TToolLoopConfig;
                                var D: TToolCallDispatch);
 var
@@ -804,6 +850,14 @@ begin
     D.ResultText := SpaceModeRefusal(D.Call.Func.Name);
     Exit;
   end;
+  (* Ordered permissions (PasClaw.Permissions). After the mode gates,
+     before preflight: policies.json first, then config.json's rules,
+     last match wins. Deny and a declined ask land in ResultText with
+     Err empty, like the mode refusals, so the explanation reaches the
+     model verbatim. An allow here is only an opinion -- the sandbox
+     denylist and the family switches still run inside the tool. *)
+  if not PermissionGate(Cfg, D.Call.Func.Name, RetryArgs, D.ResultText) then
+    Exit;
   if not PreflightToolCall(D.Call.Func.Name, RetryArgs, D.Err) then
     D.ResultText := ''
   else if Cfg.Registry <> nil then

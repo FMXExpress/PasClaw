@@ -14,6 +14,7 @@ uses
   SysUtils, Classes,
   PasClaw.Providers.Types,
   PasClaw.Stream.Reliability,
+  PasClaw.Permissions,     { TPermRuleArray -- the ordered allow/deny/ask list }
   PasClaw.Shell.Backend;   { TShellBackendKind -- typed enum the
                              ShellBackend field uses. Defining it
                              in the leaf shell unit means
@@ -949,6 +950,17 @@ type
        shell_background commands together -- may run at once per
        coordinator. Beyond it the tool refuses until one finishes. *)
     BackgroundJobsMax:     Integer;
+    (* Ordered permission rules, evaluated at tool dispatch after the
+       mode gates: [{tool, resource?, effect: allow|deny|ask}], last
+       match wins, no match = no opinion (the older gates still apply).
+       See PasClaw.Permissions. A second list of the same shape lives in
+       <home>/policies.json, outside this file, so the gateway's config
+       endpoint cannot loosen it; ApplyConfigGlobals installs both. *)
+    Permissions:           TPermRuleArray;
+    (* How long an "ask" waits for a human before it counts as deny, in
+       seconds. The TUI and CLI askers wait for a key; the gateway asker
+       waits for POST /v1/permissions/<id>. *)
+    PermissionsAskTimeoutSec: Integer;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -1419,6 +1431,8 @@ begin
   ShellTimeoutSec        := 600;   { ten minutes; long enough for a build, short enough to notice }
   MCPCodeModeDefault     := True;  { MCP tools are script-callable by default; see TMCPServer.CodeMode }
   BackgroundJobsMax      := 6;     { subagents + background shells, per coordinator }
+  SetLength(Permissions, 0);       { no rules: the older gates alone, as before }
+  PermissionsAskTimeoutSec := 300; { five minutes to answer an ask; then deny }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1796,6 +1810,13 @@ begin
       Root.PutBool('mcp_codemode_default', False);
     if BackgroundJobsMax <> 6 then
       Root.PutInt('background_jobs_max', BackgroundJobsMax);
+    if Length(Permissions) > 0 then
+    begin
+      Arr := TJsonArray.Parse(PermissionRulesToJSON(Permissions));
+      Root.PutArray('permissions', Arr);
+    end;
+    if PermissionsAskTimeoutSec <> 300 then
+      Root.PutInt('permissions_ask_timeout_sec', PermissionsAskTimeoutSec);
     if (Maintenance.KeepSupersededDays <> 30) or (Maintenance.UnusedSkillDays <> 30)
        or Maintenance.Review or Maintenance.Backup then
     begin
@@ -2385,6 +2406,15 @@ begin
     if ShellTimeoutSec < 0 then ShellTimeoutSec := 0;
     BackgroundJobsMax    := Integer(Root.GetInt('background_jobs_max', BackgroundJobsMax));
     if BackgroundJobsMax < 1 then BackgroundJobsMax := 1;
+    Arr := Root.ChildArray('permissions');
+    if Arr <> nil then
+    try
+      Permissions := ParsePermissionRules(Arr.ToJSON, 'config');
+    finally
+      Arr.Free;
+    end;
+    PermissionsAskTimeoutSec := Integer(Root.GetInt('permissions_ask_timeout_sec', PermissionsAskTimeoutSec));
+    if PermissionsAskTimeoutSec < 1 then PermissionsAskTimeoutSec := 1;
     Obj := Root.ChildObject('maintenance');
     if Obj <> nil then
     try
@@ -2916,6 +2946,13 @@ begin
      benchmark agent are spawned and which must not inherit a shell
      command's bound. *)
   SetShellToolTimeoutMs(C.ShellTimeoutSec * 1000);
+  { The permission rule list is read at every tool dispatch, on whichever
+    thread dispatches, so it is a locked process-global in
+    PasClaw.Permissions rather than a field threaded through every loop
+    config. The policies file beside config.json is loaded here too and
+    re-read on its own when its mtime moves. }
+  SetPermissionRules(C.Permissions);
+  LoadPolicyFile(GetHome);
   { Reranker: which cross-encoder to load + whether retrieval reranks. The
     /v1/rerank endpoint and the memory_search rerank stage both read these
     process-globals, so this chokepoint keeps them in sync with config.json. }

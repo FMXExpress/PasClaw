@@ -52,6 +52,8 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/chat` | POST | PasClaw JSON chat endpoint accepting `{"message":"..."}`. |
 | `/v1/chat/completions` | POST | OpenAI Chat Completions-compatible. Streams with `stream: true`. |
 | `/v1/responses` | POST | OpenAI Responses-compatible. String or message-array `input`. Non-streaming only. |
+| `/v1/permissions` | GET | Permission requests waiting for an answer (`{"pending":[{id, session, tool, resource, args, reason}]}`). A request appears when a `permissions` rule says `ask` during a turn; the same object is published as a `permission_request` desktop event. |
+| `/v1/permissions/<id>` | POST | Answer one: `{"answer":"allow"}` (once), `"session"` (remember for that session), or `"deny"`. 404 once it has been answered or has timed out (`permissions_ask_timeout_sec`, then deny). With no desktop-events subscriber connected an `ask` denies immediately. See [Security → Permissions](./security.md#permissions-ordered-rules). |
 | `/mcp`, `/v1/mcp/rpc` | POST | MCP JSON-RPC endpoint when PasClaw is acting as an MCP server. |
 
 ## Embedded web UI

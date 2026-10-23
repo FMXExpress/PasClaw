@@ -27,6 +27,7 @@ uses
   PasClaw.Workspaces,
   SysUtils, Classes,
   PasClaw.Config, PasClaw.Utils, PasClaw.CliUI, PasClaw.Logger,
+  PasClaw.Permissions,        { TAskAnswer -- the REPL's permissions asker }
   PasClaw.Memory.AutoDistill,
   PasClaw.Memory.Facts.Embed,
   PasClaw.Providers.Types,
@@ -210,9 +211,15 @@ type
                              Compaction flushes working state into it before
                              dropping history; nil (one-shot runs) disables
                              the flush, not the compaction. }
+    Interactive: Boolean; { True only in the line REPL, where a human is at
+                            the keyboard. One-shot / piped runs leave it
+                            False and an "ask" rule then refuses. }
     procedure OnToolCall(const Name, ArgsJSON: string);
     procedure OnToolResult(const Name, ResultText, Err: string);
     procedure OnBeforeCompact(const Messages: array of TMessage);
+    { Permissions asker for the line REPL: prints the request and reads
+      one line -- y/once, s/session, anything else denies. }
+    function AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
     procedure OnBeforePrune(const Messages: array of TMessage);
   end;
 
@@ -264,6 +271,37 @@ begin
   if MetaRef = nil then Exit;          { one-shot run: no session file }
   if ArchiveSessionOnce(MetaRef^.Id) then
     LogInfo('session: archived %s before its first prune', [MetaRef^.Id]);
+end;
+
+function TLoopHandlers.AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+var
+  Line, Res: string;
+begin
+  Result := aaDeny;
+  if not Interactive then Exit;
+  Res := Resource;
+  if Length(Res) > 160 then Res := Copy(Res, 1, 157) + '...';
+  if Res <> '' then Res := '  ' + Ansi.Dim + Res + Ansi.Reset;
+  (* One prompt at a time. The loop dispatches tool calls in parallel, so
+     two ask-gated calls in one batch arrive here on two threads, both
+     printing to the same terminal and both calling ReadLn on the same
+     stdin: the prompts interleave and whichever thread the OS hands the
+     line to consumes it, which need not be the one whose prompt the
+     operator was answering. (Codex P1 on #611.) *)
+  BeginInteractiveAsk;
+  try
+    PrintLn('');
+    PrintLn(Ansi.Bold + 'permission: ' + Ansi.Reset + ToolName + Res);
+    PrintLn(Ansi.Dim + '  (' + Reason + ')' + Ansi.Reset);
+    Print('  allow [y]once / [s]ession / [n]o > ');
+    if EOF then Exit;
+    ReadLn(Line);
+    Line := LowerCase(Trim(Line));
+    if (Line = 'y') or (Line = 'yes') or (Line = 'once') then Result := aaAllowOnce
+    else if (Line = 's') or (Line = 'session') or (Line = 'always') then Result := aaAllowSession;
+  finally
+    EndInteractiveAsk;
+  end;
 end;
 
 procedure TLoopHandlers.OnToolCall(const Name, ArgsJSON: string);
@@ -567,6 +605,11 @@ begin
     Result.Model := Cfg.PlanModel;
   Result.MaxIterations := A.MaxIterations;
   Result.Parallel := True;
+  { Permissions "ask" rules: the REPL asks at the keyboard; one-shot and
+    piped runs (Handlers.Interactive = False) answer deny inside
+    AskPermission, so the rule never quietly becomes allow. }
+  if Handlers <> nil then
+    Result.OnAsk := Handlers.AskPermission;
   Result.Fallbacks     := ResolveFallbacks(Cfg, Result.FallbackModels);
   Result.Options       := DefaultChatOptions;
   { ToolsEnabled tracks the registry we are about to hand RunToolLoop
@@ -1503,6 +1546,7 @@ begin
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
+  Handlers.Interactive := True;   { a human is at this keyboard: ask rules can ask }
   try
     SetLength(Msgs, 0);
     ThinkingOn := False;

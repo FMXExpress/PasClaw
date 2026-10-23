@@ -488,6 +488,16 @@ pasclaw route report --since 30
 
 Token volume per provider/model over the saved sessions in the window, beside the cheap-tier settings (`background_model`, `fast_model`, the auto-router's easy tier), so the split between the flagship and the small model is visible. A session counts under the last model it used; turns the auto-router sent to the easy tier mid-session are attributed to the session's model, so the cheap share is a floor.
 
+## permissions
+
+```sh
+pasclaw permissions list
+pasclaw permissions test shell_exec "git push origin main"
+pasclaw permissions test fs_write /home/me/secrets/key.pem
+```
+
+`list` prints the policy rules (`<home>/policies.json`) and the config rules (`config.json` → `permissions`) in evaluation order. `test` prints what the dispatch gate would decide for one call (`allow`, `deny`, `ask`, or no rule) and which rule decided it. See [Security → Permissions](./security.md#permissions-ordered-rules) for the rule shape.
+
 ## update
 
 ```sh

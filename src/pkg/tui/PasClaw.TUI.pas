@@ -46,6 +46,7 @@ uses
                                      from the interface section's uses, not
                                      just the implementation's. FPC was
                                      permissive about this; dcc64 is not. }
+  PasClaw.Permissions,             { TAskAnswer -- the footer permissions asker }
   PasClaw.Tools.ToolLoop,          { TToolLoopResult -- referenced by the
                                      AccumulateLoopStats method declaration
                                      in the TTUI class; same dcc64
@@ -92,6 +93,16 @@ type
       parked here and flashed from the UI loop. }
     FBgFlashLock:    TCriticalSection;
     FBgFlashPending: string;
+    { A permissions "ask" in flight. The loop thread parks the request
+      here and waits on FAskEvent; the UI loop shows it in the footer and
+      answers from HandleKey (Delphi build). The FPC line build reads the
+      answer from stdin on the loop thread instead -- its UI thread is
+      blocked in DoneEvent.WaitFor during a turn. }
+    FAskLock:        TCriticalSection;
+    FAskPending:     Boolean;
+    FAskLine:        string;
+    FAskAnswer:      TAskAnswer;
+    FAskEvent:       TEvent;
     { NB: RouteConfig is declared further down, after every field -- dcc64
       (E2169) forbids a field definition after a method/property in the same
       visibility section, and the build branches below add more fields. }
@@ -310,6 +321,13 @@ type
       the UI loop flashes it. The model gets the result itself at the top
       of its next turn through the drain. }
     procedure BackgroundDone(const Key, Handle, Summary: string);
+    { TPermAskFn for the loop config: a permissions "ask" rule matched.
+      Blocks the calling (loop) thread until the operator answers or
+      permissions_ask_timeout_sec passes (then deny). }
+    function AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+    { True while an ask is waiting for a key; HandleKey and the footer read it. }
+    function AskPending(out Line: string): Boolean;
+    procedure AnswerAsk(Answer: TAskAnswer);
   end;
 
 implementation
@@ -508,6 +526,10 @@ begin
   FRouteCfg := nil;
   FBgFlashLock := TCriticalSection.Create;
   FBgFlashPending := '';
+  FAskLock := TCriticalSection.Create;
+  FAskEvent := TEvent.Create(nil, True, False, '');
+  FAskPending := False;
+  FAskLine := '';
   {$IFNDEF FPC}
   FToolActivityLock := TCriticalSection.Create;
   SetLength(FToolActivity, 0);
@@ -522,6 +544,103 @@ begin
                        ' (delivered on your next turn)';
   finally
     FBgFlashLock.Leave;
+  end;
+end;
+
+function TTUI.AskPending(out Line: string): Boolean;
+begin
+  FAskLock.Enter;
+  try
+    Result := FAskPending;
+    Line := FAskLine;
+  finally
+    FAskLock.Leave;
+  end;
+end;
+
+procedure TTUI.AnswerAsk(Answer: TAskAnswer);
+begin
+  FAskLock.Enter;
+  try
+    if not FAskPending then Exit;
+    FAskAnswer := Answer;
+    FAskPending := False;
+    FAskEvent.SetEvent;
+  finally
+    FAskLock.Leave;
+  end;
+end;
+
+function TTUI.AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+var
+  Res: string;
+  {$IFDEF FPC}
+  Line: string;
+  {$ELSE}
+  Waited, LimitMs: Integer;
+  {$ENDIF}
+begin
+  Result := aaDeny;
+  Res := Resource;
+  if Length(Res) > 100 then Res := Copy(Res, 1, 97) + '...';
+  (* One ask at a time. There is one footer and one keyboard, and the
+     loop dispatches in parallel: two ask-gated calls in a batch used to
+     overwrite each other's pending request and both take the single
+     keypress as their answer, so a call the operator never saw was
+     approved by the keystroke meant for the one they did. The FPC
+     branch below has the same problem in sharper form -- two threads
+     reading one stdin. (Codex P1 on #611.) *)
+  BeginInteractiveAsk;
+  try
+  {$IFDEF FPC}
+  { Line build: the UI thread is parked in DoneEvent.WaitFor, so the
+    prompt is read here, on the loop thread, like the CLI's. }
+  if Res <> '' then Res := '  ' + Ansi.Dim + Res + Ansi.Reset;
+  PrintLn('');
+  PrintLn(Ansi.Bold + 'permission: ' + Ansi.Reset + ToolName + Res);
+  PrintLn(Ansi.Dim + '  (' + Reason + ')' + Ansi.Reset);
+  Print('  allow [y]once / [s]ession / [n]o > ');
+  if EOF then Exit;
+  ReadLn(Line);
+  Line := LowerCase(Trim(Line));
+  if (Line = 'y') or (Line = 'yes') or (Line = 'once') then Result := aaAllowOnce
+  else if (Line = 's') or (Line = 'session') or (Line = 'always') then Result := aaAllowSession;
+  {$ELSE}
+  FAskLock.Enter;
+  try
+    FAskEvent.ResetEvent;
+    FAskAnswer := aaDeny;
+    FAskPending := True;
+    FAskLine := ToolName;
+    if Res <> '' then FAskLine := FAskLine + ' ' + Res;
+  finally
+    FAskLock.Leave;
+  end;
+  LimitMs := RouteConfig.PermissionsAskTimeoutSec * 1000;
+  Waited := 0;
+  { Poll in slices so a quitting TUI (FQuit) releases the loop thread
+    instead of holding it for the full timeout. }
+  while (Waited < LimitMs) and (not FQuit) do
+  begin
+    if FAskEvent.WaitFor(250) = wrSignaled then Break;
+    Inc(Waited, 250);
+  end;
+  FAskLock.Enter;
+  try
+    if FAskPending then
+    begin
+      { timed out or quitting: withdraw the prompt, answer stays deny }
+      FAskPending := False;
+      FAskLine := '';
+    end
+    else
+      Result := FAskAnswer;
+  finally
+    FAskLock.Leave;
+  end;
+  {$ENDIF}
+  finally
+    EndInteractiveAsk;
   end;
 end;
 
@@ -621,6 +740,14 @@ begin
     section in a one-TUI-per-process surface.) }
   FBgFlashLock.Free;
   FBgFlashLock := nil;
+  (* FAskLock / FAskEvent are deliberately NOT freed either, and for the
+     same reason as FToolActivityLock below. A worker parked in
+     AskPermission is woken by FQuit within a poll slice, but the bounded
+     wait above gives up after the same 250 ms and hands the thread to
+     FreeOnTerminate -- so Destroy cannot know the worker has left
+     AskPermission, and freeing the event it is waiting on is exactly the
+     use-after-free the hand-off is designed around. Two synchronisation
+     objects at process exit cost nothing. *)
   { FToolActivityLock is deliberately NOT freed: on the bounded-wait timeout
     path above a worker is handed to FreeOnTerminate and may still fire
     OnToolCall/OnToolResult into LiveToolCall during teardown. Freeing the lock
@@ -1466,6 +1593,7 @@ begin
   Cfg.MaxIterations := 6;
   Cfg.Parallel      := True;
   Cfg.Mode          := FMode;  { PR #290: thread current Plan/Build into the dispatch gate }
+  Cfg.OnAsk         := AskPermission;  { permissions "ask" rules prompt in the footer }
   Cfg.Options       := DefaultChatOptions;
   { #414 review: the cap default flipped on, but these builders never set
     ToolOutputCap, so TUI turns sent oversized tool output verbatim while
@@ -2064,12 +2192,27 @@ end;
 procedure TTUI.HandleKey(Key: Integer);
 const
   KEY_TAB = 9;
+var
+  AskLine: string;
 begin
   { Menu intercepts first -- Esc cancels the menu (reverts theme)
     instead of quitting the TUI, Up/Down navigates with live
     preview, Enter commits the selection. Model menu intercept piggybacks
     on the same gate; only one overlay can be open per the mutual-exclusion
     contract enforced in OpenThemeMenu / OpenModelMenu. }
+  { A permissions ask outranks every other key: the loop thread is
+    waiting on this answer. y/a = allow once, s = this session, anything
+    else = deny. }
+  if AskPending(AskLine) then
+  begin
+    case Key of
+      Ord('y'), Ord('Y'), Ord('a'), Ord('A'): AnswerAsk(aaAllowOnce);
+      Ord('s'), Ord('S'):                     AnswerAsk(aaAllowSession);
+    else
+      AnswerAsk(aaDeny);
+    end;
+    Exit;
+  end;
   if FStatsOpen then
   begin
     { Any key dismisses the read-only stats overlay. No selection
@@ -2150,9 +2293,11 @@ end;
 
 procedure TTUI.DrawFooterBar(Y, W: Integer);
 var
-  Hint, Status: string;
+  Hint, Status, AskLine: string;
 begin
-  if FConfirmDelete then
+  if AskPending(AskLine) then
+    Hint := ' permission? [Y] allow once  [S] this session  [N] deny -- ' + AskLine
+  else if FConfirmDelete then
     Hint := ' [Y]es delete  [N]o cancel  '
   else if FFocus = foSessions then
     Hint := ' [Tab] chat  [Up/Dn] nav  [Enter] open  [N]ew  [D]elete  [R]efresh  [Q]uit '
@@ -3133,6 +3278,7 @@ begin
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := LiveToolCallLine;
   Cfg.OnToolResult  := LiveToolResultLine;
+  Cfg.OnAsk         := AskPermission;  { permissions "ask" rules prompt on stdin }
   { Background subagents on the FPC line-based path. Codex on
     PR #212: Cmd.TUI registers spawn_background for FPC builds too,
     so without this binding a job would start but its result would

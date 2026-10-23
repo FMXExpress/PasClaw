@@ -50,6 +50,7 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
   PasClaw.Tools.ToolLoop,  { TToolLoopConfig/Result -- RunCheckpointedLoop sig }
+  PasClaw.Permissions,     { TAskAnswer -- the web UI permissions asker }
   PasClaw.Agent.Hooks,     { TPasClawHook -- disconnect-abort hook for streaming }
   PasClaw.Agent.Steering,  { PushSteering/PendingSteeringCount -- /v1/steer + SteeringKey }
   PasClaw.Agent.AutoRouter.Apply,  { ApplyAutoRoute -- per-turn cheap routing }
@@ -95,6 +96,14 @@ type
        restart. FApplyLock guards the swap so a request thread reads a
        consistent (primary, fallbacks) pair via SnapshotProviders. *)
     FApplyLock: TCriticalSection;
+    (* Permissions "ask" rules in the gateway. The loop thread parks a
+       TPendingAsk here, publishes a permission_request desktop event and
+       waits; a POST /v1/permissions/<id> from the web UI answers it.
+       Nobody listening on /v1/desktop/events => deny at once rather than
+       a five-minute stall. *)
+    FAskLock: TCriticalSection;
+    FAsks:    array of TObject;   { TPendingAsk -- declared in the implementation }
+    FAskSeq:  Integer;
     FFallbacks: TLLMProviderArray;
     FFallbackModels: TStringArray;   { per-fallback model overrides, lockstep with FFallbacks }
     (* Per-process scoped credential. Random hex generated in Create
@@ -509,6 +518,10 @@ type
     { POST /v1/steer -- push a mid-turn steering message into the running turn
       for the X-PasClaw-Session session (PasClaw.Agent.Steering). }
     procedure HandleSteer(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+    { Permissions "ask" (see the FAskLock comment). }
+    function  AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+    procedure HandlePermissionsList(AResp: TIdHTTPResponseInfo);
+    procedure HandlePermissionAnswer(const Doc: string; ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     { Resolve a registered MCP tool by its bare suffix (after "server__"),
       preferring a server whose name contains "replicate". '' if none -- so the
       replicate endpoints work whatever the operator named the MCP server. }
@@ -1268,6 +1281,9 @@ begin
   { Live provider hot-swap state. Cache the fallback chain now (relay queue is
     registered above, so a relay fallback resolves) -- rebuilt on config write. }
   FApplyLock := TCriticalSection.Create;
+  FAskLock := TCriticalSection.Create;
+  SetLength(FAsks, 0);
+  FAskSeq := 0;
   FFallbacks := ResolveFallbacks(FCfg, FFallbackModels);
 
   { Generate a fresh per-process relay-scoped token. Format is
@@ -1303,6 +1319,7 @@ begin
   SetGlobalRelayQueue(nil);
   FRelayQueue.Free;
   FApplyLock.Free;
+  FAskLock.Free;   { any pending ask has a loop thread that already stopped with the server }
   inherited Destroy;
 end;
 
@@ -1909,6 +1926,9 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/tools')   then HandleTools(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/chat')    then HandleChat(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/steer')   then HandleSteer(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/permissions') then HandlePermissionsList(AResponse)
+    else if (ARequest.Command = 'POST') and (Copy(Doc, 1, 16) = '/v1/permissions/') then
+      HandlePermissionAnswer(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/chat/completions') then
       HandleChatCompletions(AContext, ARequest, AResponse, IsChatCompletionsStream, ResponseStarted)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/responses') then
@@ -3480,6 +3500,165 @@ end;
 function JsonStr(const S: string): string;
 begin
   Result := '"' + JsonEscape(S) + '"';
+end;
+
+{ ---- permissions "ask" over the desktop event feed ---- }
+
+type
+  TPendingAsk = class
+  public
+    Id, Session, Tool, Resource, ArgsJSON, Reason: string;
+    Event:  TEvent;
+    Answer: TAskAnswer;
+    constructor Create;
+    destructor Destroy; override;
+    function ToJSON: string;
+  end;
+
+constructor TPendingAsk.Create;
+begin
+  inherited Create;
+  Event := TEvent.Create(nil, True, False, '');
+  Answer := aaDeny;
+end;
+
+destructor TPendingAsk.Destroy;
+begin
+  Event.Free;
+  inherited Destroy;
+end;
+
+function TPendingAsk.ToJSON: string;
+var
+  A: string;
+begin
+  A := ArgsJSON;
+  if Length(A) > 4000 then A := Copy(A, 1, 4000);   { a preview; the UI shows the resource }
+  Result := '{"id":' + JsonStr(Id) + ',"session":' + JsonStr(Session) +
+            ',"tool":' + JsonStr(Tool) + ',"resource":' + JsonStr(Resource) +
+            ',"args":' + JsonStr(A) + ',"reason":' + JsonStr(Reason) + '}';
+end;
+
+function TGatewayServer.AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+var
+  P: TPendingAsk;
+  i, n, LimitMs: Integer;
+begin
+  Result := aaDeny;
+  if DesktopSubscriberCount = 0 then
+  begin
+    LogWarn('permissions: "%s" needs an answer and no web UI is connected -- denied', [ToolName]);
+    Exit;
+  end;
+  P := TPendingAsk.Create;
+  FAskLock.Enter;
+  try
+    Inc(FAskSeq);
+    P.Id := 'ask-' + IntToHex(Integer(GetTickCount64 and $FFFFFF), 6) + '-' + IntToStr(FAskSeq);
+    P.Session := CurrentDispatchDrainKey;
+    P.Tool := ToolName;
+    P.Resource := Resource;
+    P.ArgsJSON := ArgsJSON;
+    P.Reason := Reason;
+    n := Length(FAsks);
+    SetLength(FAsks, n + 1);
+    FAsks[n] := P;
+  finally
+    FAskLock.Leave;
+  end;
+  PublishRaw('{"type":"permission_request","ask":' + P.ToJSON + '}');
+  LimitMs := FCfg.PermissionsAskTimeoutSec * 1000;
+  try
+    if P.Event.WaitFor(LimitMs) = wrSignaled then Result := P.Answer
+    else LogWarn('permissions: no answer for "%s" within %d s -- denied', [ToolName, FCfg.PermissionsAskTimeoutSec]);
+  finally
+    FAskLock.Enter;
+    try
+      for i := 0 to High(FAsks) do
+        if FAsks[i] = P then
+        begin
+          FAsks[i] := FAsks[High(FAsks)];
+          SetLength(FAsks, Length(FAsks) - 1);
+          Break;
+        end;
+    finally
+      FAskLock.Leave;
+    end;
+    PublishRaw('{"type":"permission_resolved","id":' + JsonStr(P.Id) +
+               ',"answer":' + JsonStr(AskAnswerName(Result)) + '}');
+    P.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandlePermissionsList(AResp: TIdHTTPResponseInfo);
+var
+  i: Integer;
+  S: string;
+begin
+  S := '';
+  FAskLock.Enter;
+  try
+    for i := 0 to High(FAsks) do
+    begin
+      if S <> '' then S := S + ',';
+      S := S + TPendingAsk(FAsks[i]).ToJSON;
+    end;
+  finally
+    FAskLock.Leave;
+  end;
+  WriteJSON(AResp, 200, '{"pending":[' + S + ']}');
+end;
+
+procedure TGatewayServer.HandlePermissionAnswer(const Doc: string; ARequest: TIdHTTPRequestInfo;
+                                                AResp: TIdHTTPResponseInfo);
+var
+  Id, Body, AnsText: string;
+  Req: TJsonObject;
+  Ans: TAskAnswer;
+  i: Integer;
+  Found: Boolean;
+begin
+  Id := Copy(Doc, 17, MaxInt);
+  Body := ReadRequestBody(ARequest);
+  AnsText := '';
+  if Trim(Body) <> '' then
+  begin
+    try Req := TJsonObject.Parse(Body); except Req := nil; end;
+    if Req <> nil then
+    try
+      AnsText := LowerCase(Trim(Req.GetStr('answer', '')));
+    finally
+      Req.Free;
+    end;
+  end;
+  if (AnsText = 'allow') or (AnsText = 'once') or (AnsText = 'allow_once') then Ans := aaAllowOnce
+  else if (AnsText = 'session') or (AnsText = 'allow_session') or (AnsText = 'always') then Ans := aaAllowSession
+  else if (AnsText = 'deny') or (AnsText = 'no') then Ans := aaDeny
+  else
+  begin
+    WriteJSON(AResp, 400, '{"error":"answer must be one of allow, session, deny"}');
+    Exit;
+  end;
+  Found := False;
+  FAskLock.Enter;
+  try
+    for i := 0 to High(FAsks) do
+      if TPendingAsk(FAsks[i]).Id = Id then
+      begin
+        TPendingAsk(FAsks[i]).Answer := Ans;
+        TPendingAsk(FAsks[i]).Event.SetEvent;
+        Found := True;
+        Break;
+      end;
+  finally
+    FAskLock.Leave;
+  end;
+  if not Found then
+  begin
+    WriteJSON(AResp, 404, '{"error":"no pending permission request with that id (answered, timed out, or never asked)"}');
+    Exit;
+  end;
+  WriteJSON(AResp, 200, '{"ok":true,"id":' + JsonStr(Id) + ',"answer":' + JsonStr(AskAnswerName(Ans)) + '}');
 end;
 
 procedure TGatewayServer.HandleWorkflowsList(AResp: TIdHTTPResponseInfo);
@@ -6061,6 +6240,7 @@ begin
     ran next. Empty session => steering disabled (no-op). }
   LoopCfg.SteeringKey   := ReqSessionId(ARequest);
   LoopCfg.BackgroundDrainKey := LoopCfg.SteeringKey;   { finished background jobs fold into THIS session's next turn }
+  LoopCfg.OnAsk := AskPermission;   { permissions "ask" rules go to the web UI as permission_request events }
   LoopCfg.Fallbacks     := FB;
   LoopCfg.FallbackModels := FBModels;
   LoopCfg.Options       := DefaultChatOptions;
@@ -6362,6 +6542,7 @@ begin
     into this turn between iterations. }
   LoopCfg.SteeringKey    := Sid;
   LoopCfg.BackgroundDrainKey := LoopCfg.SteeringKey;   { finished background jobs fold into THIS session's next turn }
+  LoopCfg.OnAsk := AskPermission;   { permissions "ask" rules go to the web UI as permission_request events }
   LoopCfg.CompactEnabled := FCfg.Compaction.Enabled;
   LoopCfg.CompactOpts    := DefaultCompactOptions;
   LoopCfg.CompactOpts.ThresholdTokens    := FCfg.Compaction.ThresholdTokens;
@@ -8069,6 +8250,7 @@ begin
        appeared in the first request of the following, unrelated one. *)
     LoopCfg.SteeringKey := ReqSession;
     LoopCfg.BackgroundDrainKey := LoopCfg.SteeringKey;   { finished background jobs fold into THIS session's next turn }
+  LoopCfg.OnAsk := AskPermission;   { permissions "ask" rules go to the web UI as permission_request events }
 
     if WantsStream then
     begin
@@ -9809,6 +9991,7 @@ begin
         left on disk for whichever turn drained next. }
       LoopCfg.SteeringKey   := ReqSessionId(ARequest);
       LoopCfg.BackgroundDrainKey := LoopCfg.SteeringKey;   { finished background jobs fold into THIS session's next turn }
+  LoopCfg.OnAsk := AskPermission;   { permissions "ask" rules go to the web UI as permission_request events }
       LoopCfg.Fallbacks     := FB;
       LoopCfg.FallbackModels := FBModels;
       LoopCfg.Options       := DefaultChatOptions;
