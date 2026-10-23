@@ -198,7 +198,18 @@ begin
   Info := Default(TGatewayRunInfo);
   Info.Path := GatewayRunFilePath(Home);
   if not FileExists(Info.Path) then Exit;
-  Text := ReadFileText(Info.Path);
+  (* The gateway deletes this file on its way out, and nothing orders that
+     against a reader: FileExists can say yes and the open then find
+     nothing. ReadFileText raises in that case, and none of the callers --
+     `status`, `agent --attach`, `tui --attach` -- catches it, so an
+     ordinary concurrent shutdown crashed the client instead of it reading
+     "no gateway". Absent is the documented answer for a missing file, and
+     a file that vanished mid-read is missing. (Codex P2 on #613.) *)
+  try
+    Text := ReadFileText(Info.Path);
+  except
+    Exit;
+  end;
   try
     Obj := TJsonObject.Parse(Text);
   except
@@ -240,6 +251,13 @@ end;
 {$IFDEF MSWINDOWS}
 function ConsoleHandler(CtrlType: DWORD): BOOL; stdcall;
 begin
+  (* The second event is the operator saying "now". Returning True for it
+     too kept this handler consuming every Ctrl-C, so a shutdown hung in
+     channel or server cleanup could not be broken out of at all -- unlike
+     Unix, where the first signal restores SIG_DFL and the second kills.
+     False hands the event on to the default handler, which terminates.
+     (Codex P2 on #613.) *)
+  if GStopRequested then Exit(False);
   GStopRequested := True;
   Result := True;   { handled: the process keeps running until the finally has run }
 end;

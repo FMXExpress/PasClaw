@@ -34,7 +34,8 @@ unit PasClaw.Cmd.Attach;
 interface
 
 uses
-  PasClaw.Config;
+  PasClaw.Config,
+  PasClaw.Client.Api;   { TChatTurnOptions }
 
 { Should this run attach? Explicit = --attach was given. Mode comes from
   Cfg.Cli.Attach. True => URL is the gateway to use (Warn may carry a
@@ -45,9 +46,18 @@ function ResolveAttach(const Cfg: TConfig; Explicit: Boolean;
                        out URL, Reason, Warn: string; out Fail: Boolean): Boolean;
 
 { The attached REPL (or one attached turn when Message is non-empty).
-  SessionId '' creates a session on the gateway. Returns the exit code. }
+  SessionId '' creates a session on the gateway. TurnOpts is what every
+  turn asks the gateway for (mode, model, ...). Returns the exit code. }
 function RunAttached(const Cfg: TConfig; const URL, SessionId, Message: string;
-                     Quiet: Boolean): Integer;
+                     Quiet: Boolean; const TurnOpts: TChatTurnOptions): Integer;
+
+(* The refusal for flags a gateway turn cannot carry. Flags lists them as
+   the operator typed them; '' when there are none (and then this returns
+   ''). Every command that attaches checks its own flags against what
+   TChatTurnOptions can say and refuses the rest, rather than dropping
+   them: silently running `--attach --provider x` on the gateway's
+   provider would change what the command means. (Codex P1 on #613.) *)
+function AttachUnsupportedRefusal(const Flags: string): string;
 
 implementation
 
@@ -55,8 +65,7 @@ uses
   SysUtils, Classes, DateUtils,
   PasClaw.CliUI,
   PasClaw.JSON,
-  PasClaw.Gateway.RunFile,
-  PasClaw.Client.Api;
+  PasClaw.Gateway.RunFile;
 
 function ResolveAttach(const Cfg: TConfig; Explicit: Boolean;
                        out URL, Reason, Warn: string; out Fail: Boolean): Boolean;
@@ -136,8 +145,18 @@ begin
   else Result := IntToStr(S div 86400) + 'd';
 end;
 
+function AttachUnsupportedRefusal(const Flags: string): string;
+begin
+  Result := '';
+  if Flags = '' then Exit;
+  Result := Flags + ' cannot be used with --attach: the turn runs on the ' +
+            'gateway, which has no way to take ' +
+            'them per request. Drop them to attach, or run without --attach ' +
+            '(and without cli.attach) to use them locally.';
+end;
+
 function RunAttached(const Cfg: TConfig; const URL, SessionId, Message: string;
-                     Quiet: Boolean): Integer;
+                     Quiet: Boolean; const TurnOpts: TChatTurnOptions): Integer;
 var
   Client: TPasClawClient;
   Printer: TPrinter;
@@ -194,6 +213,8 @@ begin
     Printer.Quiet := Quiet;
     Client.Token := Cfg.Gateway.Token;
     Client.SessionContext := True;   { the gateway merges its stored transcript }
+    { What the flags asked for, on every turn -- see TChatTurnOptions. }
+    Client.TurnOptions := TurnOpts;
     if not Client.Ping(Ver) then
     begin
       PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no gateway answering at ' + URL);

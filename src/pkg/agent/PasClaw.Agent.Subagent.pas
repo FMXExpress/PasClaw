@@ -112,6 +112,20 @@ type
     procedure SetContext(const ACtx: TSubagentContext);
   end;
 
+(* worktree.enabled, as the spawn tools see it. A nil Cfg (tests, an
+   embedder that never set one) reads as the documented default, on.
+
+   With the feature off, the standalone worktree_* tools were the only
+   thing that disappeared: spawn and spawn_background still advertised a
+   `worktree` argument and still created a branch and a checkout when it
+   was passed -- the opt-out held for one door out of three. Both
+   handlers now refuse the argument and neither schema offers it.
+   (Codex P2 on #612.) *)
+function WorktreeArgEnabled(Cfg: TConfig): Boolean;
+{ The refusal both handlers return for a worktree argument when the
+  feature is off. Prefix is the tool name. }
+function WorktreeDisabledRefusal(const Prefix: string): string;
+
 (* Build a TToolRegistry holding a subset of the source registry,
    keyed by name. Tools not present in the source are silently
    skipped (logged as a warning so the operator notices a typo).
@@ -184,6 +198,28 @@ begin
   Result := False;
 end;
 
+procedure CopyPreservingMode(Dest: TToolRegistry; const T: TTool);
+(* Re-register a copied tool through the entry point that matches the mode
+   it was registered with in the parent.
+
+   TToolRegistry.Register force-clears IsDeferred / Hidden / CodeMode on
+   purpose -- legacy call sites build a TTool on the stack and never touch
+   those fields, so trusting the incoming record would let stack garbage
+   decide whether a core tool reaches the provider. That defensive clear is
+   right for those callers and wrong for this one: here the record came out
+   of Find, so every flag on it is real, and clearing CodeMode turned a
+   code-mode MCP tool into an ordinary provider-visible one. The subagent
+   then got the full MCP schema its parent had deliberately kept out of the
+   tools array, and called it directly instead of through execute_code --
+   the whole point of code mode lost at the spawn boundary. (Codex P1
+   on #609.) *)
+begin
+  if T.CodeMode then
+    Dest.RegisterCodeMode(T)
+  else
+    Dest.Register(T);
+end;
+
 procedure RebindExecuteCode(Child: TToolRegistry);
 { The copied execute_code record carries the PARENT's runner, whose RPC
   server dispatches into the parent's full registry -- which is exactly the
@@ -194,6 +230,18 @@ var
 begin
   if (Child <> nil) and Child.Find('execute_code', T) then
     RegisterExecuteCodeTool(Child);
+end;
+
+function WorktreeArgEnabled(Cfg: TConfig): Boolean;
+begin
+  Result := (Cfg = nil) or Cfg.Worktree.Enabled;
+end;
+
+function WorktreeDisabledRefusal(const Prefix: string): string;
+begin
+  Result := Prefix + ': worktrees are turned off here (worktree.enabled is ' +
+            'false in config) -- spawn without the worktree argument, and the ' +
+            'subagent works in the current checkout';
 end;
 
 function BuildFilteredRegistry(Source: TToolRegistry;
@@ -228,10 +276,12 @@ begin
       if IsSpawnFamily(AllNames[i]) then Continue;
       if AllNames[i] = 'tool_search' then Continue;
       if not Source.Find(AllNames[i], T) then Continue;
+      { A code-mode tool is IsDeferred=True but never in DeferredNames, so
+        it lands in the last branch -- which is where its mode is preserved. }
       if T.IsDeferred and NameInList(AllNames[i], StillDeferred) then
         Result.RegisterDeferred(T, True)   { genuinely still deferred }
       else
-        Result.Register(T);                { non-deferred OR already revealed -> active }
+        CopyPreservingMode(Result, T);     { non-deferred OR revealed -> active; code mode kept }
     end;
     RebindExecuteCode(Result);
     Exit;
@@ -245,7 +295,7 @@ begin
       LogWarn('subagent: source registry has no tool named "%s" -- skipping', [Names[i]]);
       Continue;
     end;
-    Result.Register(T);
+    CopyPreservingMode(Result, T);
   end;
   RebindExecuteCode(Result);
 end;
@@ -400,15 +450,19 @@ begin
         Props.PutObject('model', ModelP);
       end;
 
-      ModelP := TJsonObject.Create;
-      try
-        ModelP.PutStr('type', 'string');
-        ModelP.PutStr('description',
-          'Optional: a git branch name. The subagent runs inside a worktree ' +
-          'for that branch (created if needed, beside the repository), so its ' +
-          'edits never touch your checkout. Use one per parallel task.');
-      finally
-        Props.PutObject('worktree', ModelP);
+      { Offered only when the feature is on; see WorktreeArgEnabled. }
+      if WorktreeArgEnabled(FCtx.Cfg) then
+      begin
+        ModelP := TJsonObject.Create;
+        try
+          ModelP.PutStr('type', 'string');
+          ModelP.PutStr('description',
+            'Optional: a git branch name. The subagent runs inside a worktree ' +
+            'for that branch (created if needed, beside the repository), so its ' +
+            'edits never touch your checkout. Use one per parallel task.');
+        finally
+          Props.PutObject('worktree', ModelP);
+        end;
       end;
     finally
       Obj.PutObject('properties', Props);
@@ -469,15 +523,6 @@ begin
   finally
     Args.Free;
   end;
-  { A worktree: the child's own checkout. Created (or found) before the
-    loop starts so a failure is this call's error, not the child's. }
-  WorkDir := '';
-  if Worktree <> '' then
-    if not EnsureWorktree(Worktree, WorkDir, WtErr) then
-    begin
-      ErrMsg := 'spawn: ' + WtErr;
-      Exit;
-    end;
   if AgentName = '' then
   begin
     ErrMsg := 'spawn: agent name required';
@@ -494,6 +539,23 @@ begin
                      [AgentName, JoinSpecNames]);
     Exit;
   end;
+  if (Worktree <> '') and (not WorktreeArgEnabled(FCtx.Cfg)) then
+  begin
+    ErrMsg := WorktreeDisabledRefusal('spawn');
+    Exit;
+  end;
+  { A worktree: the child's own checkout. Created (or found) before the
+    loop starts so a failure is this call's error, not the child's -- and
+    only AFTER every cheap check above, which it used to precede: a spawn
+    with no prompt or a misspelt agent made a branch and a checkout on
+    disk on its way to being refused. }
+  WorkDir := '';
+  if Worktree <> '' then
+    if not EnsureWorktree(Worktree, WorkDir, WtErr) then
+    begin
+      ErrMsg := 'spawn: ' + WtErr;
+      Exit;
+    end;
 
   { Model precedence: an explicit per-call `model` arg wins, so the spawning
     model can pick a cheaper/faster sibling from the SAME active provider

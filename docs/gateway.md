@@ -369,7 +369,7 @@ When OpenTelemetry is enabled (`diagnostics.otel.enabled` or `OTEL_EXPORTER_OTLP
 curl http://127.0.0.1:8088/v1/health         # 200 OK + JSON
 ```
 
-Press Ctrl-C to stop. The server tears down all active SSE streams cleanly before exiting.
+Press Ctrl-C (or send SIGTERM) to stop. The server tears down all active SSE streams cleanly, removes its run file and stops its channels before exiting. With `--telegram` the stop takes effect once the bot's current long-poll returns (up to about 25 s); a second Ctrl-C kills the process at once, on Windows as on Unix.
 
 ## Run file and attached terminals
 

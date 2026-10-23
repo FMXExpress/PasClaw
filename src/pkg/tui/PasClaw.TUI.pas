@@ -323,9 +323,10 @@ type
     constructor Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
     {$IFNDEF FPC}destructor Destroy; override;{$ENDIF}
     procedure Run;
-    { GBackgroundDoneHook target: a spawn_background / shell_background job
-      finished. Thread-safe; the next frame flashes it. The model gets the
-      result itself at the top of its next turn through the drain. }
+    { SetBackgroundDoneHook target: a spawn_background / shell_background
+      job finished. Called on the job's thread, so it only parks the line;
+      the UI loop flashes it. The model gets the result itself at the top
+      of its next turn through the drain. }
     procedure BackgroundDone(const Key, Handle, Summary: string);
     { TPermAskFn for the loop config: a permissions "ask" rule matched.
       Blocks the calling (loop) thread until the operator answers or
@@ -589,6 +590,15 @@ begin
   Result := aaDeny;
   Res := Resource;
   if Length(Res) > 100 then Res := Copy(Res, 1, 97) + '...';
+  (* One ask at a time. There is one footer and one keyboard, and the
+     loop dispatches in parallel: two ask-gated calls in a batch used to
+     overwrite each other's pending request and both take the single
+     keypress as their answer, so a call the operator never saw was
+     approved by the keystroke meant for the one they did. The FPC
+     branch below has the same problem in sharper form -- two threads
+     reading one stdin. (Codex P1 on #611.) *)
+  BeginInteractiveAsk;
+  try
   {$IFDEF FPC}
   { Line build: the UI thread is parked in DoneEvent.WaitFor, so the
     prompt is read here, on the loop thread, like the CLI's. }
@@ -636,6 +646,9 @@ begin
     FAskLock.Leave;
   end;
   {$ENDIF}
+  finally
+    EndInteractiveAsk;
+  end;
 end;
 
 procedure TTUI.DrainBackgroundFlash;
@@ -653,8 +666,10 @@ begin
   {$IFNDEF FPC}
   Flash(S);
   {$ELSE}
-  { The FPC build is a line REPL with no footer; a line will do. }
-  WriteLn('[' + S + ']');
+  { The FPC build is a line REPL with no footer; a dim line will do.
+    PrintLn, not WriteLn, like the rest of this surface -- it is the
+    helper that gets UTF-8 onto a Windows console. }
+  PrintLn(Ansi.Dim + '[' + S + ']' + Ansi.Reset);
   {$ENDIF}
 end;
 
@@ -688,9 +703,6 @@ var
   Worker: TRunToolLoopThread;
   RefreshWorker: TModelRefreshThread;
 begin
-  FBgFlashLock.Free;
-  FAskEvent.Free;
-  FAskLock.Free;
   if FLoopThread <> nil then
   begin
     Worker := TRunToolLoopThread(FLoopThread);
@@ -727,6 +739,22 @@ begin
   end;
   FSession.Free;
   FRouteCfg.Free;
+  { Safe to free, unlike FToolActivityLock below: the only thing that
+    touches it from another thread is BackgroundDone, and Cmd_TUI_Run
+    calls SetBackgroundDoneHook(nil) -- which blocks until any in-flight
+    callback has returned -- before it frees this object. (The FPC build
+    has no destructor at all and leaks this one; it is a single critical
+    section in a one-TUI-per-process surface.) }
+  FBgFlashLock.Free;
+  FBgFlashLock := nil;
+  (* FAskLock / FAskEvent are deliberately NOT freed either, and for the
+     same reason as FToolActivityLock below. A worker parked in
+     AskPermission is woken by FQuit within a poll slice, but the bounded
+     wait above gives up after the same 250 ms and hands the thread to
+     FreeOnTerminate -- so Destroy cannot know the worker has left
+     AskPermission, and freeing the event it is waiting on is exactly the
+     use-after-free the hand-off is designed around. Two synchronisation
+     objects at process exit cost nothing. *)
   { FToolActivityLock is deliberately NOT freed: on the bounded-wait timeout
     path above a worker is handed to FreeOnTerminate and may still fire
     OnToolCall/OnToolResult into LiveToolCall during teardown. Freeing the lock
@@ -739,9 +767,6 @@ procedure TTUI.Flash(const Msg: string);
 begin
   FStatusFlash := Msg;
   FStatusFlashUntil := IncSecond(Now, 3);
-end;
-
-  if S <> '' then Flash(S);
 end;
 
 { The seven themes vendored DMVCFramework ships in
@@ -3398,9 +3423,19 @@ begin
   FQuit := False;
   while not FQuit do
   begin
+    (* Background completions, as a line. There is no footer to flash
+       into here and no frame loop to flash from -- this REPL blocks in
+       ReadLn -- so they print at the two moments the operator is looking
+       at the prompt: before it (a job that finished during the last
+       turn) and right after their Enter (one that finished while they
+       were typing). Without this the parked line was never shown at all:
+       DrainBackgroundFlash was only called from the Delphi frame loop, so
+       the FPC branch of it was dead code. (Codex P2 on #610.) *)
+    DrainBackgroundFlash;
     Print(Ansi.BoldBlue + 'you' + Ansi.Reset + '      > ');
     if EOF then Break;
     ReadLn(Line);
+    DrainBackgroundFlash;
     Line := Trim(Line);
     if Line = '' then Continue;
     if (Line[1] = '/') then

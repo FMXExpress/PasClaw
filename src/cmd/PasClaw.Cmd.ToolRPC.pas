@@ -53,7 +53,7 @@ end;
 
 function Cmd_ToolRPC_Run(const Argv: array of string): Integer;
 var
-  ToolName, ArgsJSON, Token, Err, Response, ResultText, RespErr, CatalogServer: string;
+  ToolName, ArgsJSON, Token, Host, Err, Response, ResultText, RespErr, CatalogServer: string;
   Catalog: Boolean;
   Port: Integer;
   Client: TIdTCPClient;
@@ -78,7 +78,7 @@ begin
     if Trim(ArgsJSON) = '' then ArgsJSON := '{}';
   end;
 
-  if not DiscoverRunningRPC(Port, Token, Err) then
+  if not DiscoverRunningRPC(Port, Token, Host, Err) then
     Exit(PrintErr_('__tool: ' + Err));
 
   Req := TJsonObject.Create;
@@ -101,14 +101,21 @@ begin
 
     Client := TIdTCPClient.Create(nil);
     try
-      Client.Host := '127.0.0.1';
+      { Host comes from the discovery file, NOT a hardcoded loopback:
+        under the Docker shell backend this command runs inside the
+        container, where 127.0.0.1 is the container itself and the
+        parent's RPC server is across a network namespace. The parent
+        advertises a host it can be reached at (host.docker.internal);
+        the field is absent, and this stays 127.0.0.1, for every
+        host-namespace backend. }
+      Client.Host := Host;
       Client.Port := Port;
       Client.ConnectTimeout := 5000;
       try
         Client.Connect;
       except
         on E: Exception do
-          Exit(PrintErr_('__tool: connect to 127.0.0.1:' + IntToStr(Port) +
+          Exit(PrintErr_('__tool: connect to ' + Host + ':' + IntToStr(Port) +
                          ' failed: ' + E.Message));
       end;
       try

@@ -543,6 +543,11 @@ begin
           Exit(1);
         end;
         Telegram := TTelegramChannel.Create(Args.Token, Cfg, Provider, Reg);
+        { This command blocks in Telegram.Run, not in Server.WaitForStop, so
+          the Ctrl-C / SIGTERM flag has to reach the channel itself. }
+        Telegram.StopCheck := StopRequested;
+        LogInfo('telegram: Ctrl-C stops the gateway once the current long-poll ' +
+                'returns (up to 25 s); a second Ctrl-C kills it at once');
         { Long-poll runs on the current thread and blocks; for Phase 5 we
           accept that the HTTP listener and Telegram coexist (Indy listens on
           its own threads), so we just call Telegram.Run last. }

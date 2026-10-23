@@ -13,9 +13,15 @@ program codemode_tests;
     - code_catalog tool registers once and returns the catalog
     - the RPC server answers the catalog verb from its bound registry
     - config: codemode defaults true, per-server false, mcp_codemode_default
-      false flips the default, round-trip
+      false flips the default, round-trip; a server added by `mcp add`
+      keeps FOLLOWING that default instead of being pinned to the
+      zero-initialised false (Codex P1 on #609)
     - execute_code: the prologue defines `tool` for bash and PowerShell and
       a real bash run sees the function
+    - execute_code tells the script where to call BACK to, taking the
+      address from the active shell backend -- without which the callback
+      cannot leave a container and code-mode tools are unreachable there
+      (Codex P1 on #609)
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -34,6 +40,8 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.RPC,
   PasClaw.Tools.ExecuteCode,
+  PasClaw.Platform,
+  PasClaw.Shell.Backend,
   PasClaw.MCP.Disclosure;
 
 procedure Fail_(const Msg: string); begin WriteLn('FAIL: ' + Msg); Halt(1); end;
@@ -262,6 +270,205 @@ begin
   WriteLn('  ok: config codemode per server and global default');
 end;
 
+type
+  (* A backend that runs the command on the host (so a real script runs)
+     but answers IShellHostRPC like the Docker one does. Stands in for a
+     container we cannot spawn in the test suite. *)
+  TPassthroughHostBackend = class(TInterfacedObject, IShellBackend, IShellHostRPC)
+  public
+    function Name: string;
+    function Describe: string;
+    procedure StartSession(const SessionId: string);
+    procedure CloseSession(const SessionId: string);
+    function Exec(const SessionId, Cmd, WorkDir: string;
+                  ExtraEnv: TStringList; out Output: string): Integer;
+    function RpcBindIP: string;
+    function RpcConnectHost: string;
+  end;
+
+function TPassthroughHostBackend.Name: string; begin Result := 'passthrough'; end;
+function TPassthroughHostBackend.Describe: string; begin Result := 'test'; end;
+procedure TPassthroughHostBackend.StartSession(const SessionId: string); begin end;
+procedure TPassthroughHostBackend.CloseSession(const SessionId: string); begin end;
+
+function TPassthroughHostBackend.Exec(const SessionId, Cmd, WorkDir: string;
+                                      ExtraEnv: TStringList;
+                                      out Output: string): Integer;
+begin
+  Result := RunOneShotWithEnv(Cmd, WorkDir, ExtraEnv, Output);
+end;
+
+function TPassthroughHostBackend.RpcBindIP: string;
+begin
+  { '' so the server stays on loopback and really starts here; the
+    address itself is the docker backend's business and is tested there. }
+  Result := '';
+end;
+
+function TPassthroughHostBackend.RpcConnectHost: string;
+begin
+  Result := 'fake-host.test';
+end;
+
+procedure TestScriptIsToldWhereToCallBack;
+(* The glue: execute_code has to ask the active backend where its
+   tool-RPC server should listen and what the script should dial, and put
+   that in the discovery file the script reads.
+
+   Without it the file only ever said 127.0.0.1, so under the Docker
+   backend `tool ...` dialled the container itself and every code-mode
+   call failed to connect. Asserted from inside the script, on the file
+   it actually gets handed. (Codex P1 on #609.) *)
+{$IFDEF UNIX}
+var
+  Reg: TToolRegistry;
+  Out_, Err: string;
+begin
+  Reg := MakeReg;
+  try
+    RegisterExecuteCodeTool(Reg);
+    SetActiveShellBackend(TPassthroughHostBackend.Create);
+    try
+      Out_ := Reg.RunTool('execute_code',
+                '{"lang":"bash","code":"cat \"$PASCLAW_TOOL_RPC_INFO\""}', Err);
+      AssertEqStr(Err, '', 'the script ran');
+      AssertContains(Out_, '"host":"fake-host.test"',
+                     'the script is told to dial the backend''s host, ' +
+                     'not its own loopback');
+      AssertContains(Out_, '"token":"', 'and still gets the token + port');
+    finally
+      SetActiveShellBackend(nil);
+    end;
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: the discovery file carries the backend''s callback host');
+end;
+{$ELSE}
+begin
+  WriteLn('  skip: callback-host test needs a POSIX shell');
+end;
+{$ENDIF}
+
+function AddedServerHasCodeModeKey(const Raw: string): Boolean;
+{ Does the single server in this config.json carry an explicit
+  "codemode"? Absent is the whole point: it means "follow the default". }
+var
+  Obj, Srv: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Result := False;
+  Obj := TJsonObject.Parse(Raw);
+  try
+    Arr := Obj.ChildArray('mcp_servers');
+    AssertTrue(Arr <> nil, 'config.json has an mcp_servers array');
+    try
+      AssertEqInt(Arr.Count, 1, 'exactly one server was added');
+      Srv := Arr.ItemObject(0);
+      AssertTrue(Srv <> nil, 'the entry is an object');
+      try
+        Result := Srv.Has('codemode');
+      finally
+        Srv.Free;
+      end;
+    finally
+      Arr.Free;
+    end;
+  finally
+    Obj.Free;
+  end;
+end;
+
+function LoadedCodeMode(const Raw: string): Boolean;
+{ What that file actually means once loaded. }
+var
+  Cfg: TConfig;
+begin
+  Cfg := TConfig.Create;
+  try
+    Cfg.FromJSON(Raw);
+    AssertEqInt(Length(Cfg.MCPServers), 1, 'one server loaded back');
+    Result := Cfg.MCPServers[0].CodeMode;
+  finally
+    Cfg.Free;
+  end;
+end;
+
+procedure TestMcpAddFollowsTheDefault;
+(* `mcp add` has to leave the new server FOLLOWING mcp_codemode_default,
+   not pin it.
+
+   Two things conspired to pin it off. The record `mcp add` / `mcp
+   install` / onboarding build is zero-initialised, so CodeMode came out
+   False; and MCPToJSON wrote the key unconditionally, so that False was
+   persisted. Every server added through a supported flow was therefore
+   stuck on classic exposure whatever the operator set the default to.
+   (Codex P1 on #609.)
+
+   Runs the real binary: the whole bug lived in what the command wrote to
+   disk, and an in-process assertion on a hand-built record would have
+   missed both halves. *)
+{$IFDEF UNIX}
+var
+  Home, Bin, Out_, Raw: string;
+
+  function AddServer(const PreWrittenConfig: string): string;
+  { Fresh home, optional config.json seeded first, `mcp add`, return the
+    config.json it left behind. }
+  var
+    Env: TStringList;
+  begin
+    RunOneShot('rm -rf "' + Home + '"; mkdir -p "' + Home + '"', '', Out_);
+    if PreWrittenConfig <> '' then
+      WriteFileText(JoinPath(Home, 'config.json'), PreWrittenConfig);
+    Env := TStringList.Create;
+    try
+      Env.Add('PASCLAW_HOME=' + Home);
+      AssertEqInt(RunOneShotWithEnv('"' + Bin + '" mcp add srv /usr/bin/true',
+                                    '', Env, Out_), 0,
+                  'mcp add succeeded: ' + Copy(Out_, 1, 300));
+    finally
+      Env.Free;
+    end;
+    Result := ReadFileText(JoinPath(Home, 'config.json'));
+  end;
+
+begin
+  Bin := ExpandFileName('build/pasclaw');
+  if not FileExists(Bin) then
+  begin
+    WriteLn('  skipping mcp-add test: build/pasclaw missing');
+    Exit;
+  end;
+  Home := JoinPath(GetTempDir, 'pasclaw-mcpadd-' + IntToStr(Random(MaxInt)));
+  try
+    { Default (true): no key at all, and it reads back as code mode. }
+    Raw := AddServer('');
+    AssertTrue(not AddedServerHasCodeModeKey(Raw),
+               'no codemode key -- the server follows the default: ' +
+               Copy(Raw, 1, 300));
+    AssertTrue(LoadedCodeMode(Raw),
+               'so it reads back as code mode, like the default says');
+
+    { Default flipped off: still no key, and now it reads back off. Same
+      file shape either way -- that is what "follows the default" means. }
+    Raw := AddServer('{"mcp_codemode_default":false}');
+    AssertTrue(not AddedServerHasCodeModeKey(Raw),
+               'still no codemode key under a false default: ' +
+               Copy(Raw, 1, 300));
+    AssertTrue(not LoadedCodeMode(Raw),
+               'and it follows the default DOWN, not pinned to either value');
+  finally
+    RunOneShot('rm -rf "' + Home + '"', '', Out_);
+  end;
+  WriteLn('  ok: `mcp add` leaves the server following mcp_codemode_default');
+end;
+{$ELSE}
+begin
+  WriteLn('  skip: mcp-add test needs a POSIX shell');
+end;
+{$ENDIF}
+
 procedure TestPrologue;
 var
   Body, Err, Out_: string;
@@ -292,5 +499,7 @@ begin
   TestRPCCatalog;
   TestConfig;
   TestPrologue;
+  TestScriptIsToldWhereToCallBack;
+  TestMcpAddFollowsTheDefault;
   WriteLn('PASS');
 end.
