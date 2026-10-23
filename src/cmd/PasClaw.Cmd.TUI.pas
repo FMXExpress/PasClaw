@@ -36,6 +36,9 @@ uses
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.MemoryFetch,
   PasClaw.MCP.Disclosure,    { RegisterMCPDisclosureTools on the --no-mcp path }
+  PasClaw.Tools.Worktree,
+  PasClaw.Cmd.Attach,        { --attach: the terminal as a gateway client }
+  PasClaw.Client.Api,        { TChatTurnOptions -- what an attached turn asks for }
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
   PasClaw.Shell.Backend,           { StartShellSession / SetCurrentSessionId
@@ -63,6 +66,7 @@ type
     NoHashline:      Boolean;
     BackendOverride: string;
     Profile:         string;   { --profile <name>; PR #291 }
+    Attach:          Boolean;  { --attach: client of the running gateway (line mode) }
   end;
 
 function ParseArgs(const Argv: array of string; var A: TTUIArgs): Boolean;
@@ -85,6 +89,7 @@ begin
     if Argv[i] = '--no-mcp'       then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin A.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--attach'       then begin A.Attach     := True; Inc(i); Continue; end;
     if Argv[i] = '--profile'      then begin if i = High(Argv) then Exit(False); A.Profile  := Argv[i + 1]; Inc(i, 2); Continue; end;
     Inc(i);
   end;
@@ -108,9 +113,51 @@ var
   KindSelected: TShellBackendKind;
   BackendDesc: string;
   ShellSessionId: string;
+  AttachURL, AttachReason, AttachWarn, Unsupported: string;
+  AttachFail: Boolean;
+  Turn: TChatTurnOptions;
 begin
   if not ParseArgs(Argv, A) then Exit(1);
   Cfg := LoadConfig(A.Profile);
+  { Attach mode: the running gateway owns the session and this terminal
+    is its client. v1 is the line client (PasClaw.Cmd.Attach) on both
+    builds -- the full-screen panes against a remote session list are a
+    later step -- so nothing below (backend, registry, provider) runs. }
+  if ResolveAttach(Cfg, A.Attach, AttachURL, AttachReason, AttachWarn, AttachFail) then
+  begin
+    if AttachWarn <> '' then PrintLn(Ansi.Yellow + '! ' + Ansi.Reset + AttachWarn);
+    try
+      { The two TUI flags a gateway turn can carry are forwarded; the rest
+        are refused by name rather than dropped (see AttachTurnOptions in
+        Cmd.Agent). --theme is cosmetic and the attached TUI is a line
+        REPL, so it is simply unused. (Codex P1 on #613.) }
+      Turn := Default(TChatTurnOptions);
+      Turn.Model   := A.Model;
+      Turn.NoTools := A.NoTools;
+      Unsupported := '';
+      if A.Provider <> '' then Unsupported := Unsupported + '--provider, ';
+      if A.NoMCP then Unsupported := Unsupported + '--no-mcp, ';
+      if A.NoHashline then Unsupported := Unsupported + '--no-hashline, ';
+      if A.BackendOverride <> '' then Unsupported := Unsupported + '--backend, ';
+      if A.Profile <> '' then Unsupported := Unsupported + '--profile, ';
+      if Unsupported <> '' then
+      begin
+        SetLength(Unsupported, Length(Unsupported) - 2);
+        PrintErr(AttachUnsupportedRefusal(Unsupported));
+        Exit(2);
+      end;
+      Result := RunAttached(Cfg, AttachURL, A.Session, '', False, Turn);
+    finally
+      Cfg.Free;
+    end;
+    Exit;
+  end
+  else if AttachFail then
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + AttachReason);
+    Cfg.Free;
+    Exit(1);
+  end;
   ConfigureSandbox(Cfg.Sandbox, '');
   { Docker backend: the TUI runs ONE container for its whole process,
     not one per chat session. The container is a workspace sandbox --
@@ -160,6 +207,14 @@ begin
       if not NewProviderFromConfig(Cfg, Name, Provider, Err) then
         LogWarn('tui: provider unavailable (%s)', [Err]);
 
+    { Loaded whatever --no-tools says: the manifests feed two things, and
+      only one of them needs a registry. /name in the chat input expands a
+      prompt skill into the turn's message -- no tool involved -- so with
+      the load inside the block below, `tui --no-tools` reported every
+      prompt skill as an unknown command. The agent REPL already loads its
+      slash skills on their own. (Codex P2 on #614.) }
+    Skills := LoadSkillManifests(GetHome);
+
     Reg := nil;
     if not A.NoTools then
     begin
@@ -179,6 +234,7 @@ begin
       { memory_fetch shares the WebFetch gate -- same HTTP path,
         same SSRF semantics, no point exposing one without the other. }
       if Cfg.WebFetchEnabled then RegisterMemoryFetchTool(Reg);
+      if Cfg.Worktree.Enabled then RegisterWorktreeTools(Reg);
       { tool_output_get is only useful when the truncation feature is
         on -- otherwise the model sees a tool it'd only call against
         non-existent handles. Pair the registration with the cap. }
@@ -193,7 +249,6 @@ begin
         notification tool is silently missing on the surface the
         operator actually uses. }
       RegisterSendMessageTool(Reg);
-      Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }
       RegisterSkillManageTool(Reg, Cfg);
@@ -217,7 +272,7 @@ begin
     Spawn   := nil;
     BgCoord := nil;
     SubSpecs := ResolveSubagentSpecs(Cfg);   { configured + built-in general-purpose; empty when disabled }
-    if (Reg <> nil) and (Provider <> nil) and (Length(SubSpecs) > 0) then
+    if (Reg <> nil) and (Provider <> nil) then
     begin
       SubCtx.Provider       := Provider;
       SubCtx.Fallbacks      := ResolveFallbacks(Cfg, SubCtx.FallbackModels);
@@ -225,11 +280,17 @@ begin
       SubCtx.DefaultModel   := Model;
       SubCtx.PromptCache    := Cfg.PromptCache;
       SubCtx.Cfg            := Cfg;
-      Spawn   := RegisterSpawnTool(Reg, SubCtx, SubSpecs);
+      { `spawn` needs a subagent to spawn; the background coordinator
+        also carries shell_background and the handle verbs, which are
+        shell tools and must not disappear with subagents. (Codex P2 on
+        #619.) }
+      if Length(SubSpecs) > 0 then
+        Spawn := RegisterSpawnTool(Reg, SubCtx, SubSpecs);
       BgCoord := RegisterBackgroundSpawnTools(Reg, SubCtx, SubSpecs);
     end;
 
     TUIInst := TTUI.Create(Provider, Reg, Model);
+    TUIInst.Skills := Skills;   { prompt skills as /name in the chat input }
     TUIInst.ProviderName       := A.Provider;   { '' = default provider }
     TUIInst.PromptCacheEnabled := Cfg.PromptCache.Enabled;
     TUIInst.PromptCacheTTL     := Cfg.PromptCache.TTL;
@@ -244,9 +305,20 @@ begin
     if Cfg.MemoryDistillEnabled then
       EnableBestFactEmbedder(GetHome);
     TUIInst.BgCoordinator      := BgCoord;
+    { Completions of spawn_background / shell_background jobs flash in the
+      footer. Installed and cleared through SetBackgroundDoneHook, which
+      takes the same lock the dispatch does -- so the clear below WAITS
+      for a job thread already inside BackgroundDone, and no new call can
+      start, before the object it is a method of is freed. Assigning the
+      hook variable directly left a window between the dispatcher's
+      Assigned test and its call where exactly that happened, on any
+      ordinary TUI shutdown with a job still finishing. (Codex P2 on
+      #610.) }
+    SetBackgroundDoneHook(TUIInst.BackgroundDone);
     try
       TUIInst.Run;
     finally
+      SetBackgroundDoneHook(nil);
       TUIInst.Free;
       FreeMCPClients(MCPClients);
       { Spawn owned here (same shape as Cmd.Agent); BgCoord is NOT

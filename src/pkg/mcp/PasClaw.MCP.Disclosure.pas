@@ -119,6 +119,15 @@ type
     function Search(const ArgsJSON: string; out ErrMsg: string): string;
   end;
 
+{ Register `code_catalog` on Reg: the model's way to read the code-mode
+  servers' tools (name, server, description, argument schema) without
+  writing a script. Idempotent per registry. }
+procedure RegisterCodeCatalogTool(Reg: TToolRegistry);
+
+{ The "## Deferred Tools" section's code-mode paragraph, on its own, for
+  callers that build their own prompt. '' when Reg has no code-mode tools. }
+function BuildCodeModeSection(Reg: TToolRegistry): string;
+
 { Register tool_search into Reg, bound to a fresh TMCPDisclosure. No-op (returns
   nil) when Cfg.MCPProgressiveDisclosure is False. When Primary (the main agent
   / serve / gateway registry) the disclosure is tracked for process lifetime and
@@ -457,6 +466,19 @@ begin
   if Length(Selected) = 0 then
   begin
     Result := 'No deferred tools matched "' + Query + '".';
+    { A select: for a code-mode tool is the one mistake worth correcting
+      in the answer: the tool exists, it is just not callable this way. }
+    if IsSelect then
+    begin
+      Tokens := SplitWords(Copy(Query, 8, MaxInt));
+      for i := 0 to High(Tokens) do
+        if FReg.Find(Tokens[i], T) and T.CodeMode then
+          Result := Result + ' "' + T.Name + '" is a code-mode tool: it is ' +
+                    'not loaded as a callable tool. Call it from an ' +
+                    'execute_code script -- tool ' + T.Name +
+                    ' ''<json-args>'' -- or run code_catalog(server="' +
+                    Copy(T.Name, 1, Pos('__', T.Name) - 1) + '") for its schema.';
+    end;
     Exit;
   end;
 
@@ -537,20 +559,87 @@ begin
             [Result]);
 end;
 
+function CountWithPrefix(const Names: TStringArray; const Prefix: string): Integer;
+var
+  i: Integer;
+begin
+  Result := 0;
+  for i := 0 to High(Names) do
+    if Copy(Names[i], 1, Length(Prefix)) = Prefix then Inc(Result);
+end;
+
+function BuildCodeModeSection(Reg: TToolRegistry): string;
+var
+  Names: TStringArray;
+  Servers: TStringList;
+  i, P: Integer;
+  Srv: string;
+  Sb: TStringBuilder;
+begin
+  Result := '';
+  if Reg = nil then Exit;
+  Names := Reg.CodeModeNames;
+  if Length(Names) = 0 then Exit;
+  Servers := TStringList.Create;
+  Sb := TStringBuilder.Create;
+  try
+    Servers.Sorted := True;
+    Servers.Duplicates := dupIgnore;
+    for i := 0 to High(Names) do
+    begin
+      P := Pos('__', Names[i]);
+      if P > 0 then Servers.Add(Copy(Names[i], 1, P - 1));
+    end;
+    Sb.AppendLine('### Code-mode MCP servers');
+    Sb.AppendLine;
+    Sb.Append('These MCP servers'' tools are NOT loaded as callable tools and ');
+    Sb.Append('tool_search will not load them. Call them from an `execute_code` ');
+    Sb.Append('script, where `tool` is a shell function: ');
+    Sb.AppendLine('`tool <server>__<name> ''<json-args>''` prints the result; ');
+    Sb.Append('`tool --catalog <server>` prints that server''s tools with their ');
+    Sb.AppendLine('argument schemas (or call the `code_catalog` tool first). ');
+    Sb.Append('Chain calls and filter inside the script -- with jq, grep, a ');
+    Sb.Append('loop -- and print only what you need; the intermediate results ');
+    Sb.AppendLine('never have to enter this conversation.');
+    Sb.AppendLine;
+    for i := 0 to Servers.Count - 1 do
+    begin
+      Srv := Servers[i];
+      Sb.Append('- `');
+      Sb.Append(Srv);
+      Sb.Append('` (');
+      Sb.Append(CountWithPrefix(Names, Srv + '__'));
+      Sb.AppendLine(' tools) -- `tool --catalog ' + Srv + '`');
+    end;
+    Result := Sb.ToString;
+  finally
+    Sb.Free;
+    Servers.Free;
+  end;
+end;
+
 function BuildDeferredToolsSection(Reg: TToolRegistry): string;
 var
   Names: TStringArray;
   Sb: TStringBuilder;
   i: Integer;
+  CodeSec: string;
 begin
   Result := '';
   if Reg = nil then Exit;
   Names := Reg.DeferredNames;
-  if Length(Names) = 0 then Exit;
+  CodeSec := BuildCodeModeSection(Reg);
+  if (Length(Names) = 0) and (CodeSec = '') then Exit;
   Sb := TStringBuilder.Create;
   try
     Sb.AppendLine('## Deferred Tools');
     Sb.AppendLine;
+    if Length(Names) = 0 then
+    begin
+      Sb.Append(CodeSec);
+      Result := Sb.ToString;
+      Exit;
+    end;
     Sb.Append('You have ');
     Sb.Append(Length(Names));
     Sb.AppendLine(' MCP tool(s) available but not loaded into your callable ' +
@@ -567,10 +656,92 @@ begin
       Sb.Append('- ');
       Sb.AppendLine(Names[i]);
     end;
+    if CodeSec <> '' then
+    begin
+      Sb.AppendLine;
+      Sb.Append(CodeSec);
+    end;
     Result := Sb.ToString;
   finally
     Sb.Free;
   end;
+end;
+
+{ ---- code_catalog ---- }
+
+type
+  TCodeCatalog = class
+  private
+    FReg: TToolRegistry;
+  public
+    constructor Create(AReg: TToolRegistry);
+    function Handle(const ArgsJSON: string; out ErrMsg: string): string;
+  end;
+
+var
+  GCatalogs: TList = nil;   { process-lifetime, like GDisclosures }
+
+constructor TCodeCatalog.Create(AReg: TToolRegistry);
+begin
+  inherited Create;
+  FReg := AReg;
+end;
+
+function TCodeCatalog.Handle(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  Obj: TJsonObject;
+  Server: string;
+begin
+  ErrMsg := '';
+  Server := '';
+  try
+    Obj := TJsonObject.Parse(ArgsJSON);
+  except
+    Obj := nil;
+  end;
+  if Obj <> nil then
+  try
+    Server := Trim(Obj.GetStr('server', ''));
+  finally
+    Obj.Free;
+  end;
+  Result := FReg.CodeModeCatalog(Server);
+  if Result = '[]' then
+  begin
+    if Server = '' then
+      Result := '[] (no code-mode MCP tools are loaded -- the servers may still be connecting)'
+    else
+      Result := '[] (no code-mode tools for server "' + Server + '"; ' +
+                'code_catalog with no server lists every one)';
+  end
+  else
+    Result := 'Call each from an execute_code script as: tool <name> ''<json matching schema>''' +
+              sLineBreak + Result;
+end;
+
+procedure RegisterCodeCatalogTool(Reg: TToolRegistry);
+var
+  T: TTool;
+  Cat: TCodeCatalog;
+begin
+  if Reg = nil then Exit;
+  if Reg.Find('code_catalog', T) then Exit;
+  Cat := TCodeCatalog.Create(Reg);
+  if GCatalogs = nil then GCatalogs := TList.Create;
+  GCatalogs.Add(Cat);
+  FillChar(T, SizeOf(T), 0);
+  T.Name        := 'code_catalog';
+  T.Description := 'List the code-mode MCP servers'' tools: name, server, description ' +
+                   'and argument schema. These tools are called from execute_code ' +
+                   'scripts as `tool <name> ''<json>''`, never directly. Pass `server` ' +
+                   'to narrow to one server.';
+  T.Schema      := '{"type":"object","properties":{"server":{"type":"string",' +
+                   '"description":"Server name (the part before __). Omit for all."}}}';
+  T.Handler     := nil;
+  T.HandlerObj  := Cat.Handle;
+  T.IsCore      := False;
+  T.Category    := tcReadOnly;
+  Reg.Register(T);
 end;
 
 function BuildDeferredToolsSection: string;
@@ -654,10 +825,21 @@ begin
     LogInfo('mcp: progressive-disclosure tool registered (tool_search)');
 end;
 
+procedure FreeCatalogs;
+var
+  i: Integer;
+begin
+  if GCatalogs = nil then Exit;
+  for i := 0 to GCatalogs.Count - 1 do TCodeCatalog(GCatalogs[i]).Free;
+  GCatalogs.Free;
+  GCatalogs := nil;
+end;
+
 procedure FreeDisclosures;
 var
   i: Integer;
 begin
+  FreeCatalogs;
   if GDisclosures = nil then Exit;
   for i := 0 to GDisclosures.Count - 1 do
     TMCPDisclosure(GDisclosures[i]).Free;

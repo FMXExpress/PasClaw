@@ -6,6 +6,8 @@
 
 Format: `yyyymmddTHHMMSS-<8 hex>` (e.g. `20260601T093015-1a2b3c4d`). Sortable, collision-safe.
 
+One store, several writers: the CLI, the TUI, the gateway's web UI and the desktop all read and write these files, and only the gateway serialises turns per session (its turn lock is in-process). When a gateway is running, `pasclaw agent --attach` / `pasclaw tui --attach` make the terminal a client of it instead of a second writer; see [Commands → `--attach`](./commands.md#--attach-the-terminal-as-a-gateway-client).
+
 ## Commands
 
 ```sh
@@ -49,6 +51,7 @@ pasclaw agent --session daily-2026-06-01 -m "what's on for today?"
     "title":                    "summarise this repo",
     "model":                    "claude-opus-4-7",
     "provider":                 "anthropic",
+    "location":                 "/home/me/proj",
     "system_prompt_override":   null,
     "working_state": {
       "recent_edits":       ["src/main.pas", "docs/getting-started.md"],
@@ -75,6 +78,8 @@ pasclaw agent --session daily-2026-06-01 -m "what's on for today?"
 ```
 
 `meta.stats` is populated only when `stats_collection_enabled: true`.
+
+`meta.location` is the directory the session worked in: the sandbox workspace at its first save (a project checkout, a git worktree). `session list` shows it after the title, `session show` prints it, and `pasclaw resume` makes it the workspace again when it still exists, so a session resumed from another directory keeps editing the tree it started in.
 
 Atomicity: writes go through `.tmp` then `rename`, so killing the process mid-write can never leave a half-written JSON file.
 

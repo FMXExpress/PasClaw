@@ -4,6 +4,11 @@ Notable feature additions, newest first. Bug fixes and review follow-ups are in 
 
 This file mirrors the changelog section at the top of the root `README.md`. When a PR ships a feature worth surfacing here, append a one-line entry with the date and a PR link.
 
+## 2026-10
+
+- **2026-10-17** — Memory tiers, a nightly maintenance pass, backup/restore, and a cheap tier for background work. The always-loaded memory files (`SOUL.md`, `USER.md`, `MEMORY.md`, two daily notes) are each capped by `memory_core_budget_bytes` with an elided note, and the prompt carries the six-months test. `pasclaw maintain` sweeps expired facts (`IFactStore.Sweep`), sizes the core files, summarises the day's sessions, audits skills for unused and duplicate ones, optionally asks the model for a critique and backs up; schedule it with the reserved cron skill `@maintain`. `pasclaw backup` / `restore` write archives with `config.json` and a `RESTORE.md` inside, rotated 7 / 4 / 6 (`--redact` for a masked config). `background_model` carries distillation, compaction, heartbeat, judge and review on the default provider; `pasclaw route report` shows the split. ([#606])
+- **2026-10-17** — PasClaw Browser (`browser-desktop/`): a WebView2 desktop browser where every tab has a PasClaw chat beside it that can read the page and change it. One in-process `TPasClawAgent` for the app (the component is one-per-process), six page tools (`browser_page` / `browser_find` / `browser_navigate` / `browser_click` / `browser_fill` / `browser_eval`) registered once against a tested `TSwitchingBridge`, a single worker thread running tabs' turns in order, a page-context hook that stamps every message with the tab's URL, title and selection, and a confirm-before-mutate gate. Each tab is its own session, persisted under `workspace/browser/`. Everything below the FMX form compiles under FPC and runs in `make test`. ([#604])
+
 ## 2026-09
 
 - **2026-09-08** — Memory gains a dependency-free embedding tier and a `memory_write` tool. `PasClaw.Memory.Embed.Static` (`hash-ngram-v2@256`) is feature hashing over word unigrams and character 4-grams — no model file, no vocabulary, no native runtime — so a host that has never run `pasclaw memory provision` still gets a vector column instead of keyword-only retrieval. It is **lexical, not semantic** (`car` and `automobile` score near zero) and registers with semantic dedup disabled: it ranks, it never merges. `memory_write` records one durable fact deliberately — `tcMutating`, so plan mode refuses it and MCP exposes it only under `--mcp-allow-write` — which lets an external MCP client contribute to the store it could already read. Underneath both, every stored vector now carries the id of the embedder that produced it, so two embedding spaces are never compared and a model switch triggers a backfill instead of silently wrong neighbours. ([#600])
@@ -240,3 +245,5 @@ This file mirrors the changelog section at the top of the root `README.md`. When
 [#317]: https://github.com/FMXExpress/PasClaw/pull/317
 [#318]: https://github.com/FMXExpress/PasClaw/pull/318
 [#600]: https://github.com/FMXExpress/PasClaw/pull/600
+[#604]: https://github.com/FMXExpress/PasClaw/pull/604
+[#606]: https://github.com/FMXExpress/PasClaw/pull/606

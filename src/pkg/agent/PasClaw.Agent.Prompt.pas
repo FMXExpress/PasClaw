@@ -210,6 +210,16 @@ function FindProjectAgentsMd(const StartDir: string): string;
   guidance. }
 function BuildProjectRulesSection: string;
 
+(* The `instructions` list beside AGENTS.md: files ("docs/style.md"),
+   globs ("rules/*.md") relative to BaseDir ('' = the sandbox workspace),
+   and http(s) URLs. Each body is capped like AGENTS.md. URLs go through
+   web_fetch's SSRF guard and are cached under <home>/cache/instructions
+   for 24 hours, so a prompt build never waits on the network twice a
+   day for the same page. Missing files and failed fetches are skipped
+   (logged), never fatal. '' when the list is empty or nothing loaded. *)
+function BuildInstructionsSection(const Sources: array of string;
+                                  const BaseDir: string): string;
+
 { Orient launch-preamble section. When Cfg.OrientTaskAware is on, returns an
   instruction telling the model to open a task with a brief plan BEFORE it
   starts calling tools, so the operator sees what it's about to do instead
@@ -239,6 +249,8 @@ uses
   PasClaw.Agent.Orient,   { task-aware MEMORY slicing (Cfg.OrientTaskAware) }
   PasClaw.Memory.Facts,   { distilled-fact injection (Cfg.MemoryDistillEnabled) }
   PasClaw.Tools.Sandbox,  { CurrentWorkspace -- the working dir the prompt advertises }
+  PasClaw.Tools.WebFetch, { FetchTextGuarded -- `instructions` URLs through the SSRF guard }
+  PasClaw.Crypto.HMAC,    { SHA256Bytes -- the instructions cache key }
   PasClaw.MCP.Disclosure; { deferred-tools section (Cfg.MCPProgressiveDisclosure) }
 
 const
@@ -520,6 +532,174 @@ begin
     if (Parent = '') or (Parent = Dir) then Exit;
     Dir := Parent;
   end;
+end;
+
+{ ---- instructions ---- }
+
+function CapBody(const Body, What: string): string;
+var
+  Original: Integer;
+begin
+  Result := Trim(Body);
+  Original := Length(Result);
+  if Original > ProjectRulesMaxBytes then
+    Result := Copy(Result, 1, ProjectRulesMaxBytes) + sLineBreak + sLineBreak +
+              Format('(... %d byte(s) elided -- %s exceeded the %d byte cap)',
+                     [Original - ProjectRulesMaxBytes, What, ProjectRulesMaxBytes]);
+end;
+
+function InstructionsCacheDir: string;
+begin
+  Result := JoinPath(JoinPath(GetHome, 'cache'), 'instructions');
+end;
+
+function URLCachePath(const URL: string): string;
+var
+  H: TBytes;
+  i: Integer;
+  Hex: string;
+begin
+  H := SHA256Bytes(TEncoding.UTF8.GetBytes(URL));
+  Hex := '';
+  for i := 0 to High(H) do Hex := Hex + LowerCase(IntToHex(H[i], 2));
+  Result := JoinPath(InstructionsCacheDir, Hex + '.md');
+end;
+
+{ Cached body when fresh (< 24 h), else fetch and refresh the cache. A
+  fetch failure falls back to a stale cache when there is one. }
+function LoadInstructionURL(const URL: string; out Body: string): Boolean;
+var
+  Path, Err: string;
+  Age: TDateTime;
+begin
+  Body := '';
+  Path := URLCachePath(URL);
+  if FileExists(Path) and FileAge(Path, Age) and ((Now - Age) * 24.0 < 24.0) then
+  begin
+    Body := ReadFileText(Path);
+    Exit(True);
+  end;
+  if FetchTextGuarded(URL, ProjectRulesMaxBytes * 2, Body, Err) then
+  begin
+    try
+      ForceDirectories(InstructionsCacheDir);
+      WriteFileText(Path, Body);
+    except
+      on E: Exception do LogWarn('instructions: cannot cache %s: %s', [URL, E.Message]);
+    end;
+    Exit(True);
+  end;
+  LogWarn('instructions: %s: %s', [URL, Err]);
+  if FileExists(Path) then
+  begin
+    Body := ReadFileText(Path);   { stale beats nothing }
+    Exit(True);
+  end;
+  Result := False;
+end;
+
+function IsAbsolutePathStr(const P: string): Boolean;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := ((Length(P) >= 2) and (P[2] = ':')) or
+            ((Length(P) >= 1) and ((P[1] = '\') or (P[1] = '/')));
+  {$ELSE}
+  Result := (Length(P) >= 1) and (P[1] = '/');
+  {$ENDIF}
+end;
+
+{ One source expanded to the files it names: a glob (* or ? in the last
+  path element) lists matches sorted; a plain path is itself. }
+procedure ExpandInstructionGlob(const Base, Source: string; Files: TStringList);
+var
+  Dir, Mask, Full: string;
+  Sr: TSearchRec;
+  Hits: TStringList;
+  i: Integer;
+begin
+  if (Pos('*', Source) = 0) and (Pos('?', Source) = 0) then
+  begin
+    if IsAbsolutePathStr(Source) then Files.Add(Source)
+    else Files.Add(JoinPath(Base, Source));
+    Exit;
+  end;
+  Dir := ExtractFileDir(Source);
+  Mask := ExtractFileName(Source);
+  if IsAbsolutePathStr(Source) then Full := Dir
+  else if Dir = '' then Full := Base
+  else Full := JoinPath(Base, Dir);
+  Hits := TStringList.Create;
+  try
+    if FindFirst(JoinPath(Full, Mask), faAnyFile and not faDirectory, Sr) = 0 then
+    try
+      repeat
+        if (Sr.Attr and faDirectory) = 0 then Hits.Add(JoinPath(Full, Sr.Name));
+      until FindNext(Sr) <> 0;
+    finally
+      FindClose(Sr);
+    end;
+    Hits.Sort;
+    for i := 0 to Hits.Count - 1 do Files.Add(Hits[i]);
+  finally
+    Hits.Free;
+  end;
+end;
+
+function BuildInstructionsSection(const Sources: array of string;
+                                  const BaseDir: string): string;
+var
+  Base, Src, Body, Acc: string;
+  Files: TStringList;
+  i, j: Integer;
+begin
+  Result := '';
+  if Length(Sources) = 0 then Exit;
+  Base := BaseDir;
+  if Trim(Base) = '' then Base := CurrentWorkspace;
+  if Trim(Base) = '' then Base := GetCurrentDir;
+  Acc := '';
+  for i := 0 to High(Sources) do
+  begin
+    Src := Trim(Sources[i]);
+    if Src = '' then Continue;
+    if (Pos('http://', LowerCase(Src)) = 1) or (Pos('https://', LowerCase(Src)) = 1) then
+    begin
+      if LoadInstructionURL(Src, Body) and (Trim(Body) <> '') then
+        Acc := Acc + '### ' + Src + sLineBreak + sLineBreak + CapBody(Body, Src) + sLineBreak + sLineBreak;
+      Continue;
+    end;
+    Files := TStringList.Create;
+    try
+      ExpandInstructionGlob(Base, Src, Files);
+      for j := 0 to Files.Count - 1 do
+      begin
+        if not FileExists(Files[j]) then
+        begin
+          LogDebug('instructions: %s not found (from %s)', [Files[j], Src]);
+          Continue;
+        end;
+        try
+          Body := ReadFileText(Files[j]);
+        except
+          on E: Exception do
+          begin
+            LogWarn('instructions: cannot read %s: %s', [Files[j], E.Message]);
+            Continue;
+          end;
+        end;
+        if Trim(Body) = '' then Continue;
+        Acc := Acc + '### ' + Files[j] + sLineBreak + sLineBreak + CapBody(Body, Files[j]) + sLineBreak + sLineBreak;
+      end;
+    finally
+      Files.Free;
+    end;
+  end;
+  if Acc = '' then Exit;
+  Result :=
+    '## Instructions' + sLineBreak + sLineBreak +
+    'Operator-listed instruction files (config `instructions`). They carry the same ' +
+    'authority as AGENTS.md above and apply to this project.' + sLineBreak + sLineBreak +
+    TrimRight(Acc);
 end;
 
 function BuildProjectRulesSection: string;
@@ -823,7 +1003,11 @@ begin
     'context. Example: "how many `procedure` definitions are in src/?" ' +
     'is one `grep -c ''^procedure'' src/**/*.pas` + a sum, not a tour ' +
     'of every .pas file. The script''s stdout becomes your evidence; ' +
-    'the raw file bodies do not need to enter the conversation.' + sLineBreak +
+    'the raw file bodies do not need to enter the conversation. The same ' +
+    'goes for tool calls: inside an `execute_code` script, `tool <name> ' +
+    '''<json>''` calls any of your tools, so a list-then-filter-then-fetch ' +
+    'sequence is one script, not three rounds -- and code-mode MCP servers ' +
+    'are reachable ONLY that way.' + sLineBreak +
     sLineBreak +
     '7. **Batch independent investigation** -- the tool loop runs ' +
     '`read_file`, `list_dir`, `grep_files` and `find_files` calls IN ' +
@@ -1230,6 +1414,10 @@ begin
     ToolsEnabled): even a chat-only session benefits from "in this
     project, prefer X". }
   Result := AppendSection(Result, BuildProjectRulesSection);
+  { Operator-listed instruction files, globs and URLs (config
+    `instructions`), right after AGENTS.md so they read as one body of
+    project rules. }
+  Result := AppendSection(Result, BuildInstructionsSection(Cfg.Instructions, ''));
   { Active plan auto-pickup. Emitted between project rules and skills
     so the plan can reference both above it (memory + AGENTS.md) and
     below (skills, deferred MCP tools, behaviour rules). pmPlan mode

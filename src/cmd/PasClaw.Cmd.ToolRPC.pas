@@ -53,47 +53,69 @@ end;
 
 function Cmd_ToolRPC_Run(const Argv: array of string): Integer;
 var
-  ToolName, ArgsJSON, Token, Err, Response, ResultText, RespErr: string;
+  ToolName, ArgsJSON, Token, Host, Err, Response, ResultText, RespErr, CatalogServer: string;
+  Catalog: Boolean;
   Port: Integer;
   Client: TIdTCPClient;
   Req, Resp, ArgsObj: TJsonObject;
 begin
   if Length(Argv) < 1 then
-    Exit(PrintErr_('Usage: pasclaw __tool <name> [args-json]'));
+    Exit(PrintErr_('Usage: pasclaw __tool <name> [args-json] | pasclaw __tool --catalog [server]'));
 
   ToolName := Argv[0];
-  if Length(Argv) >= 2 then
-    ArgsJSON := Argv[1]
-  else
+  Catalog := (ToolName = '--catalog');
+  if Catalog then
+  begin
+    if Length(Argv) >= 2 then CatalogServer := Argv[1] else CatalogServer := '';
     ArgsJSON := '{}';
-  if Trim(ArgsJSON) = '' then ArgsJSON := '{}';
+  end
+  else
+  begin
+    if Length(Argv) >= 2 then
+      ArgsJSON := Argv[1]
+    else
+      ArgsJSON := '{}';
+    if Trim(ArgsJSON) = '' then ArgsJSON := '{}';
+  end;
 
-  if not DiscoverRunningRPC(Port, Token, Err) then
+  if not DiscoverRunningRPC(Port, Token, Host, Err) then
     Exit(PrintErr_('__tool: ' + Err));
 
   Req := TJsonObject.Create;
   try
     Req.PutStr('token', Token);
-    Req.PutStr('name',  ToolName);
-    try
-      ArgsObj := TJsonObject.Parse(ArgsJSON);
-    except
-      ArgsObj := nil;
+    if Catalog then
+      Req.PutStr('catalog', CatalogServer)
+    else
+    begin
+      Req.PutStr('name',  ToolName);
+      try
+        ArgsObj := TJsonObject.Parse(ArgsJSON);
+      except
+        ArgsObj := nil;
+      end;
+      if ArgsObj = nil then
+        Exit(PrintErr_('__tool: args is not valid JSON: ' + Copy(ArgsJSON, 1, 200)));
+      Req.PutObject('args', ArgsObj);
     end;
-    if ArgsObj = nil then
-      Exit(PrintErr_('__tool: args is not valid JSON: ' + Copy(ArgsJSON, 1, 200)));
-    Req.PutObject('args', ArgsObj);
 
     Client := TIdTCPClient.Create(nil);
     try
-      Client.Host := '127.0.0.1';
+      { Host comes from the discovery file, NOT a hardcoded loopback:
+        under the Docker shell backend this command runs inside the
+        container, where 127.0.0.1 is the container itself and the
+        parent's RPC server is across a network namespace. The parent
+        advertises a host it can be reached at (host.docker.internal);
+        the field is absent, and this stays 127.0.0.1, for every
+        host-namespace backend. }
+      Client.Host := Host;
       Client.Port := Port;
       Client.ConnectTimeout := 5000;
       try
         Client.Connect;
       except
         on E: Exception do
-          Exit(PrintErr_('__tool: connect to 127.0.0.1:' + IntToStr(Port) +
+          Exit(PrintErr_('__tool: connect to ' + Host + ':' + IntToStr(Port) +
                          ' failed: ' + E.Message));
       end;
       try

@@ -27,6 +27,7 @@ uses
   PasClaw.Workspaces,
   SysUtils, Classes,
   PasClaw.Config, PasClaw.Utils, PasClaw.CliUI, PasClaw.Logger,
+  PasClaw.Permissions,        { TAskAnswer -- the REPL's permissions asker }
   PasClaw.Memory.AutoDistill,
   PasClaw.Memory.Facts.Embed,
   PasClaw.Providers.Types,
@@ -41,6 +42,9 @@ uses
   PasClaw.Tools.DelphiBuild,
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.PlanWrite,
+  PasClaw.Tools.Worktree,
+  PasClaw.Cmd.Attach,         { --attach: the terminal as a gateway client }
+  PasClaw.Client.Api,         { TChatTurnOptions -- what an attached turn asks for }
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.DB,
   PasClaw.Tools.Cron,
@@ -58,6 +62,7 @@ uses
   PasClaw.MCP.Bridge,
   PasClaw.MCP.Disclosure,   { tool_search must exist even with --no-mcp }
   PasClaw.Skills.Loader,
+  PasClaw.Skills.Slash,       { /name -> prompt skill expansion in the REPL }
   PasClaw.Skills.Manage,
   PasClaw.Skills.Disclosure,
   PasClaw.Agent.SkillDistiller,
@@ -129,6 +134,11 @@ type
     NoTools:       Boolean;
     NoMCP:         Boolean;
     NoHashline:    Boolean;
+    { --attach -- be a client of the running gateway instead of running a
+      loop here (PasClaw.Cmd.Attach). cli.attach in config can make this
+      the default; the flag forces it for one run and fails when no
+      gateway is up. }
+    Attach:        Boolean;
     { --no-plan -- opt out of the workspace/PLAN.md auto-pickup
       added in PR-cycle "pasclaw plan / pasclaw build" Phase 2.
       Default False; when True, BuildActivePlanSection emits empty
@@ -210,9 +220,15 @@ type
                              Compaction flushes working state into it before
                              dropping history; nil (one-shot runs) disables
                              the flush, not the compaction. }
+    Interactive: Boolean; { True only in the line REPL, where a human is at
+                            the keyboard. One-shot / piped runs leave it
+                            False and an "ask" rule then refuses. }
     procedure OnToolCall(const Name, ArgsJSON: string);
     procedure OnToolResult(const Name, ResultText, Err: string);
     procedure OnBeforeCompact(const Messages: array of TMessage);
+    { Permissions asker for the line REPL: prints the request and reads
+      one line -- y/once, s/session, anything else denies. }
+    function AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
     procedure OnBeforePrune(const Messages: array of TMessage);
   end;
 
@@ -266,6 +282,37 @@ begin
     LogInfo('session: archived %s before its first prune', [MetaRef^.Id]);
 end;
 
+function TLoopHandlers.AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+var
+  Line, Res: string;
+begin
+  Result := aaDeny;
+  if not Interactive then Exit;
+  Res := Resource;
+  if Length(Res) > 160 then Res := Copy(Res, 1, 157) + '...';
+  if Res <> '' then Res := '  ' + Ansi.Dim + Res + Ansi.Reset;
+  (* One prompt at a time. The loop dispatches tool calls in parallel, so
+     two ask-gated calls in one batch arrive here on two threads, both
+     printing to the same terminal and both calling ReadLn on the same
+     stdin: the prompts interleave and whichever thread the OS hands the
+     line to consumes it, which need not be the one whose prompt the
+     operator was answering. (Codex P1 on #611.) *)
+  BeginInteractiveAsk;
+  try
+    PrintLn('');
+    PrintLn(Ansi.Bold + 'permission: ' + Ansi.Reset + ToolName + Res);
+    PrintLn(Ansi.Dim + '  (' + Reason + ')' + Ansi.Reset);
+    Print('  allow [y]once / [s]ession / [n]o > ');
+    if EOF then Exit;
+    ReadLn(Line);
+    Line := LowerCase(Trim(Line));
+    if (Line = 'y') or (Line = 'yes') or (Line = 'once') then Result := aaAllowOnce
+    else if (Line = 's') or (Line = 'session') or (Line = 'always') then Result := aaAllowSession;
+  finally
+    EndInteractiveAsk;
+  end;
+end;
+
 procedure TLoopHandlers.OnToolCall(const Name, ArgsJSON: string);
 var
   Cap: Integer;
@@ -291,6 +338,11 @@ end;
 
 function DefaultAgentArgs: TAgentArgs;
 begin
+  { Whole-record zero first. This used to assign field by field and missed
+    Mode, Attach, Session, BackendOverride and Profile -- the enum and the
+    Boolean among them then held whatever the caller's stack did, so a run
+    could come up in a mode, or attached, that nobody asked for. }
+  Result := Default(TAgentArgs);
   Result.Message       := '';
   Result.Model         := '';
   Result.Provider      := '';
@@ -307,6 +359,52 @@ begin
   Result.Quiet         := False;
   Result.Verbose       := True;   { fuller tool-call previews by default }
   Result.OrientOverride := ooUnset;
+end;
+
+(* What an attached turn should ask the gateway for, from the flags this
+   run was given -- and, in Unsupported, the flags a gateway turn cannot
+   carry at all.
+
+   An attached turn used to send the message and nothing else. The gateway
+   treats a request with no mode as build mode, so `pasclaw agent --attach
+   --plan` ran with mutating tools exposed -- the opposite of what --plan
+   is for -- and --model, --system, --max-tokens and --no-tools were
+   dropped the same way. The five the chat endpoint takes per request are
+   forwarded; the rest are refused by name, because quietly running
+   `--attach --provider x` on the gateway's provider changes what the
+   command means. Display-only flags (--quiet, --verbose, --brief) stay
+   local and are fine. (Codex P1 on #613.) *)
+function AttachTurnOptions(const A: TAgentArgs; out Unsupported: string): TChatTurnOptions;
+var
+  D: TAgentArgs;
+
+  procedure Refuse(const Flag: string);
+  begin
+    if Unsupported <> '' then Unsupported := Unsupported + ', ';
+    Unsupported := Unsupported + Flag;
+  end;
+
+begin
+  D := DefaultAgentArgs;
+  Result := Default(TChatTurnOptions);
+  Unsupported := '';
+  if A.Mode <> pmBuild then Result.Mode := ModeName(A.Mode);
+  Result.Model  := A.Model;
+  Result.System := A.SystemPrompt;
+  if A.MaxTokens <> D.MaxTokens then Result.MaxTokens := A.MaxTokens;
+  Result.NoTools := A.NoTools;
+
+  if A.Provider <> '' then Refuse('--provider');
+  if A.Thinking <> '' then Refuse('--thinking');
+  if A.MaxIterations <> D.MaxIterations then Refuse('--max-iterations');
+  if A.NoMCP then Refuse('--no-mcp');
+  if A.NoHashline then Refuse('--no-hashline');
+  if A.NoPlan then Refuse('--no-plan');
+  if A.OrientOverride <> ooUnset then Refuse('--orient/--no-orient');
+  if (A.GoalObjective <> '') or (A.GoalMaxIters <> D.GoalMaxIters) then
+    Refuse('--goal-objective/--goal-max-iters');
+  if A.BackendOverride <> '' then Refuse('--backend');
+  if A.Profile <> '' then Refuse('--profile');
 end;
 
 function ParseArgs(const Argv: array of string; var A: TAgentArgs): Boolean;
@@ -332,6 +430,7 @@ begin
     if Argv[i] = '--no-tools'    then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--attach'      then begin A.Attach     := True; Inc(i); Continue; end;
     if Argv[i] = '--orient'      then begin A.OrientOverride := ooOn;  Inc(i); Continue; end;
     if Argv[i] = '--no-orient'   then begin A.OrientOverride := ooOff; Inc(i); Continue; end;
     if Argv[i] = '--no-plan'     then begin A.NoPlan     := True; Inc(i); Continue; end;
@@ -380,7 +479,8 @@ function NewBuiltinRegistry(UseHashline: Boolean = True;
                             EnableOutputCache: Boolean = False;
                             EnableCron: Boolean = False;
                             const DBConfigJSON: string = '';
-                            EnableDesktopTools: Boolean = False): TToolRegistry;
+                            EnableDesktopTools: Boolean = False;
+                            EnableWorktree: Boolean = True): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -461,6 +561,9 @@ begin
     PLAN.md it writes is picked up by the Active Plan section in every
     mode except pmPlan itself. }
   RegisterPlanWriteTool(Result);
+  { git worktrees: worktree_create / list / remove, and the `worktree`
+    argument on spawn / spawn_background. worktree.enabled (default on). }
+  if EnableWorktree then RegisterWorktreeTools(Result);
   (* send_message gates itself: it registers only when config.json
      declares named channels (a "channels" array of name/kind/target
      entries), so there's no flag to thread through here. The model
@@ -510,7 +613,11 @@ var
 begin
   Result := nil;
   Specs := ResolveSubagentSpecs(Cfg);
-  if (Reg = nil) or (Length(Specs) = 0) then Exit;
+  { NOT gated on Specs: with subagents disabled this still registers
+    shell_background and the handle verbs, which are shell tools.
+    RegisterBackgroundSpawnTools skips only spawn_background. (Codex P2
+    on #619.) }
+  if Reg = nil then Exit;
   Ctx.Provider       := Provider;
   Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
   Ctx.ParentRegistry := Reg;
@@ -566,6 +673,11 @@ begin
     Result.Model := Cfg.PlanModel;
   Result.MaxIterations := A.MaxIterations;
   Result.Parallel := True;
+  { Permissions "ask" rules: the REPL asks at the keyboard; one-shot and
+    piped runs (Handlers.Interactive = False) answer deny inside
+    AskPermission, so the rule never quietly becomes allow. }
+  if Handlers <> nil then
+    Result.OnAsk := Handlers.AskPermission;
   Result.Fallbacks     := ResolveFallbacks(Cfg, Result.FallbackModels);
   Result.Options       := DefaultChatOptions;
   { ToolsEnabled tracks the registry we are about to hand RunToolLoop
@@ -764,7 +876,8 @@ begin
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
                               Cfg.DatabaseJSON,
-                              Cfg.DesktopToolsEnabled);
+                              Cfg.DesktopToolsEnabled,
+                              Cfg.Worktree.Enabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -1046,7 +1159,8 @@ begin
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
                               Cfg.DatabaseJSON,
-                              Cfg.DesktopToolsEnabled);
+                              Cfg.DesktopToolsEnabled,
+                              Cfg.Worktree.Enabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -1290,6 +1404,13 @@ var
   PrimaryFallbacks:  TLLMProviderArray;
   RoutedProviderNm:  string;
   RoutedModelOverride: string;
+  { Prompt skills as slash commands (PasClaw.Skills.Slash). }
+  SlashSkills: TSkillSpecArray;
+  SkSpec: TSkillSpec;
+  SkArgs, SkModel, SkOut, SkErr: string;
+  SkChildCfg: TToolLoopConfig;
+  SkChildHist: TMessageArray;
+  SkChildLoop: TToolLoopResult;
   RoutedScoreVal:    Double;
   RoutedThisTurn:    Boolean;
   CompactOptsLocal: TCompactOptions;
@@ -1494,7 +1615,8 @@ begin
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
                               Cfg.DatabaseJSON,
-                              Cfg.DesktopToolsEnabled);
+                              Cfg.DesktopToolsEnabled,
+                              Cfg.Worktree.Enabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -1502,6 +1624,7 @@ begin
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
+  Handlers.Interactive := True;   { a human is at this keyboard: ask rules can ask }
   try
     SetLength(Msgs, 0);
     ThinkingOn := False;
@@ -1528,6 +1651,17 @@ begin
       SetLength(Msgs, Length(Session.Messages));
       for i := 0 to High(Session.Messages) do Msgs[i] := Session.Messages[i];
       SystemPromptOverride := Session.Meta.SystemPromptOverride;
+      { Go back to where the session worked (a project dir, a worktree)
+        when it still exists and differs from where we were launched.
+        The workspace is the directory relative paths and the shell cwd
+        resolve against, so without this a resume from $HOME would put
+        the session's edits in the wrong tree. }
+      if (Session.Meta.Location <> '') and DirectoryExists(Session.Meta.Location) and
+         (ExcludeTrailingPathDelimiter(ExpandFileName(Session.Meta.Location)) <> CurrentWorkspace) then
+      begin
+        ConfigureSandbox(Cfg.Sandbox, Session.Meta.Location);
+        PrintLn(Ansi.Dim + '(workspace: ' + Session.Meta.Location + ')' + Ansi.Reset);
+      end;
       PrintLn(Ansi.Dim + '(resumed session ' + Session.Meta.Id +
               ' -- ' + IntToStr(Length(Msgs)) + ' messages' +
               ProfileSuffix(Session.Meta.Profile) + ')' + Ansi.Reset);
@@ -1537,8 +1671,14 @@ begin
               ' -- pasclaw resume ' + Session.Meta.Id + ' to continue later' +
               ProfileSuffix(Session.Meta.Profile) + ')' + Ansi.Reset);
 
+    { Installed prompt skills answer to /name (after the built-ins
+      below). Loaded once; `skills_manage` installs mid-session show up
+      on the next start, like the tool registration they get. }
+    SlashSkills := LoadSkillManifests(GetHome);
+    SkModel := '';
     while True do
     begin
+      SkModel := '';
       Print(Ansi.Bold + '> ' + Ansi.Reset);
       if EOF then Break;
       ReadLn(Line);
@@ -1611,6 +1751,11 @@ begin
         PrintLn('  /goal [--max N] <objective>');
         PrintLn('               auto-continue turns until a judge model says MET / FAILED (budget N, default 5)');
         PrintLn('  /quit        exit (alias: /exit)');
+        if SlashSkillHelp(SlashSkills) <> '' then
+        begin
+          PrintLn('  prompt skills (installed SKILL.md files with kind: prompt):');
+          PrintLn(SlashSkillHelp(SlashSkills));
+        end;
         Continue;
       end;
       if (Line = '/mode') or (Copy(Line, 1, 6) = '/mode ') then
@@ -1738,6 +1883,51 @@ begin
       end;
       if Line = '' then Continue;
 
+      (* A slash that is not a built-in but names an installed prompt
+         skill: expand the template with the rest of the line. Where it
+         runs comes from the skill's frontmatter -- agent: through the
+         spawn tool, subagent: in a fresh child loop on this registry,
+         else as this turn's user message; model: overrides the model
+         for that run. The transcript records the command the operator
+         typed and the child's reply, so the main conversation knows
+         what was done without carrying the child's tool traffic. *)
+      if (Line[1] = '/') and ResolveSlashSkill(Line, SlashSkills, SkSpec, SkArgs) then
+      begin
+        SkModel := SkSpec.Model;
+        if (SkSpec.Agent <> '') and (not Offline) and (Reg <> nil) then
+        begin
+          PrintLn(Ansi.Dim + '(skill /' + SkSpec.Name + ' -> subagent ' + SkSpec.Agent + ')' + Ansi.Reset);
+          SkOut := Reg.RunTool('spawn', SlashSkillSpawnArgs(SkSpec, ExpandSlashSkill(SkSpec, SkArgs)), SkErr);
+          if SkErr <> '' then SkOut := '(spawn failed: ' + SkErr + ')';
+          PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' > ' + SkOut);
+          SetLength(Msgs, Length(Msgs) + 2);
+          Msgs[High(Msgs) - 1] := MakeMessage(mrUser, Line);
+          Msgs[High(Msgs)]     := MakeMessage(mrAssistant, SkOut);
+          PersistSession;
+          Continue;
+        end;
+        if SkSpec.Subagent and (not Offline) then
+        begin
+          PrintLn(Ansi.Dim + '(skill /' + SkSpec.Name + ' -> child session)' + Ansi.Reset);
+          SkChildCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, Line);
+          if SkModel <> '' then SkChildCfg.Model := SkModel;
+          SetLength(SkChildHist, 1);
+          SkChildHist[0] := MakeMessage(mrUser, ExpandSlashSkill(SkSpec, SkArgs));
+          if RunToolLoop(SkChildCfg, SkChildHist, SkChildLoop) then
+            SkOut := SkChildLoop.Content
+          else
+            SkOut := '(child session failed)';
+          PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' > ' + SkOut);
+          SetLength(Msgs, Length(Msgs) + 2);
+          Msgs[High(Msgs) - 1] := MakeMessage(mrUser, Line);
+          Msgs[High(Msgs)]     := MakeMessage(mrAssistant, SkOut);
+          PersistSession;
+          Continue;
+        end;
+        PrintLn(Ansi.Dim + '(skill /' + SkSpec.Name + ')' + Ansi.Reset);
+        Line := ExpandSlashSkill(SkSpec, SkArgs);
+      end;
+
       SetLength(Msgs, Length(Msgs) + 1);
       Msgs[High(Msgs)] := MakeMessage(mrUser, Line);
 
@@ -1750,6 +1940,11 @@ begin
       end;
 
       LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, Line);
+      if SkModel <> '' then
+      begin
+        LoopCfg.Model := SkModel;       { a slash skill's model: for this turn }
+        LoopCfg.ModelPinned := True;    { ...which the auto-router below keeps }
+      end;
       { After the first compaction the summary lives in
         LiveOptions.SystemPrompt inside RunToolLoop and gets returned
         via Loop.FinalSystemPrompt. We override here so the next turn
@@ -1946,6 +2141,9 @@ var
   Cfg: TConfig;
   KindSelected: TShellBackendKind;
   BackendDesc, SessionProfile: string;
+  AttachURL, AttachReason, AttachWarn, Unsupported: string;
+  AttachFail: Boolean;
+  Turn: TChatTurnOptions;
 begin
   if not ParseArgs(Argv, A) then
   begin
@@ -1985,6 +2183,31 @@ begin
     to try it. }
   if A.OrientOverride = ooOn  then Cfg.OrientTaskAware := True
   else if A.OrientOverride = ooOff then Cfg.OrientTaskAware := False;
+  { Attach mode: a live gateway owns the session, this process is its
+    terminal. Decided before any local machinery (embedder, sandbox,
+    shell backend, registry) is set up, because none of it runs here. }
+  if ResolveAttach(Cfg, A.Attach, AttachURL, AttachReason, AttachWarn, AttachFail) then
+  begin
+    try
+      Turn := AttachTurnOptions(A, Unsupported);
+      if Unsupported <> '' then
+      begin
+        PrintErr(AttachUnsupportedRefusal(Unsupported));
+        Exit(2);
+      end;
+      if AttachWarn <> '' then PrintLn(Ansi.Yellow + '! ' + Ansi.Reset + AttachWarn);
+      Result := RunAttached(Cfg, AttachURL, A.Session, A.Message, A.Quiet, Turn);
+    finally
+      Cfg.Free;
+    end;
+    Exit;
+  end
+  else if AttachFail then
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + AttachReason);
+    Cfg.Free;
+    Exit(1);
+  end;
   { Phase 4c: best-effort load the semantic fact embedder once per run
     (no-op when distill off or ONNX unprovisioned). }
   if Cfg.MemoryDistillEnabled then

@@ -143,6 +143,10 @@ begin
     -- deciding whether red output means what the plan said it would. }
   if (LoopCfg.Mode = pmPlan) or (LoopCfg.Mode = pmImprove)
      or (LoopCfg.Mode = pmSpace) then Exit;
+  { A model picked for this turn on purpose (a slash skill's model:) is
+    the operator's choice for exactly this message; an easy score does
+    not overrule it. (Codex P2 on #614.) }
+  if LoopCfg.ModelPinned then Exit;
   UserMsg := LatestUserMessage(Messages);
   if UserMsg = '' then Exit;
 
