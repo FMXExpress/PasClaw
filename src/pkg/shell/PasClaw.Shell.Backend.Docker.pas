@@ -83,13 +83,17 @@ type
 function DefaultDockerBackendOptions: TDockerBackendOptions;
 
 type
-  TDockerShellBackend = class(TInterfacedObject, IShellBackend, IShellPathMapper)
+  TDockerShellBackend = class(TInterfacedObject, IShellBackend, IShellPathMapper,
+                              IShellHostRPC)
   private
     FOpts:  TDockerBackendOptions;
     FLock:  TCriticalSection;
     FAlive: TStringList;   { session ids whose containers are running }
+    FGateway: string;      { cached default-bridge gateway, '' = none/unknown }
+    FGatewayProbed: Boolean;
     function ContainerName(const SessionId: string): string;
     function IsRunning(const SessionId: string): Boolean;
+    function HostGatewayIP: string;
     procedure SpawnContainer(const SessionId: string);
     procedure StopContainer(const SessionId: string);
   public
@@ -104,7 +108,37 @@ type
                   out Output: string): Integer;
     { IShellPathMapper }
     function HostToContainerPath(const HostPath: string): string;
+    { IShellHostRPC }
+    function RpcBindIP: string;
+    function RpcConnectHost: string;
+
+    { The `docker run` argv SpawnContainer spawns. Public so a test can
+      read the flags without a daemon on the box -- which is how the
+      whole file is tested (see TestDockerRefusesEmptySessionId). Appends
+      to Args; the caller owns the list. }
+    procedure BuildRunArgv(const SessionId: string; Args: TStringList);
   end;
+
+{ The first IPv4 address in `docker network inspect`'s gateway output
+  (the template can emit several, one per IPAM config, in either family).
+  '' when there is none. A dual-stack bridge lists both families and Indy
+  needs IPVersion set to bind a v6 address, which nothing here does -- so
+  this takes the one we can actually listen on and yields '' rather than
+  an address that would only fail the bind. Exposed for tests. }
+function FirstIPv4Token(const S: string): string;
+
+{ 'bridge' (the default), a user-defined network, or anything else that
+  gives the container its OWN network namespace -- the case where the
+  host's loopback is not the container's. False for 'host' (shared with
+  the host, loopback works as-is) and 'none' (no networking at all, so
+  there is nothing to reach the host with). Exposed for tests. }
+function DockerNetworkIsolatesHost(const Network: string): Boolean;
+
+{ The name the container resolves to the host. Docker's own convention;
+  provided natively by Docker Desktop and added explicitly on Linux via
+  --add-host=<name>:host-gateway. Exposed for tests. }
+const
+  DockerHostAlias = 'host.docker.internal';
 
 { Probe: is the `docker` CLI on PATH and answering `docker info`?
   Bootstrap calls this before SetActiveShellBackend so an operator
@@ -233,6 +267,36 @@ begin
               ' (is the daemon running and on PATH?)';
 end;
 
+function FirstIPv4Token(const S: string): string;
+var
+  Tok: string;
+  i: Integer;
+begin
+  Result := '';
+  Tok    := '';
+  for i := 1 to Length(S) + 1 do
+    if (i <= Length(S)) and (S[i] > ' ') then
+      Tok := Tok + S[i]
+    else
+    begin
+      if (Pos('.', Tok) > 0) and (Pos(':', Tok) = 0) then
+      begin
+        { Strip a /prefix if the template ever carries one. }
+        if Pos('/', Tok) > 0 then Tok := Copy(Tok, 1, Pos('/', Tok) - 1);
+        Exit(Tok);
+      end;
+      Tok := '';
+    end;
+end;
+
+function DockerNetworkIsolatesHost(const Network: string): Boolean;
+var
+  N: string;
+begin
+  N := LowerCase(Trim(Network));
+  Result := (N <> 'host') and (N <> 'none');
+end;
+
 constructor TDockerShellBackend.Create(const Opts: TDockerBackendOptions);
 begin
   inherited Create;
@@ -355,10 +419,10 @@ begin
   Args.Add(Path + ':' + ContainerPath(Path));
 end;
 
-procedure TDockerShellBackend.SpawnContainer(const SessionId: string);
-{ Spawn a long-running idle container with workspace + tmp + run
-  bind-mounted at the same path. Caller has already verified
-  DockerCliReachable. The trio mounts are deliberate:
+procedure TDockerShellBackend.BuildRunArgv(const SessionId: string;
+                                           Args: TStringList);
+{ The argv for a long-running idle container with workspace + tmp + run
+  bind-mounted at the same path. The trio mounts are deliberate:
     workspace/  the model's working tree (the whole point)
     tmp/        execute_code's temp script files live here on the
                 host; the container needs to see them to `bash <path>`
@@ -373,43 +437,80 @@ procedure TDockerShellBackend.SpawnContainer(const SessionId: string);
   there). The command is built as an argv vector and spawned without a
   host shell -- no quoting, no cmd.exe percent-expansion. }
 var
-  Args: TStringList;
-  WorkspacePath, Out_: string;
-  ExitCode, i: Integer;
+  WorkspacePath: string;
+  i: Integer;
 begin
   WorkspacePath := JoinPath(GetHome, ActiveWorkspaceName);
+  Args.Add('run');
+  Args.Add('-d');
+  Args.Add('--rm');
+  Args.Add('--name');
+  Args.Add(ContainerName(SessionId));
+  AddBindIfExists(Args, WorkspacePath);
+  AddBindIfExists(Args, JoinPath(GetHome, 'tmp'));
+  {$IFNDEF MSWINDOWS}
+  { The running executable, read-only at the same path, so a script's
+    `tool` function (and `pasclaw __tool`) exists inside the container
+    without installing anything there. POSIX only: a Windows host binary
+    cannot run in a Linux container. The image must be glibc-compatible
+    with the host build; the Debian image this backend defaults to is. }
+  Args.Add('-v');
+  Args.Add(ExpandFileName(ParamStr(0)) + ':' + ExpandFileName(ParamStr(0)) + ':ro');
+  {$ENDIF}
+  AddBindIfExists(Args, JoinPath(GetHome, 'run'));
+  Args.Add('-w');
+  Args.Add(ContainerPath(WorkspacePath));
+  if (FOpts.ExtraMounts <> nil) then
+    for i := 0 to FOpts.ExtraMounts.Count - 1 do
+      if Trim(FOpts.ExtraMounts[i]) <> '' then
+      begin
+        Args.Add('-v');
+        Args.Add(FOpts.ExtraMounts[i]);
+      end;
+  Args.Add('--network');
+  Args.Add(FOpts.Network);
+  if DockerNetworkIsolatesHost(FOpts.Network) then
+  begin
+    (* Make the host reachable by name from inside. Without this the
+       execute_code tool-RPC callback simply does not work on a bridge
+       network: the script's `tool ...` dials the port the parent
+       advertised, and from in here 127.0.0.1 is the container. Docker
+       Desktop supplies this name itself; on Linux it only exists if we
+       ask, hence the explicit mapping. (Codex P1 on #609.)
+
+       `host-gateway` is Docker's own alias for the host address and
+       needs Docker >= 20.10 -- the same address RpcBindIP binds, which
+       is why both read the DEFAULT bridge. *)
+    Args.Add('--add-host');
+    Args.Add(DockerHostAlias + ':host-gateway');
+  end
+  else if LowerCase(Trim(FOpts.Network)) = 'none' then
+    LogInfo('shell-backend(docker): network=none -- execute_code scripts ' +
+            'cannot call tools back (`tool ...`), and with code mode on ' +
+            'that is how MCP tools are reached');
+  if FOpts.Privileged then Args.Add('--privileged');
+  if FOpts.User <> '' then
+  begin
+    Args.Add('-u');
+    Args.Add(FOpts.User);
+  end;
+  Args.Add(FOpts.Image);
+  Args.Add('sh');
+  Args.Add('-c');
+  Args.Add(KeepAliveCmd);
+end;
+
+procedure TDockerShellBackend.SpawnContainer(const SessionId: string);
+{ Run what BuildRunArgv composed. Caller has already verified
+  DockerCliReachable. }
+var
+  Args: TStringList;
+  Out_: string;
+  ExitCode: Integer;
+begin
   Args := TStringList.Create;
   try
-    Args.Add('run');
-    Args.Add('-d');
-    Args.Add('--rm');
-    Args.Add('--name');
-    Args.Add(ContainerName(SessionId));
-    AddBindIfExists(Args, WorkspacePath);
-    AddBindIfExists(Args, JoinPath(GetHome, 'tmp'));
-    AddBindIfExists(Args, JoinPath(GetHome, 'run'));
-    Args.Add('-w');
-    Args.Add(ContainerPath(WorkspacePath));
-    if (FOpts.ExtraMounts <> nil) then
-      for i := 0 to FOpts.ExtraMounts.Count - 1 do
-        if Trim(FOpts.ExtraMounts[i]) <> '' then
-        begin
-          Args.Add('-v');
-          Args.Add(FOpts.ExtraMounts[i]);
-        end;
-    Args.Add('--network');
-    Args.Add(FOpts.Network);
-    if FOpts.Privileged then Args.Add('--privileged');
-    if FOpts.User <> '' then
-    begin
-      Args.Add('-u');
-      Args.Add(FOpts.User);
-    end;
-    Args.Add(FOpts.Image);
-    Args.Add('sh');
-    Args.Add('-c');
-    Args.Add(KeepAliveCmd);
-
+    BuildRunArgv(SessionId, Args);
     LogInfo('shell-backend(docker): spawning %s (image=%s)',
             [ContainerName(SessionId), FOpts.Image]);
     { Unbounded on purpose -- a cache-miss image pull can run for minutes;
@@ -584,6 +685,73 @@ function TDockerShellBackend.HostToContainerPath(const HostPath: string): string
   into its command to the path the container will see. }
 begin
   Result := ContainerPath(HostPath);
+end;
+
+function TDockerShellBackend.HostGatewayIP: string;
+(* The default bridge's gateway -- the host address a container reaches the
+   host at, and the same address `--add-host=NAME:host-gateway` resolves to
+   (the daemon's host-gateway-ip defaults to exactly this). The DEFAULT
+   bridge on purpose, not FOpts.Network: host-gateway is defined off the
+   default bridge whichever network the container joins, so inspecting the
+   one the container is on would hand us a different address than the name
+   inside it resolves to.
+
+   Probed once and cached: this is per execute_code call, and a daemon
+   round-trip on each would be felt. '' on any failure -- caller treats
+   that as "bind loopback and hope host.docker.internal forwards", which
+   is the Docker Desktop case anyway. *)
+var
+  Args: TStringList;
+  Out_: string;
+begin
+  FLock.Enter;
+  try
+    if FGatewayProbed then Exit(FGateway);
+    FGatewayProbed := True;
+    FGateway := '';
+    Args := TStringList.Create;
+    try
+      Args.Add('network');
+      Args.Add('inspect');
+      Args.Add('bridge');
+      Args.Add('--format');
+      { Range, not `index .IPAM.Config 0`: an empty Config makes the
+        index form fail the whole template. }
+      Args.Add('{{range .IPAM.Config}}{{.Gateway}} {{end}}');
+      if RunArgvCapture('docker', Args, '', Out_, DockerInfoTimeoutMs) = 0 then
+        FGateway := FirstIPv4Token(Out_);
+    finally
+      Args.Free;
+    end;
+    if FGateway = '' then
+      LogDebug('shell-backend(docker): no bridge gateway found -- ' +
+               'tool-rpc will listen on loopback only');
+    Result := FGateway;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TDockerShellBackend.RpcBindIP: string;
+{ IShellHostRPC: where execute_code's tool-RPC server has to listen for
+  `pasclaw __tool` inside the container to reach it. }
+begin
+  if not DockerNetworkIsolatesHost(FOpts.Network) then
+    Result := ''          { --network host: the container's loopback IS ours }
+  else
+    Result := HostGatewayIP;
+end;
+
+function TDockerShellBackend.RpcConnectHost: string;
+{ IShellHostRPC: what the contained command dials. '' leaves the
+  discovery file on 127.0.0.1, which is right when the container shares
+  our network namespace -- and the only thing on offer with --network
+  none, where the callback cannot work at all (SpawnContainer says so). }
+begin
+  if DockerNetworkIsolatesHost(FOpts.Network) then
+    Result := DockerHostAlias
+  else
+    Result := '';
 end;
 
 end.

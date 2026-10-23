@@ -183,6 +183,28 @@ begin
   Result := False;
 end;
 
+procedure CopyPreservingMode(Dest: TToolRegistry; const T: TTool);
+(* Re-register a copied tool through the entry point that matches the mode
+   it was registered with in the parent.
+
+   TToolRegistry.Register force-clears IsDeferred / Hidden / CodeMode on
+   purpose -- legacy call sites build a TTool on the stack and never touch
+   those fields, so trusting the incoming record would let stack garbage
+   decide whether a core tool reaches the provider. That defensive clear is
+   right for those callers and wrong for this one: here the record came out
+   of Find, so every flag on it is real, and clearing CodeMode turned a
+   code-mode MCP tool into an ordinary provider-visible one. The subagent
+   then got the full MCP schema its parent had deliberately kept out of the
+   tools array, and called it directly instead of through execute_code --
+   the whole point of code mode lost at the spawn boundary. (Codex P1
+   on #609.) *)
+begin
+  if T.CodeMode then
+    Dest.RegisterCodeMode(T)
+  else
+    Dest.Register(T);
+end;
+
 procedure RebindExecuteCode(Child: TToolRegistry);
 { The copied execute_code record carries the PARENT's runner, whose RPC
   server dispatches into the parent's full registry -- which is exactly the
@@ -227,10 +249,12 @@ begin
       if IsSpawnFamily(AllNames[i]) then Continue;
       if AllNames[i] = 'tool_search' then Continue;
       if not Source.Find(AllNames[i], T) then Continue;
+      { A code-mode tool is IsDeferred=True but never in DeferredNames, so
+        it lands in the last branch -- which is where its mode is preserved. }
       if T.IsDeferred and NameInList(AllNames[i], StillDeferred) then
         Result.RegisterDeferred(T, True)   { genuinely still deferred }
       else
-        Result.Register(T);                { non-deferred OR already revealed -> active }
+        CopyPreservingMode(Result, T);     { non-deferred OR revealed -> active; code mode kept }
     end;
     RebindExecuteCode(Result);
     Exit;
@@ -244,7 +268,7 @@ begin
       LogWarn('subagent: source registry has no tool named "%s" -- skipping', [Names[i]]);
       Continue;
     end;
-    Result.Register(T);
+    CopyPreservingMode(Result, T);
   end;
   RebindExecuteCode(Result);
 end;

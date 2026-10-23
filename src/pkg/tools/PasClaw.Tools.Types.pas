@@ -98,6 +98,15 @@ type
        random and silent, in the exact machinery the field exists to
        enable. Safe is not the same as correct (Codex, PR #538). *)
     SerialOnly:  Boolean;
+    (* CodeMode -- reachable only from an execute_code script, through the
+       tool RPC (`tool <name> '<json>'`). Never a provider schema, never
+       listed or revealed by tool_search; RunTool / Find dispatch normally.
+       The prompt names the SERVER and says how to call its tools from a
+       script; the tools' schemas reach the model only when it asks
+       (`code_catalog`, or `tool --catalog` inside a script). Set by
+       TToolRegistry.RegisterCodeMode for MCP servers with codemode on
+       (PasClaw.MCP.Bridge); Register / RegisterDeferred clear it. *)
+    CodeMode:    Boolean;
   end;
 
   TToolList = array of TTool;

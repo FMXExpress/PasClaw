@@ -145,6 +145,7 @@ type
     FDeferred: Boolean;   { snapshot of Cfg.MCPProgressiveDisclosure -- TMCPLoader
                             mirrors the flag at create time so the loader thread
                             doesn't have to hold a TConfig reference. }
+    FCodeMode: Boolean;   { snapshot of ServerCfg.CodeMode, same reason }
     FReg:    TToolRegistry;
     FState:  TMCPServerState;
     FClient: TMCPBaseClient;
@@ -398,7 +399,8 @@ procedure RegisterToolViaDispatch(Reg: TToolRegistry;
                                    const Server: string;
                                    const Tool: TMCPTool;
                                    Dispatch: TMCPToolDispatch;
-                                   Deferred: Boolean);
+                                   Deferred: Boolean;
+                                   CodeMode: Boolean = False);
 var
   Entry: TTool;
 begin
@@ -422,7 +424,12 @@ begin
     parameter is authoritative; do NOT set Entry.IsDeferred here, the
     plain Register clears it defensively for legacy stack-garbage
     safety. }
-  Reg.RegisterDeferred(Entry, Deferred);
+  { Code mode wins over deferral: the tool is reachable from scripts only
+    and never becomes a schema, revealed or not. }
+  if CodeMode then
+    Reg.RegisterCodeMode(Entry)
+  else
+    Reg.RegisterDeferred(Entry, Deferred);
 end;
 
 { ============================================================
@@ -436,6 +443,7 @@ begin
   FreeOnTerminate := False;
   FCfg    := ServerCfg;
   FDeferred := Deferred;
+  FCodeMode := ServerCfg.CodeMode;
   FReg    := Reg;
   FState  := State;
   FClient := nil;
@@ -559,7 +567,7 @@ begin
         Dispatch := FState.FindDispatchFor(Tools[i].Name);
         if Dispatch = nil then
           Dispatch := FState.AddDispatch(Tools[i].Name);
-        RegisterToolViaDispatch(FReg, FCfg.Name, Tools[i], Dispatch, FDeferred);
+        RegisterToolViaDispatch(FReg, FCfg.Name, Tools[i], Dispatch, FDeferred, FCodeMode);
       end;
 
       FState.SetReady(FClient);
@@ -619,7 +627,8 @@ begin
         Dispatch := State.AddDispatch(CachedTools[j].Name);
         RegisterToolViaDispatch(Reg, Cfg.MCPServers[i].Name,
                                 CachedTools[j], Dispatch,
-                                Cfg.MCPProgressiveDisclosure);
+                                Cfg.MCPProgressiveDisclosure,
+                                Cfg.MCPServers[i].CodeMode);
         Inc(CachedCount);
       end;
       if CachedCount > 0 then
@@ -647,6 +656,15 @@ begin
     Cmd.Serve, Cmd.Gateway, Cmd.TUI, the long-running TAgent -- gets
     it for free. }
   RegisterMCPDisclosureTools(Reg, Cfg);
+  { code_catalog: the model's way to read a code-mode server's tools
+    without a script. Registered whenever any enabled server is in code
+    mode, independent of the disclosure flags. }
+  for i := 0 to High(Cfg.MCPServers) do
+    if Cfg.MCPServers[i].Enabled and Cfg.MCPServers[i].CodeMode then
+    begin
+      RegisterCodeCatalogTool(Reg);
+      Break;
+    end;
 end;
 
 procedure FreeMCPClients(var Clients: TMCPClientList);

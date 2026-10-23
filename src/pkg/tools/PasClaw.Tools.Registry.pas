@@ -87,6 +87,9 @@ type
       until tool_search reveals them. Callers must NOT also set
       T.IsDeferred -- the Deferred parameter is authoritative. }
     procedure RegisterDeferred(const T: TTool; Deferred: Boolean);
+    { Register a code-mode tool: dispatchable, never a provider schema,
+      never surfaced by tool_search. See TTool.CodeMode. }
+    procedure RegisterCodeMode(const T: TTool);
     { When True, any tool matching ToolIsLongTail registers DEFERRED no
       matter which entry point it came through. Set once, by the disclosure
       registration, instead of asking ~10 call sites to remember: the spawn
@@ -122,6 +125,13 @@ type
       Lets tool_search distinguish "deferred set empty because all MCP tools
       are revealed + active" from "empty because none ever loaded". }
     function  AnyRevealed: Boolean;
+    (* Code-mode surface. CodeModeNames lists every code-mode tool;
+       CodeModeCatalog renders those whose name starts with
+       "<ServerPrefix>__" (every one when '') as a JSON array of objects
+       with name, server, description and schema -- what `code_catalog`
+       and `tool --catalog` return to a script. *)
+    function  CodeModeNames: TStringArray;
+    function  CodeModeCatalog(const ServerPrefix: string): string;
   end;
 
 var
@@ -205,6 +215,7 @@ begin
     records never set it, so garbage there could silently drop a core tool
     from ToProviderDefs. Aliases go through RegisterHidden instead. }
   Modified.Hidden := False;
+  Modified.CodeMode := False;
   RegisterImpl(Modified);
 end;
 
@@ -217,6 +228,7 @@ begin
   Modified := T;
   Modified.IsDeferred := False;
   Modified.Hidden     := True;
+  Modified.CodeMode   := False;
   RegisterImpl(Modified);
 end;
 
@@ -226,6 +238,22 @@ var
 begin
   Modified := T;
   Modified.IsDeferred := Deferred;
+  Modified.CodeMode   := False;
+  RegisterImpl(Modified);
+end;
+
+procedure TToolRegistry.RegisterCodeMode(const T: TTool);
+var
+  Modified: TTool;
+begin
+  Modified := T;
+  { Deferred keeps it out of ToProviderDefs through the existing filter;
+    CodeMode keeps it out of DeferredNames / DeferredFind so tool_search
+    cannot list or reveal it, and makes the provider filter ignore a
+    stale reveal. }
+  Modified.IsDeferred := True;
+  Modified.Hidden     := False;
+  Modified.CodeMode   := True;
   RegisterImpl(Modified);
 end;
 
@@ -322,6 +350,11 @@ begin
         tool list -- only the new canonical name is advertised. }
       if FTools[i].Hidden then
         Continue;
+      { Code-mode tools are called from scripts, never as provider tools
+        -- and a reveal recorded before a server flipped to code mode must
+        not resurrect the schema. }
+      if FTools[i].CodeMode then
+        Continue;
       Result[k].Name        := FTools[i].Name;
       Result[k].Description := FTools[i].Description;
       Result[k].Schema      := FTools[i].Schema;
@@ -342,7 +375,8 @@ begin
     SetLength(Result, Length(FTools));
     k := 0;
     for i := 0 to High(FTools) do
-      if FTools[i].IsDeferred and (not IsRevealedLocked(FTools[i].Name)) then
+      if FTools[i].IsDeferred and (not FTools[i].CodeMode)
+         and (not IsRevealedLocked(FTools[i].Name)) then
       begin
         Result[k] := FTools[i].Name;
         Inc(k);
@@ -353,6 +387,89 @@ begin
   end;
 end;
 
+function TToolRegistry.CodeModeNames: TStringArray;
+var
+  i, k: Integer;
+begin
+  FLock.Acquire;
+  try
+    SetLength(Result, Length(FTools));
+    k := 0;
+    for i := 0 to High(FTools) do
+      if FTools[i].CodeMode then
+      begin
+        Result[k] := FTools[i].Name;
+        Inc(k);
+      end;
+    SetLength(Result, k);
+  finally
+    FLock.Release;
+  end;
+end;
+
+function CodeModeServerOf(const Name: string): string;
+var
+  P: Integer;
+begin
+  P := Pos('__', Name);
+  if P > 0 then Result := Copy(Name, 1, P - 1) else Result := '';
+end;
+
+function JsonQuote(const S: string): string;
+var
+  i: Integer;
+  C: Char;
+begin
+  Result := '"';
+  for i := 1 to Length(S) do
+  begin
+    C := S[i];
+    case C of
+      '"':  Result := Result + '\"';
+      '\': Result := Result + '\\';
+      #8:   Result := Result + '\b';
+      #9:   Result := Result + '\t';
+      #10:  Result := Result + '\n';
+      #12:  Result := Result + '\f';
+      #13:  Result := Result + '\r';
+    else
+      if Ord(C) < 32 then Result := Result + Format('\u%.4x', [Ord(C)])
+      else Result := Result + C;
+    end;
+  end;
+  Result := Result + '"';
+end;
+
+function TToolRegistry.CodeModeCatalog(const ServerPrefix: string): string;
+var
+  i: Integer;
+  Srv, Schema: string;
+  First: Boolean;
+begin
+  Result := '[';
+  First := True;
+  FLock.Acquire;
+  try
+    for i := 0 to High(FTools) do
+    begin
+      if not FTools[i].CodeMode then Continue;
+      Srv := CodeModeServerOf(FTools[i].Name);
+      if (ServerPrefix <> '') and (not SameText(Srv, ServerPrefix)) then Continue;
+      Schema := Trim(FTools[i].Schema);
+      if Schema = '' then Schema := '{}';
+      if not First then Result := Result + ',';
+      First := False;
+      Result := Result + '{"name":' + JsonQuote(FTools[i].Name) +
+                ',"server":' + JsonQuote(Srv) +
+                ',"description":' + JsonQuote(FTools[i].Description) +
+                ',"schema":' + Schema + '}';
+    end;
+  finally
+    FLock.Release;
+  end;
+  Result := Result + ']';
+end;
+
 function TToolRegistry.DeferredFind(const Name: string; out T: TTool): Boolean;
 var
   i: Integer;
@@ -360,7 +477,7 @@ begin
   FLock.Acquire;
   try
     for i := 0 to High(FTools) do
-      if (FTools[i].Name = Name) and FTools[i].IsDeferred then
+      if (FTools[i].Name = Name) and FTools[i].IsDeferred and (not FTools[i].CodeMode) then
       begin
         T := FTools[i];
         Exit(True);

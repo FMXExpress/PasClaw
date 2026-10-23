@@ -823,7 +823,11 @@ begin
     'context. Example: "how many `procedure` definitions are in src/?" ' +
     'is one `grep -c ''^procedure'' src/**/*.pas` + a sum, not a tour ' +
     'of every .pas file. The script''s stdout becomes your evidence; ' +
-    'the raw file bodies do not need to enter the conversation.' + sLineBreak +
+    'the raw file bodies do not need to enter the conversation. The same ' +
+    'goes for tool calls: inside an `execute_code` script, `tool <name> ' +
+    '''<json>''` calls any of your tools, so a list-then-filter-then-fetch ' +
+    'sequence is one script, not three rounds -- and code-mode MCP servers ' +
+    'are reachable ONLY that way.' + sLineBreak +
     sLineBreak +
     '7. **Batch independent investigation** -- the tool loop runs ' +
     '`read_file`, `list_dir`, `grep_files` and `find_files` calls IN ' +
