@@ -242,13 +242,19 @@ begin
       EnableBestFactEmbedder(GetHome);
     TUIInst.BgCoordinator      := BgCoord;
     { Completions of spawn_background / shell_background jobs flash in the
-      footer. Cleared before the TUI is freed so a late job cannot call
-      into a dead object. }
-    GBackgroundDoneHook := TUIInst.BackgroundDone;
+      footer. Installed and cleared through SetBackgroundDoneHook, which
+      takes the same lock the dispatch does -- so the clear below WAITS
+      for a job thread already inside BackgroundDone, and no new call can
+      start, before the object it is a method of is freed. Assigning the
+      hook variable directly left a window between the dispatcher's
+      Assigned test and its call where exactly that happened, on any
+      ordinary TUI shutdown with a job still finishing. (Codex P2 on
+      #610.) }
+    SetBackgroundDoneHook(TUIInst.BackgroundDone);
     try
       TUIInst.Run;
     finally
-      GBackgroundDoneHook := nil;
+      SetBackgroundDoneHook(nil);
       TUIInst.Free;
       FreeMCPClients(MCPClients);
       { Spawn owned here (same shape as Cmd.Agent); BgCoord is NOT

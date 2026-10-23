@@ -194,8 +194,28 @@ function RegisterBackgroundSpawnTools(Reg: TToolRegistry;
                                       const Specs: TSubagentSpecArray)
                                       : TBackgroundSpawnCoordinator;
 
-var
-  GBackgroundDoneHook: TBackgroundDoneProc;
+(* A surface that wants to be told when a background job finishes --
+   the TUI flashes it in the footer -- installs a handler here.
+
+   Set and cleared ONLY through these two calls, never by assigning the
+   variable. SetBackgroundDoneHook takes the same lock the dispatch
+   takes, so clearing it waits for a callback that is already running
+   and no new one can start afterwards. That matters because the only
+   caller clears the hook on its way to freeing the object the handler
+   is a method of: `if Assigned(hook) then hook(...)` had a window
+   between the test and the call where the main thread could clear the
+   pointer AND free the object, and the job's thread would then run a
+   method of freed memory during an ordinary TUI shutdown. (Codex P2 on
+   #610.)
+
+   Pass nil to remove. The lock lives for the life of the unit, so a
+   handler is safe to clear from any thread at any time. *)
+procedure SetBackgroundDoneHook(Hook: TBackgroundDoneProc);
+
+{ Call the installed handler, if any, under the same lock. Exposed so
+  other producers of background completions can reuse the dispatch
+  rather than reading the hook themselves. }
+procedure FireBackgroundDone(const Key, Handle, Summary: string);
 
 { One-call wiring of the synchronous `spawn` + the background spawn tools onto
   Reg, for surfaces that don't track the returned tool/coordinator (serve,
@@ -241,6 +261,51 @@ var
   { Coordinators created via RegisterBackgroundSpawnTools, reaped at
     finalization (same ownership shape as ExecuteCode's GRunners). }
   GCoordinators: TList = nil;
+  { The completion handler and the lock that makes installing, clearing
+    and calling it mutually exclusive. See SetBackgroundDoneHook. }
+  GDoneHook:     TBackgroundDoneProc = nil;
+  GDoneHookLock: TCriticalSection = nil;
+
+{ Both of these read the lock into a local first. Finalization NILS the
+  global without freeing it, so a copy taken a moment earlier stays
+  valid -- testing the global and then dereferencing it would be its own
+  little race. }
+procedure SetBackgroundDoneHook(Hook: TBackgroundDoneProc);
+var
+  Lk: TCriticalSection;
+begin
+  Lk := GDoneHookLock;
+  if Lk = nil then Exit;   { unit finalised; nothing to install }
+  Lk.Enter;
+  try
+    GDoneHook := Hook;
+  finally
+    Lk.Leave;
+  end;
+end;
+
+procedure FireBackgroundDone(const Key, Handle, Summary: string);
+var
+  Lk: TCriticalSection;
+begin
+  Lk := GDoneHookLock;
+  if Lk = nil then Exit;
+  (* Held across the CALL, not just the read. Copying the handler out and
+     releasing first would put the window straight back: the copy can be
+     invoked after the owner has cleared the hook and freed itself. The
+     handler parks a string under its own lock and returns -- holding this
+     one across it costs nothing and cannot deadlock back into Set/Fire. *)
+  Lk.Enter;
+  try
+    if Assigned(GDoneHook) then
+      try
+        GDoneHook(Key, Handle, Summary);
+      except
+      end;
+  finally
+    Lk.Leave;
+  end;
+end;
 
 function RandHex(NBytes: Integer): string;
 var
@@ -315,12 +380,9 @@ begin
                '","summary":' + JsonStr(Summary) + '}');
   except
   end;
-  { TUI / CLI: whatever they wired. }
-  if Assigned(GBackgroundDoneHook) then
-    try
-      GBackgroundDoneHook(FDrainKey, FHandle, Summary);
-    except
-    end;
+  { TUI / CLI: whatever they wired. Through the dispatcher, which
+    serialises against teardown -- see SetBackgroundDoneHook. }
+  FireBackgroundDone(FDrainKey, FHandle, Summary);
 end;
 
 procedure TBgJob.RunShellJob;
@@ -335,6 +397,30 @@ var
   StartT: TDateTime;
   TimedOut, Cancelled, Ok, Spawned: Boolean;
   Bytes: TBytes;
+
+  procedure KillTree;
+  (* Kill the job's whole process tree, not just the /bin/sh (or cmd.exe)
+     wrapper this job owns.
+
+     Terminating the wrapper alone left everything it had started --
+     compiler workers, a `make -j`, anything launched with `&` -- running
+     after spawn_cancel had already reported the job killed, still writing
+     files and burning CPU with nothing holding a handle to them. Same for
+     the timeout and the output cap. (Codex P1 on #610.)
+
+     Codex asked for an isolated process group. There is no portable way
+     to get one from here: FPC's TProcess has no POSIX process-group
+     option (poNewProcessGroup is Windows-only) and `setsid` is not a
+     binary to count on (util-linux ships one, macOS does not).
+     TerminateProcessTree walks the real parent links instead -- every
+     descendant that has not deliberately re-parented itself -- and on
+     Windows is `taskkill /T /F`, which is a true tree kill. Same idiom
+     as the timeout in PasClaw.Platform's own one-shot loops. *)
+  begin
+    TerminateProcessTree(P.ProcessId);
+    if P.Running then try P.Terminate; except end;
+  end;
+
 begin
   Ok := False;
   TimedOut := False;
@@ -386,18 +472,18 @@ begin
           begin
             Acc.WriteBuffer(Buf, N);
             Inc(Total, N);
-            if Total > OneShotMaxBytes then begin P.Terminate; Break; end;
+            if Total > OneShotMaxBytes then begin KillTree; Break; end;
           end
           else if not P.Running then Break;
           if (FTimeoutMs > 0) and (Trunc((Now - StartT) * 86400000.0) >= FTimeoutMs) then
           begin
             TimedOut := True;
-            P.Terminate;
+            KillTree;
             Break;
           end;
           FStateLock.Enter;
           try Cancelled := FState = bjCancelled; finally FStateLock.Leave; end;
-          if Cancelled then begin P.Terminate; Break; end;
+          if Cancelled then begin KillTree; Break; end;
         end;
         while P.Running do Sleep(10);
         Code := P.ExitCode;
@@ -1297,13 +1383,23 @@ end;
 initialization
   GMap     := TStringList.Create;
   GMapLock := TCriticalSection.Create;
+  GDoneHookLock := TCriticalSection.Create;
   GBackgroundDrainHook := DrainByKey;
 
 finalization
   GBackgroundDrainHook := nil;
+  SetBackgroundDoneHook(nil);
   FreeCoordinators;
   GMap.Free;
   GMapLock.Free;
   GMapLock := nil;
+  { Nil but deliberately NOT freed. A job thread can outlive this unit --
+    the TUI hands a slow worker to the OS via FreeOnTerminate -- and
+    freeing the lock it may be about to take is the very use-after-free
+    this dispatcher exists to prevent. Nil makes Set/Fire bail out
+    ("no hook"); leaking one critical section at process exit is
+    harmless, and the TUI leaks FToolActivityLock for the same reason. }
+  GDoneHook     := nil;
+  GDoneHookLock := nil;
 
 end.

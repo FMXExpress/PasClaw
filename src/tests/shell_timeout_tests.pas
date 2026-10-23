@@ -166,6 +166,41 @@ begin
     'PasClaw already reported exit=124');
   WriteLn(Format('  ok: timeout killed the whole tree (grandchild gone after %d ms)', [Waited]));
 
+  (* ---- the OUTPUT CAP kills the tree too ----
+
+     Same leak, other exit. #608 fixed the timeout and left the 1 MiB
+     output cap signalling the shell alone, so a command killed for
+     flooding its output left the flooders running. `yes` floods; the
+     grandchild records its pid and then outlives any sane test.
+
+     NB for whoever regresses this: it does not fail here, it HANGS.
+     The orphaned flooder keeps writing into the pipe nobody is reading
+     any more, and RunOneShot never gets to return -- which is the
+     second reason the cap has to take the tree down. *)
+  if FileExists(PidFile) then DeleteFile(PidFile);
+  Code := RunOneShot('sh -c ''echo $$ > "' + PidFile + '"; sleep 45'' & yes cap',
+                     '', Out_);
+  AssertTrue(Length(Out_) >= 1024 * 1024,
+             'the command really did flood past the cap (got ' +
+             IntToStr(Length(Out_)) + ' bytes)');
+  AssertTrue(FileExists(PidFile), 'the grandchild recorded its pid');
+  with TStringList.Create do
+  try
+    LoadFromFile(PidFile);
+    Kid := Trim(Text);
+  finally
+    Free;
+  end;
+  Waited := 0;
+  while PidAlive(Kid) and (Waited < 3000) do
+  begin
+    Sleep(100);
+    Inc(Waited, 100);
+  end;
+  AssertTrue(not PidAlive(Kid),
+    'the grandchild (pid ' + Kid + ') was killed with the flooding shell');
+  WriteLn('  ok: the output cap kills the tree, not just the shell');
+
   { The tool's argument. }
   Out_ := Tool_Shell('{"command":"sleep 5; echo late","timeout_sec":1}', Err);
   AssertTrue(Err = '', 'tool returns a result, not an error: ' + Err);
