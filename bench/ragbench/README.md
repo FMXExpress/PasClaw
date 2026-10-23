@@ -38,6 +38,19 @@ session's stats.
 
 The before/after rows were measured on the opencode2 stack build (36 tools registered); the last row is the same change rebased onto `main`, which registers fewer tools, so its absolute number is lower.
 
+### 2026-10-23: the set that shipped
+
+Same harness, today's `main` against the PR as merged into it. `shell_background` and `memory_fetch` went back to visible: a hidden tool is one the model stops choosing (without `shell_background` it blocks in `shell_exec`), so only `desktop` joins the long tail, and the gateway reveals that one the moment a desktop connects. A desktop never connects in this harness, so `desktop` stays deferred here.
+
+| run | request bytes | visible tools |
+|---|---|---|
+| `main`, default | 156,142 | 19 |
+| `main`, `--no-mcp` | 228,634 | 36 |
+| PR, `desktop` + `memory_fetch` + `shell_background` deferred | 140,872 | 16 |
+| **PR as shipped, `desktop` deferred** (default and `--no-mcp` identical) | **150,160** | **18** |
+
+Every run wrote the same five files and passed the same test. Keeping the two tools visible costs about 1.5 KB per request against the three-tool set. Against `main` the PR saves about 1 KB per request, and a third of every request under `--no-mcp`.
+
 Profile of one request after the change: tools 11.8 KB, system prompt
 7.8 KB (Rules 4.5 KB, Deferred Tools 0.7 KB), conversation 0.5 KB
 growing to 3.8 KB by turn six. Tool results are already terse (`wrote N

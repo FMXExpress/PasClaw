@@ -397,8 +397,11 @@ end;
 
 { The built-in long tail: one predicate (ToolIsLongTail) drives both the
   one-shot sweep and the registry latch, so a tool registered AFTER
-  disclosure (shell_background, from the background coordinator) is
-  deferred exactly like one registered before. }
+  disclosure (the spawn_* verbs, from the background coordinator) is
+  deferred exactly like one registered before. And the tools tried in the
+  set and put back -- memory_write, shell_background, memory_fetch -- stay
+  visible through both paths: a hidden one is a tool the model stops
+  choosing, not one it searches for. }
 procedure TestBuiltinLongTailOneSet;
 var
   Reg: TToolRegistry;
@@ -421,19 +424,22 @@ begin
     AssertEqI(DeferBuiltinTools(Reg), 2, 'sweep defers desktop and db_query, not memory_write');
     { ...and after it, through the latch. }
     Reg.DeferLongTail := True;
+    RegisterVisible(Reg, 'spawn_status');
     RegisterVisible(Reg, 'shell_background');
     RegisterVisible(Reg, 'memory_fetch');
     RegisterVisible(Reg, 'shell_exec');
     Names := Reg.DeferredNames;
     for i := 0 to High(Names) do ;
-    AssertTrue(Deferred('desktop'), 'desktop deferred');
-    AssertTrue(not Deferred('memory_write'), 'memory_write stays visible: the prompt recommends it');
-    AssertTrue(Deferred('memory_fetch'), 'memory_fetch deferred (latch)');
-    AssertTrue(Deferred('shell_background'), 'shell_background deferred (latch)');
+    AssertTrue(Deferred('desktop'), 'desktop deferred (until a desktop connects)');
     AssertTrue(Deferred('db_query'), 'db_query deferred (prefix)');
+    AssertTrue(Deferred('spawn_status'), 'spawn_status deferred (prefix, through the latch)');
+    AssertTrue(not Deferred('memory_write'), 'memory_write stays visible: the prompt recommends it');
+    AssertTrue(not Deferred('shell_background'),
+               'shell_background stays visible: hidden, the model blocks in shell_exec instead');
+    AssertTrue(not Deferred('memory_fetch'), 'memory_fetch stays visible');
     AssertTrue(not Deferred('read_file'), 'read_file visible');
     AssertTrue(not Deferred('shell_exec'), 'shell_exec visible');
-    AssertEqI(CountResults(Reg), 3, 'provider sees exactly the three visible tools');
+    AssertEqI(CountResults(Reg), 5, 'provider sees exactly the five visible tools');
   finally
     Reg.Free;
   end;

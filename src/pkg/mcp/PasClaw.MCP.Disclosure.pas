@@ -176,11 +176,11 @@ function RegisterBuiltinDisclosureTools(Reg: TToolRegistry;
 
    Second measurement (RAG-pipeline bench, 6 turns, identical model
    decisions, bench/ragbench): 19 visible schemas were 15,703 of a
-   24,214-byte request; desktop, memory_fetch and shell_background were never called, so they
-   joined
-   the set (PasClaw.Tools.Types.ToolIsLongTail); memory_write was tried
-   and put back, because rule 5 recommends it. About 2.6 KB less per
-   request. The same run with --no-mcp had been 228,556 bytes: the
+   24,214-byte request. desktop joined the set (PasClaw.Tools.Types.
+   ToolIsLongTail), revealed as soon as a desktop connects; memory_write,
+   shell_background and memory_fetch were tried in it and put back, since
+   a hidden tool is one the model stops choosing rather than one it
+   searches for. The same run with --no-mcp had been 228,556 bytes: the
    gateway, serve and TUI only reached this registration through
    ConnectMCPServers, which --no-mcp skipped, so those surfaces carried
    all 36 schemas. Fixed at the three call sites.
