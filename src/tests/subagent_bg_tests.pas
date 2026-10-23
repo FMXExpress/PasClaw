@@ -639,6 +639,55 @@ begin
   Left := True;
 end;
 
+procedure TestShellToolsSurviveSubagentsOff;
+(* subagents_enabled:false must not take the background SHELL away.
+
+   Every caller resolved the specs first and skipped the whole
+   registration when the list was empty, so turning off LLM subagents
+   silently removed shell_background, spawn_status, spawn_wait and
+   spawn_cancel -- tools the docs describe with no such dependency. Only
+   spawn_background needs a subagent. (Codex P2 on #619.) *)
+var
+  Reg: TToolRegistry;
+  Provider: ILLMProvider;
+  Ctx: TSubagentContext;
+  Empty: TSubagentSpecArray;
+  Coord: TBackgroundSpawnCoordinator;
+  Out_, Err: string;
+  T: TTool;
+begin
+  Reg := TToolRegistry.Create;
+  Provider := TFakeEchoProvider.Create;
+  try
+    SetLength(Empty, 0);                { what subagents_enabled:false yields }
+    Ctx := Default(TSubagentContext);
+    Ctx.Provider       := Provider;
+    Ctx.ParentRegistry := Reg;
+    Ctx.DefaultModel   := 'fake';
+    Coord := RegisterBackgroundSpawnTools(Reg, Ctx, Empty);
+    AssertTrue(Coord <> nil, 'a coordinator is created with no subagent specs');
+
+    AssertTrue(Reg.Find('shell_background', T), 'shell_background still registers');
+    AssertTrue(Reg.Find('spawn_status', T),     'spawn_status still registers');
+    AssertTrue(Reg.Find('spawn_wait', T),       'spawn_wait still registers');
+    AssertTrue(Reg.Find('spawn_cancel', T),     'spawn_cancel still registers');
+    { The one tool that really does need a subagent. }
+    AssertTrue(not Reg.Find('spawn_background', T),
+               'spawn_background is the only one Specs gates');
+
+    { And it works, not just registers. }
+    Coord.SetKey('no-subagents-session');
+    Out_ := Coord.HandleShellBackground('{"command":"echo shell-still-here"}', Err);
+    AssertTrue(Err = '', 'the shell job starts: ' + Err);
+    WaitForState(Coord, ExtractHandle(Out_), 'state=done', 5);
+    Out_ := Coord.HandleWait('{"handle":"' + ExtractHandle(Out_) + '"}', Err);
+    AssertContains(Out_, 'shell-still-here', 'and delivers its output');
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: shell_background survives subagents_enabled:false');
+end;
+
 procedure TestDoneHookTeardownWaitsForInFlightCall;
 (* SetBackgroundDoneHook(nil) must not return while a handler is running.
 
@@ -1030,5 +1079,6 @@ begin
   TestDoneHookTeardownWaitsForInFlightCall;
   TestCancelAndTimeoutKillTheTree;
   TestBothTUILoopsDrainTheFlash;
+  TestShellToolsSurviveSubagentsOff;
   WriteLn('subagent_bg_tests: OK');
 end.

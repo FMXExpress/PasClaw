@@ -187,6 +187,12 @@ function  EffectiveShellTimeoutMs: Integer;
    pipe closes and the caller is never left hanging. *)
 procedure TerminateProcessTree(Pid: Integer);
 
+{ The procfs mount TerminateProcessTree reads the process table from.
+  '/proc' in production; a test points it at a path that does not exist
+  to exercise the `ps` fallback -- the path macOS and the BSDs take --
+  on a box that does have /proc. POSIX only; a no-op on Windows. }
+procedure SetProcFSRootForTests(const Path: string);
+
 (* Run a program directly from its argv vector -- NO shell. Captures
    combined stdout+stderr (UTF-8) up to OneShotMaxBytes; returns the
    exit code, -1 on spawn failure, 124 if output was truncated and the
@@ -328,6 +334,17 @@ begin
 end;
 {$ENDIF}{$ENDIF}
 
+{ Unconditional so the Windows build has the symbol too, where it does
+  nothing: that arm kills the tree with `taskkill /T /F` and never reads
+  a process table. }
+var
+  GProcFSRoot: string = '/proc';
+
+procedure SetProcFSRootForTests(const Path: string);
+begin
+  if Path = '' then GProcFSRoot := '/proc' else GProcFSRoot := Path;
+end;
+
 {$IFNDEF MSWINDOWS}
 { /proc entries report size 0, so anything that stats first and reads
   that many bytes comes back empty. Read until EOF instead. }
@@ -379,7 +396,7 @@ var
 begin
   Result := False;
   PPid := 0;
-  S := ReadProcFile('/proc/' + IntToStr(Pid) + '/stat');
+  S := ReadProcFile(GProcFSRoot + '/' + IntToStr(Pid) + '/stat');
   if S = '' then Exit;
   Close_ := 0;
   for i := Length(S) downto 1 do
@@ -409,46 +426,157 @@ begin
   {$ENDIF}
 end;
 
+(* (pid, ppid) for every process this user can see, from whichever
+   source the system has.
+
+   /proc is read when it is there: no subprocess, and it is the only
+   source in a stripped container that has no `ps`. It is NOT there on
+   macOS or the BSDs, and the first cut of this walk read nothing else --
+   so on those systems the snapshot came back empty, only the shell pid
+   was signalled, and a cancelled or timed-out command left its compiler
+   workers running while PasClaw reported the job stopped. (Codex P1 on
+   #619.) `ps` is the portable second source: `-o pid=,ppid=` with the
+   trailing `=` suppresses headers on BSD and procps alike.
+
+   GInProcWalk stops the fallback recurring into itself: RunArgvCapture
+   kills a timed-out child through TerminateProcessTree, which lands back
+   here. One level deep the answer is "no table", which costs the
+   descendants of a `ps` that hung -- there are none. *)
+threadvar
+  GInProcWalk: Boolean;
+
+function ProcFSProcTable(Pids, PPids: TList): Boolean;
+var
+  SR: TSearchRec;
+  Pid, PPid: Integer;
+begin
+  Result := False;
+  if ReadProcFile(GProcFSRoot + '/self/stat') = '' then Exit;   { no procfs here }
+  if FindFirst(GProcFSRoot + '/*', faDirectory, SR) <> 0 then Exit;
+  try
+    repeat
+      Pid := StrToIntDef(SR.Name, 0);
+      if (Pid > 1) and ProcParentPid(Pid, PPid) then
+      begin
+        Pids.Add(Pointer(NativeInt(Pid)));
+        PPids.Add(Pointer(NativeInt(PPid)));
+      end;
+    until FindNext(SR) <> 0;
+  finally
+    SysUtils.FindClose(SR);
+  end;
+  Result := True;
+end;
+
+function PSProcTable(Pids, PPids: TList): Boolean;
+var
+  Args: TStringList;
+  Out_, Line: string;
+  i: Integer;
+
+  (* Two integers per line; anything else is skipped. Every name here is
+     local on purpose: a `const` string parameter is passed by reference,
+     so a nested routine that cleared the caller's accumulator cleared
+     its own argument with it -- which is how the first cut of this
+     parsed nothing at all. *)
+  procedure TakeLine(const L: string);
+  var
+    j, k, Pid, PPid: Integer;
+    Tok: string;
+    Nums: array[0..1] of Integer;
+  begin
+    k := 0;
+    Tok := '';
+    Nums[0] := -1;
+    Nums[1] := -1;
+    for j := 1 to Length(L) + 1 do
+      if (j <= Length(L)) and (L[j] > ' ') then
+        Tok := Tok + L[j]
+      else
+      begin
+        if (Tok <> '') and (k < 2) then
+        begin
+          Nums[k] := StrToIntDef(Tok, -1);
+          Inc(k);
+        end;
+        Tok := '';
+      end;
+    if k < 2 then Exit;
+    Pid  := Nums[0];
+    PPid := Nums[1];
+    if (Pid > 1) and (PPid >= 0) then
+    begin
+      Pids.Add(Pointer(NativeInt(Pid)));
+      PPids.Add(Pointer(NativeInt(PPid)));
+    end;
+  end;
+
+begin
+  Result := False;
+  if GInProcWalk then Exit;
+  GInProcWalk := True;
+  try
+    Args := TStringList.Create;
+    try
+      Args.Add('-axo');
+      Args.Add('pid=,ppid=');
+      { /bin/ps is where macOS and the BSDs keep it; the bare name is
+        the fallback for anything that does not. }
+      if RunArgvCapture('/bin/ps', Args, '', Out_, 4000) <> 0 then
+        if RunArgvCapture('ps', Args, '', Out_, 4000) <> 0 then Exit;
+    finally
+      Args.Free;
+    end;
+  finally
+    GInProcWalk := False;
+  end;
+  Line := '';
+  for i := 1 to Length(Out_) + 1 do
+    if (i <= Length(Out_)) and (Out_[i] <> #10) and (Out_[i] <> #13) then
+      Line := Line + Out_[i]
+    else
+    begin
+      if Trim(Line) <> '' then TakeLine(Line);
+      Line := '';
+    end;
+  Result := Pids.Count > 0;
+end;
+
 { Pid and every descendant, deepest last (so the caller signals the list
   in reverse and a parent cannot outlive a child it would re-spawn). }
 procedure CollectTree(Root: Integer; Acc: TList);
 var
-  SR: TSearchRec;
-  Kids: TList;
-  i, Scan, Pid, PPid: Integer;
+  Pids, PPids: TList;
+  i, Scan, Cur: Integer;
 begin
   Acc.Add(Pointer(NativeInt(Root)));
-  Kids := TList.Create;
+  Pids  := TList.Create;
+  PPids := TList.Create;
   try
-    if FindFirst('/proc/*', faDirectory, SR) = 0 then
-    try
-      repeat
-        Pid := StrToIntDef(SR.Name, 0);
-        if Pid > 1 then Kids.Add(Pointer(NativeInt(Pid)));
-      until FindNext(SR) <> 0;
-    finally
-      SysUtils.FindClose(SR);
+    if not ProcFSProcTable(Pids, PPids) then
+    begin
+      Pids.Clear;
+      PPids.Clear;
+      if not PSProcTable(Pids, PPids) then Exit;   { root alone: all we know }
     end;
-    { Breadth-first over the snapshot: for each pid already in Acc,
-      add anything whose parent is it. Bounded by the snapshot, so a
-      /proc that changes under us cannot loop forever. }
+    { Breadth-first over the snapshot: for each pid already in Acc, add
+      anything whose parent is it. Bounded by the snapshot, so a process
+      table that changes under us cannot loop forever. }
     Scan := 0;
     while Scan < Acc.Count do
     begin
-      Root := Integer(NativeInt(Acc[Scan]));
-      for i := 0 to Kids.Count - 1 do
-      begin
-        Pid := Integer(NativeInt(Kids[i]));
-        if (Pid <> 0) and ProcParentPid(Pid, PPid) and (PPid = Root) then
+      Cur := Integer(NativeInt(Acc[Scan]));
+      for i := 0 to Pids.Count - 1 do
+        if (Pids[i] <> nil) and (Integer(NativeInt(PPids[i])) = Cur) then
         begin
-          Acc.Add(Pointer(NativeInt(Pid)));
-          Kids[i] := nil;   { claimed -- a pid has one parent }
+          Acc.Add(Pids[i]);
+          Pids[i] := nil;   { claimed -- a pid has one parent }
         end;
-      end;
       Inc(Scan);
     end;
   finally
-    Kids.Free;
+    PPids.Free;
+    Pids.Free;
   end;
 end;
 {$ENDIF}

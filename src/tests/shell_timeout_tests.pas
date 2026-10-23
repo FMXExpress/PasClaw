@@ -17,6 +17,8 @@ program shell_timeout_tests;
     - the configured default reaches the tool shells and ONLY them. A
       bare RunOneShot -- how an app build and a benchmark agent are
       spawned -- is not bounded by a shell command's timeout.
+    - the descendant walk works where there is no /proc (macOS, the
+      BSDs), via `ps`
     - a timeout kills the whole process TREE. Terminating the /bin/sh
       wrapper alone left the compiler, test runner or `sleep` under it
       running while PasClaw had already reported exit=124.
@@ -200,6 +202,57 @@ begin
   AssertTrue(not PidAlive(Kid),
     'the grandchild (pid ' + Kid + ') was killed with the flooding shell');
   WriteLn('  ok: the output cap kills the tree, not just the shell');
+
+  (* ---- the tree walk without /proc ----
+
+     The descendant walk read /proc and nothing else, so on macOS and the
+     BSDs -- which have no /proc -- the snapshot came back empty, only the
+     shell pid was signalled, and the grandchild above would have
+     survived every one of the three exits while PasClaw reported the
+     command stopped. `ps -axo pid=,ppid=` is the portable second source.
+     (Codex P1 on #619.)
+
+     Exercised here by pointing the procfs root at a path that does not
+     exist, which is the only way to take that branch on a box that has
+     /proc. If `ps` is missing too there is nothing to assert, so the
+     case says so rather than failing. *)
+  SetProcFSRootForTests('/nonexistent-procfs-for-tests');
+  try
+    Code := RunOneShot('/bin/ps -axo pid=,ppid= > /dev/null 2>&1', '', Out_);
+    if Code <> 0 then
+      WriteLn('  skip: no /bin/ps here, so the no-procfs path cannot be checked')
+    else
+    begin
+      if FileExists(PidFile) then DeleteFile(PidFile);
+      SetShellTimeoutOverrideMs(700);
+      T0 := Now;
+      Code := RunOneShot('sh -c ''echo $$ > "' + PidFile + '"; sleep 45'' & wait',
+                         '', Out_);
+      AssertEqInt(Code, 124, 'the wrapper timed out (no-procfs path)');
+      AssertTrue(MilliSecondsBetween(Now, T0) < 8000, 'promptly');
+      SetShellTimeoutOverrideMs(-1);
+      AssertTrue(FileExists(PidFile), 'the grandchild recorded its pid');
+      with TStringList.Create do
+      try
+        LoadFromFile(PidFile);
+        Kid := Trim(Text);
+      finally
+        Free;
+      end;
+      Waited := 0;
+      while PidAlive(Kid) and (Waited < 4000) do
+      begin
+        Sleep(100);
+        Inc(Waited, 100);
+      end;
+      AssertTrue(not PidAlive(Kid),
+        'the grandchild (pid ' + Kid + ') survived with no /proc to walk -- ' +
+        'which is every kill on macOS and the BSDs');
+      WriteLn('  ok: the tree walk finds descendants without /proc (ps)');
+    end;
+  finally
+    SetProcFSRootForTests('');
+  end;
 
   { The tool's argument. }
   Out_ := Tool_Shell('{"command":"sleep 5; echo late","timeout_sec":1}', Err);
