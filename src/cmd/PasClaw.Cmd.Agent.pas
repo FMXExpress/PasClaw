@@ -44,6 +44,7 @@ uses
   PasClaw.Tools.PlanWrite,
   PasClaw.Tools.Worktree,
   PasClaw.Cmd.Attach,         { --attach: the terminal as a gateway client }
+  PasClaw.Client.Api,         { TChatTurnOptions -- what an attached turn asks for }
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.DB,
   PasClaw.Tools.Cron,
@@ -336,6 +337,11 @@ end;
 
 function DefaultAgentArgs: TAgentArgs;
 begin
+  { Whole-record zero first. This used to assign field by field and missed
+    Mode, Attach, Session, BackendOverride and Profile -- the enum and the
+    Boolean among them then held whatever the caller's stack did, so a run
+    could come up in a mode, or attached, that nobody asked for. }
+  Result := Default(TAgentArgs);
   Result.Message       := '';
   Result.Model         := '';
   Result.Provider      := '';
@@ -352,6 +358,52 @@ begin
   Result.Quiet         := False;
   Result.Verbose       := True;   { fuller tool-call previews by default }
   Result.OrientOverride := ooUnset;
+end;
+
+(* What an attached turn should ask the gateway for, from the flags this
+   run was given -- and, in Unsupported, the flags a gateway turn cannot
+   carry at all.
+
+   An attached turn used to send the message and nothing else. The gateway
+   treats a request with no mode as build mode, so `pasclaw agent --attach
+   --plan` ran with mutating tools exposed -- the opposite of what --plan
+   is for -- and --model, --system, --max-tokens and --no-tools were
+   dropped the same way. The five the chat endpoint takes per request are
+   forwarded; the rest are refused by name, because quietly running
+   `--attach --provider x` on the gateway's provider changes what the
+   command means. Display-only flags (--quiet, --verbose, --brief) stay
+   local and are fine. (Codex P1 on #613.) *)
+function AttachTurnOptions(const A: TAgentArgs; out Unsupported: string): TChatTurnOptions;
+var
+  D: TAgentArgs;
+
+  procedure Refuse(const Flag: string);
+  begin
+    if Unsupported <> '' then Unsupported := Unsupported + ', ';
+    Unsupported := Unsupported + Flag;
+  end;
+
+begin
+  D := DefaultAgentArgs;
+  Result := Default(TChatTurnOptions);
+  Unsupported := '';
+  if A.Mode <> pmBuild then Result.Mode := ModeName(A.Mode);
+  Result.Model  := A.Model;
+  Result.System := A.SystemPrompt;
+  if A.MaxTokens <> D.MaxTokens then Result.MaxTokens := A.MaxTokens;
+  Result.NoTools := A.NoTools;
+
+  if A.Provider <> '' then Refuse('--provider');
+  if A.Thinking <> '' then Refuse('--thinking');
+  if A.MaxIterations <> D.MaxIterations then Refuse('--max-iterations');
+  if A.NoMCP then Refuse('--no-mcp');
+  if A.NoHashline then Refuse('--no-hashline');
+  if A.NoPlan then Refuse('--no-plan');
+  if A.OrientOverride <> ooUnset then Refuse('--orient/--no-orient');
+  if (A.GoalObjective <> '') or (A.GoalMaxIters <> D.GoalMaxIters) then
+    Refuse('--goal-objective/--goal-max-iters');
+  if A.BackendOverride <> '' then Refuse('--backend');
+  if A.Profile <> '' then Refuse('--profile');
 end;
 
 function ParseArgs(const Argv: array of string; var A: TAgentArgs): Boolean;
@@ -2017,8 +2069,9 @@ var
   Cfg: TConfig;
   KindSelected: TShellBackendKind;
   BackendDesc, SessionProfile: string;
-  AttachURL, AttachReason, AttachWarn: string;
+  AttachURL, AttachReason, AttachWarn, Unsupported: string;
   AttachFail: Boolean;
+  Turn: TChatTurnOptions;
 begin
   if not ParseArgs(Argv, A) then
   begin
@@ -2063,9 +2116,15 @@ begin
     shell backend, registry) is set up, because none of it runs here. }
   if ResolveAttach(Cfg, A.Attach, AttachURL, AttachReason, AttachWarn, AttachFail) then
   begin
-    if AttachWarn <> '' then PrintLn(Ansi.Yellow + '! ' + Ansi.Reset + AttachWarn);
     try
-      Result := RunAttached(Cfg, AttachURL, A.Session, A.Message, A.Quiet);
+      Turn := AttachTurnOptions(A, Unsupported);
+      if Unsupported <> '' then
+      begin
+        PrintErr(AttachUnsupportedRefusal(Unsupported));
+        Exit(2);
+      end;
+      if AttachWarn <> '' then PrintLn(Ansi.Yellow + '! ' + Ansi.Reset + AttachWarn);
+      Result := RunAttached(Cfg, AttachURL, A.Session, A.Message, A.Quiet, Turn);
     finally
       Cfg.Free;
     end;

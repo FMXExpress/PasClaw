@@ -27,6 +27,12 @@ uses
   PasClaw.Tools.Registry;
 
 type
+  { A process-wide "stop" a channel can poll without being told -- the
+    gateway's signal flag (PasClaw.Gateway.RunFile.StopRequested). A plain
+    function so a signal handler, which may only set a flag, never has to
+    reach into this object. }
+  TStopCheckFn = function: Boolean;
+
   TTelegramChannel = class
   private
     FToken:     string;
@@ -35,6 +41,8 @@ type
     FRegistry:  TToolRegistry;
     FOffset:    Int64;
     FStop:      Boolean;
+    FStopCheck: TStopCheckFn;
+    function Stopping: Boolean;
     function ApiUrl(const Method: string): string;
     function GetUpdates(out RawJSON: string): Boolean;
     function SendMessage(ChatId: Int64; const Text: string): Boolean;
@@ -42,8 +50,16 @@ type
   public
     constructor Create(const Token: string; Cfg: TConfig;
                        Provider: ILLMProvider; Registry: TToolRegistry);
-    procedure Run;       { blocks until Stop is called or Ctrl-C }
+    procedure Run;       { blocks until RequestStop, or StopCheck says so }
     procedure RequestStop;
+    (* Consulted alongside RequestStop, between long-polls. `pasclaw gateway
+       --telegram` blocks in Run rather than in Server.WaitForStop, and the
+       Ctrl-C / SIGTERM handler only sets a process-wide flag -- so with
+       nothing reading that flag here, the first signal did nothing at all
+       and the second (SIG_DFL by then) killed the process without the
+       cleanup the handler exists for, leaving the run file stale. (Codex
+       P1 on #613.) Bounded by the long-poll: up to ~25 s. *)
+    property StopCheck: TStopCheckFn read FStopCheck write FStopCheck;
   end;
 
 implementation
@@ -220,11 +236,11 @@ begin
   LogInfo('telegram: long-poll started (token ...%s)',
     [Copy(FToken, Length(FToken) - 5, 5)]);
 
-  while not FStop do
+  while not Stopping do
   begin
     if not GetUpdates(RawJSON) then
     begin
-      Sleep(2000);
+      if not Stopping then Sleep(2000);
       Continue;
     end;
     Obj := TJsonObject.Parse(RawJSON);
@@ -257,6 +273,11 @@ end;
 procedure TTelegramChannel.RequestStop;
 begin
   FStop := True;
+end;
+
+function TTelegramChannel.Stopping: Boolean;
+begin
+  Result := FStop or (Assigned(FStopCheck) and FStopCheck());
 end;
 
 end.

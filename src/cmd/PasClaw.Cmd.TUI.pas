@@ -37,6 +37,7 @@ uses
   PasClaw.Tools.MemoryFetch,
   PasClaw.Tools.Worktree,
   PasClaw.Cmd.Attach,        { --attach: the terminal as a gateway client }
+  PasClaw.Client.Api,        { TChatTurnOptions -- what an attached turn asks for }
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
   PasClaw.Shell.Backend,           { StartShellSession / SetCurrentSessionId
@@ -111,8 +112,9 @@ var
   KindSelected: TShellBackendKind;
   BackendDesc: string;
   ShellSessionId: string;
-  AttachURL, AttachReason, AttachWarn: string;
+  AttachURL, AttachReason, AttachWarn, Unsupported: string;
   AttachFail: Boolean;
+  Turn: TChatTurnOptions;
 begin
   if not ParseArgs(Argv, A) then Exit(1);
   Cfg := LoadConfig(A.Profile);
@@ -124,7 +126,26 @@ begin
   begin
     if AttachWarn <> '' then PrintLn(Ansi.Yellow + '! ' + Ansi.Reset + AttachWarn);
     try
-      Result := RunAttached(Cfg, AttachURL, A.Session, '', False);
+      { The two TUI flags a gateway turn can carry are forwarded; the rest
+        are refused by name rather than dropped (see AttachTurnOptions in
+        Cmd.Agent). --theme is cosmetic and the attached TUI is a line
+        REPL, so it is simply unused. (Codex P1 on #613.) }
+      Turn := Default(TChatTurnOptions);
+      Turn.Model   := A.Model;
+      Turn.NoTools := A.NoTools;
+      Unsupported := '';
+      if A.Provider <> '' then Unsupported := Unsupported + '--provider, ';
+      if A.NoMCP then Unsupported := Unsupported + '--no-mcp, ';
+      if A.NoHashline then Unsupported := Unsupported + '--no-hashline, ';
+      if A.BackendOverride <> '' then Unsupported := Unsupported + '--backend, ';
+      if A.Profile <> '' then Unsupported := Unsupported + '--profile, ';
+      if Unsupported <> '' then
+      begin
+        SetLength(Unsupported, Length(Unsupported) - 2);
+        PrintErr(AttachUnsupportedRefusal(Unsupported));
+        Exit(2);
+      end;
+      Result := RunAttached(Cfg, AttachURL, A.Session, '', False, Turn);
     finally
       Cfg.Free;
     end;

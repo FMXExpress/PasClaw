@@ -886,7 +886,9 @@ test-mcp-disclosure: | $(BUILDDIR)
 # Tool-RPC server: the in-process callback the execute_code script uses
 # to reach back into the parent's tool registry. PASCLAW_HOME isolated so
 # the info file lands in a scratch dir.
-test-runfile: | $(BUILDDIR)
+# $(BIN) because one case runs `pasclaw agent --attach` for real against a
+# fake gateway -- the bug it guards was in what that command sent.
+test-runfile: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/runfile_tests.pas -o$(BUILDDIR)/runfile_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
