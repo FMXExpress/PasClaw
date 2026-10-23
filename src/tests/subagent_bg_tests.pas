@@ -36,7 +36,7 @@ program subagent_bg_tests;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  SysUtils, Classes,
+  SysUtils, Classes, DateUtils,
   PasClaw.Config,
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
@@ -44,7 +44,9 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Subagent,
-  PasClaw.Agent.SubagentBg;
+  PasClaw.Agent.SubagentBg,
+  PasClaw.Platform;        { RunOneShot -- the tree-kill test asks the OS
+                             whether a pid is still alive }
 
 var
   GLastSeenSystemPrompt: string;
@@ -154,6 +156,9 @@ var
 begin
   Provider  := TFakeEchoProvider.Create;
   ParentReg := TToolRegistry.Create;
+  { A stack record: zero it, or Ctx.Cfg is whatever the stack held and
+    the coordinator's config-aware paths dereference garbage. }
+  Ctx := Default(TSubagentContext);
   SetLength(Specs, 1);
   Specs[0].Name         := 'researcher';
   Specs[0].Description  := 'pretend research';
@@ -602,6 +607,415 @@ begin
   end;
 end;
 
+type
+  TDoneCatcher = class
+  public
+    Count: Integer;
+    LastKey, LastHandle, LastSummary: string;
+    procedure OnDone(const Key, Handle, Summary: string);
+  end;
+
+procedure TDoneCatcher.OnDone(const Key, Handle, Summary: string);
+begin
+  Inc(Count);
+  LastKey := Key; LastHandle := Handle; LastSummary := Summary;
+end;
+
+type
+  (* A handler that is SLOW on purpose. The point of the teardown test is
+     that clearing the hook waits for a callback already running, so the
+     test needs one it can catch in the act. *)
+  TSlowCatcher = class
+  public
+    Entered: Boolean;
+    Left:    Boolean;
+    procedure OnDone(const Key, Handle, Summary: string);
+  end;
+
+procedure TSlowCatcher.OnDone(const Key, Handle, Summary: string);
+begin
+  Entered := True;
+  Sleep(600);
+  Left := True;
+end;
+
+procedure TestDoneHookTeardownWaitsForInFlightCall;
+(* SetBackgroundDoneHook(nil) must not return while a handler is running.
+
+   The TUI installs a method of the TTUI object and clears it on the way
+   to freeing that object. With a bare `if Assigned(hook) then hook(...)`
+   there was a window between the test and the call: the main thread
+   could clear the pointer AND free the object, and the job's thread
+   would then run a method of freed memory -- on any ordinary shutdown
+   with a job still finishing. (Codex P2 on #610.)
+
+   Proven by the clock. The handler sleeps; the test waits until it is
+   known to be inside it, then times the clear. A clear that does not
+   synchronise returns in microseconds. *)
+var
+  Coord: TBackgroundSpawnCoordinator;
+  Provider: ILLMProvider;
+  ParentReg: TToolRegistry;
+  Slow: TSlowCatcher;
+  Out_, Err: string;
+  Waited: Integer;
+  T0: TDateTime;
+  Elapsed: Int64;
+begin
+  Coord := MakeCoord(Provider, ParentReg);
+  Slow  := TSlowCatcher.Create;
+  try
+    Coord.SetKey('teardown-test');
+    SetBackgroundDoneHook(Slow.OnDone);
+    Out_ := Coord.HandleShellBackground('{"command":"echo done-fast"}', Err);
+    AssertTrue(Err = '', 'job starts: ' + Err);
+
+    { Wait until the handler is definitely inside the sleep. }
+    Waited := 0;
+    while (not Slow.Entered) and (Waited < 5000) do
+    begin
+      Sleep(20);
+      Inc(Waited, 20);
+    end;
+    AssertTrue(Slow.Entered, 'the completion handler ran at all');
+    AssertTrue(not Slow.Left, 'and the test caught it mid-call');
+
+    T0 := Now;
+    SetBackgroundDoneHook(nil);
+    Elapsed := MilliSecondsBetween(Now, T0);
+    AssertTrue(Slow.Left,
+               'clearing the hook waited for the in-flight callback -- ' +
+               'returning early is the window where the TUI frees the ' +
+               'object the handler belongs to');
+    AssertTrue(Elapsed >= 200,
+               'and it really blocked (waited ' + IntToStr(Elapsed) + ' ms)');
+
+    { And nothing fires afterwards. }
+    Slow.Entered := False;
+    Out_ := Coord.HandleShellBackground('{"command":"echo after-clear"}', Err);
+    AssertTrue(Err = '', 'second job starts: ' + Err);
+    WaitForState(Coord, ExtractHandle(Out_), 'state=done', 5);
+    Sleep(200);
+    AssertTrue(not Slow.Entered, 'a cleared hook is not called again');
+  finally
+    SetBackgroundDoneHook(nil);
+    Slow.Free;
+    Coord.Free;
+    ParentReg.Free;
+  end;
+  WriteLn('  ok: clearing the done hook waits for an in-flight callback');
+end;
+
+{$IFDEF UNIX}
+function PidAlive(const Pid: string): Boolean;
+var
+  Out_: string;
+begin
+  Result := RunOneShot('kill -0 ' + Pid + ' 2>/dev/null && echo YES || echo NO',
+                       '', Out_) >= 0;
+  Result := Result and (Pos('YES', Out_) > 0);
+end;
+
+function ReadPidFile(const Path: string): string;
+begin
+  Result := '';
+  if not FileExists(Path) then Exit;
+  with TStringList.Create do
+  try
+    LoadFromFile(Path);
+    Result := Trim(Text);
+  finally
+    Free;
+  end;
+end;
+{$ENDIF}
+
+procedure TestCancelAndTimeoutKillTheTree;
+(* Cancelling or timing out a background shell job must kill everything
+   the command started, not just the /bin/sh wrapper the job holds.
+
+   Terminating the wrapper alone left compiler workers, `make -j` children
+   and anything launched with `&` running after spawn_cancel had already
+   reported the job killed -- writing files and burning CPU with nothing
+   holding a handle to them. (Codex P1 on #610.) *)
+{$IFDEF UNIX}
+var
+  Coord: TBackgroundSpawnCoordinator;
+  Provider: ILLMProvider;
+  ParentReg: TToolRegistry;
+  Out_, Err, R, Dir, PidFile, Kid: string;
+  Waited: Integer;
+
+  { A command whose GRANDCHILD records its pid and then outlives any
+    sane test: it survives unless the tree is killed. The inner double
+    quotes are JSON-escaped -- this string is spliced into the tool's
+    JSON argument, not handed to a shell directly. }
+  function TreeCommand(const F: string): string;
+  begin
+    Result := 'sh -c ''echo $$ > \"' + F + '\"; sleep 45'' & wait';
+  end;
+
+  procedure ExpectGone(const Pid, What: string);
+  begin
+    Waited := 0;
+    while PidAlive(Pid) and (Waited < 4000) do
+    begin
+      Sleep(100);
+      Inc(Waited, 100);
+    end;
+    AssertTrue(not PidAlive(Pid),
+      What + ': the grandchild (pid ' + Pid + ') outlived its job -- ' +
+      'killing only the shell wrapper leaves it running');
+  end;
+
+begin
+  Dir := GetTempDir;
+  Coord := MakeCoord(Provider, ParentReg);
+  try
+    Coord.SetKey('treekill-test');
+
+    { ---- cancel ---- }
+    PidFile := IncludeTrailingPathDelimiter(Dir) + 'bg-treekill-cancel.pid';
+    if FileExists(PidFile) then DeleteFile(PidFile);
+    Out_ := Coord.HandleShellBackground(
+              '{"command":"' + TreeCommand(PidFile) + '"}', Err);
+    AssertTrue(Err = '', 'tree job starts: ' + Err);
+    Waited := 0;
+    while (ReadPidFile(PidFile) = '') and (Waited < 4000) do
+    begin
+      Sleep(50);
+      Inc(Waited, 50);
+    end;
+    Kid := ReadPidFile(PidFile);
+    AssertTrue(Kid <> '', 'the grandchild recorded its pid');
+    AssertTrue(PidAlive(Kid), 'and is running before the cancel');
+    R := Coord.HandleCancel('{"handle":"' + ExtractHandle(Out_) + '"}', Err);
+    AssertContains(R, 'killed', 'cancel reports the kill');
+    ExpectGone(Kid, 'cancel');
+
+    { ---- timeout ---- }
+    PidFile := IncludeTrailingPathDelimiter(Dir) + 'bg-treekill-timeout.pid';
+    if FileExists(PidFile) then DeleteFile(PidFile);
+    Out_ := Coord.HandleShellBackground(
+              '{"command":"' + TreeCommand(PidFile) + '","timeout_sec":1}', Err);
+    AssertTrue(Err = '', 'timeout job starts: ' + Err);
+    Waited := 0;
+    while (ReadPidFile(PidFile) = '') and (Waited < 4000) do
+    begin
+      Sleep(50);
+      Inc(Waited, 50);
+    end;
+    Kid := ReadPidFile(PidFile);
+    AssertTrue(Kid <> '', 'the grandchild recorded its pid (timeout case)');
+    WaitForState(Coord, ExtractHandle(Out_), 'state=done', 8);
+    R := Coord.HandleWait('{"handle":"' + ExtractHandle(Out_) + '"}', Err);
+    AssertTrue(Pos('exit=124', R) = 1, 'timeout reports 124: ' + Copy(R, 1, 40));
+    ExpectGone(Kid, 'timeout');
+  finally
+    Coord.Free;
+    ParentReg.Free;
+  end;
+  WriteLn('  ok: cancel and timeout kill the job''s whole process tree');
+end;
+{$ELSE}
+begin
+  WriteLn('  skip: process-tree assertions are POSIX-only here');
+end;
+{$ENDIF}
+
+function StripPascalComments(const S: string): string;
+(* Blank out brace comments, parenthesis-star comments and line
+   comments, keeping length and newlines so positions still line up.
+
+   Needed because the check below searches for a CALL, and the comment
+   that explains the call mentions it by name -- without this the check
+   passed on a body that only TALKED about draining, which is how this
+   check first failed to catch its own bug. *)
+var
+  i, N: Integer;
+  Closing: string;
+begin
+  Result := S;
+  i := 1;
+  N := Length(S);
+  while i <= N do
+  begin
+    Closing := '';
+    if S[i] = '{' then Closing := '}'
+    else if (S[i] = '(') and (i < N) and (S[i + 1] = '*') then Closing := '*)'
+    else if (S[i] = '/') and (i < N) and (S[i + 1] = '/') then Closing := #10;
+    if Closing = '' then
+    begin
+      Inc(i);
+      Continue;
+    end;
+    while i <= N do
+    begin
+      if (Length(Closing) = 1) and (S[i] = Closing[1]) then
+      begin
+        if Closing <> #10 then Result[i] := ' ';
+        Inc(i);
+        Break;
+      end;
+      if (Length(Closing) = 2) and (i < N) and
+         (S[i] = Closing[1]) and (S[i + 1] = Closing[2]) then
+      begin
+        Result[i] := ' ';
+        Result[i + 1] := ' ';
+        Inc(i, 2);
+        Break;
+      end;
+      if S[i] <> #10 then Result[i] := ' ';
+      Inc(i);
+    end;
+  end;
+end;
+
+procedure TestBothTUILoopsDrainTheFlash;
+(* Every TTUI.Run must call DrainBackgroundFlash.
+
+   There are two of them -- the Delphi positioned TUI and the FPC line
+   REPL -- in one file, each inside its own compiler branch. Only the
+   Delphi loop called the drain, so on FPC a completion was parked in
+   FBgFlashPending and never shown: the operator got no notification at
+   all and the FPC half of DrainBackgroundFlash was dead code. (Codex P2
+   on #610.)
+
+   A source check because neither loop can be driven from a test: one
+   positions a console, the other blocks in ReadLn. The thing that went
+   wrong is exactly a missing call, which is what this reads. *)
+var
+  Src, Body: string;
+  Sl: TStringList;
+  P, Stop, Found: Integer;
+const
+  TUIPath = 'src/pkg/tui/PasClaw.TUI.pas';
+begin
+  if not FileExists(TUIPath) then
+  begin
+    WriteLn('  skipping TUI drain check: run from the repo root to include it');
+    Exit;
+  end;
+  Sl := TStringList.Create;
+  try
+    Sl.LoadFromFile(TUIPath);
+    Src := Sl.Text;
+  finally
+    Sl.Free;
+  end;
+
+  Found := 0;
+  P := Pos('procedure TTUI.Run;', Src);
+  while P > 0 do
+  begin
+    Inc(Found);
+    { The body runs to the next routine at column 0. }
+    Stop := Pos(#10'procedure ', Copy(Src, P + 20, Length(Src)));
+    if Stop <= 0 then Stop := Length(Src) else Inc(Stop, P + 19);
+    Body := StripPascalComments(Copy(Src, P, Stop - P));
+    AssertTrue(Pos('DrainBackgroundFlash;', Body) > 0,
+               'TTUI.Run #' + IntToStr(Found) + ' never drains the ' +
+               'background-completion flash, so that build shows the ' +
+               'operator nothing when a job finishes');
+    P := Pos('procedure TTUI.Run;', Copy(Src, Stop, Length(Src)));
+    if P > 0 then Inc(P, Stop - 1);
+  end;
+  AssertTrue(Found >= 2,
+             'expected a TTUI.Run per build (Delphi + FPC); found ' +
+             IntToStr(Found) + ' -- if the surfaces merged, revisit this');
+  WriteLn('  ok: both TUI loops drain the background-completion flash');
+end;
+
+procedure TestShellBackground;
+(* shell_background: a shell command as a job. Same handle space, status,
+   wait, cancel and drain as a subagent, plus the things a shell needs: the
+   denylist, a timeout that kills, and a cancel that kills. *)
+var
+  Coord: TBackgroundSpawnCoordinator;
+  Provider: ILLMProvider;
+  ParentReg: TToolRegistry;
+  Out_, Err, H, R, Blk: string;
+  Catcher: TDoneCatcher;
+  T0: TDateTime;
+begin
+  Coord := MakeCoord(Provider, ParentReg);
+  Catcher := TDoneCatcher.Create;
+  try
+    Coord.SetKey('shell-test-session');
+    SetBackgroundDoneHook(Catcher.OnDone);
+
+    { Runs, delivers exit + output, status names the command. }
+    Out_ := Coord.HandleShellBackground('{"command":"echo hello-bg"}', Err);
+    AssertTrue(Err = '', 'shell_background starts: ' + Err);
+    H := ExtractHandle(Out_);
+    AssertTrue(Copy(H, 1, 3) = 'sh-', 'shell handle prefix: ' + H);
+    WaitForState(Coord, H, 'state=done', 5);
+    R := Coord.HandleWait('{"handle":"' + H + '"}', Err);
+    AssertTrue(Err = '', 'wait ok: ' + Err);
+    AssertTrue(Pos('exit=0', R) = 1, 'result starts with exit=0: ' + Copy(R, 1, 40));
+    AssertContains(R, 'hello-bg', 'output delivered');
+    R := Coord.HandleStatus('{"handle":"' + H + '"}', Err);
+    AssertContains(R, 'command=echo hello-bg', 'status shows the command');
+    AssertTrue(Catcher.Count >= 1, 'done hook fired');
+    AssertEqStr(Catcher.LastHandle, H, 'hook carries the handle');
+    AssertEqStr(Catcher.LastKey, 'shell-test-session', 'hook carries the drain key');
+    AssertContains(Catcher.LastSummary, 'exit=0', 'hook summary has the exit code');
+
+    { Denylist applies. }
+    Out_ := Coord.HandleShellBackground('{"command":"rm -rf /"}', Err);
+    AssertTrue(Err <> '', 'denylisted command refused');
+    AssertTrue(Out_ = '', 'no handle for a refused command');
+
+    {$IFDEF UNIX}
+    { Timeout kills with exit 124. }
+    Out_ := Coord.HandleShellBackground('{"command":"sleep 30; echo late","timeout_sec":1}', Err);
+    AssertTrue(Err = '', 'timeout job starts: ' + Err);
+    H := ExtractHandle(Out_);
+    T0 := Now;
+    WaitForState(Coord, H, 'state=done', 6);
+    AssertTrue(SecondsBetween(Now, T0) < 5, 'timed-out job finished promptly');
+    R := Coord.HandleWait('{"handle":"' + H + '"}', Err);
+    AssertTrue(Pos('exit=124', R) = 1, 'timeout reports exit=124: ' + Copy(R, 1, 40));
+    AssertContains(R, 'timed out', 'timeout note present');
+    AssertNotContains(R, 'late', 'the command did not finish');
+
+    { Cancel kills. }
+    Out_ := Coord.HandleShellBackground('{"command":"sleep 30"}', Err);
+    AssertTrue(Err = '', 'long job starts: ' + Err);
+    H := ExtractHandle(Out_);
+    Sleep(300);
+    R := Coord.HandleCancel('{"handle":"' + H + '"}', Err);
+    AssertContains(R, 'killed', 'cancel kills a local shell job');
+    T0 := Now;
+    WaitForState(Coord, H, 'state=cancelled', 4);
+    R := Coord.HandleStatus('{"handle":"' + H + '"}', Err);
+    AssertContains(R, 'state=cancelled', 'job is cancelled');
+    AssertTrue(SecondsBetween(Now, T0) < 4, 'cancelled job stopped promptly, not after 30 s');
+    {$ENDIF}
+
+    { Drain: shell results under their own header, once. The jobs above
+      were collected by spawn_wait (wait marks them delivered), so run one
+      more and let it finish on its own. }
+    Out_ := Coord.HandleShellBackground('{"command":"echo drain-me"}', Err);
+    H := ExtractHandle(Out_);
+    WaitForState(Coord, H, 'state=done', 5);
+    Blk := Coord.DrainFinishedBlock(8192);
+    AssertContains(Blk, '[background shell results]', 'shell block header');
+    AssertContains(Blk, 'drain-me', 'the uncollected job is in the drain');
+    AssertContains(Blk, 'shell "echo drain-me"', 'entry names the command');
+    AssertNotContains(Blk, 'hello-bg', 'a job collected by spawn_wait is not re-delivered');
+    AssertNotContains(Blk, '[background subagent results]', 'no subagent header when only shells finished');
+    Blk := Coord.DrainFinishedBlock(8192);
+    AssertNotContains(Blk, 'drain-me', 'delivered once');
+  finally
+    SetBackgroundDoneHook(nil);
+    Catcher.Free;
+    Coord.Free;
+    ParentReg.Free;
+  end;
+  WriteLn('  ok: shell_background runs, denies, times out, cancels (kills), drains, notifies');
+end;
+
 begin
   TestSpawnReturnsHandleAndJobStarts;
   TestWaitReturnsResultWhenDone;
@@ -612,5 +1026,9 @@ begin
   TestSpawnWaitDeliversFullEvenAfterPreviewTruncated;
   TestDrainedBlockReachesModelButNotFinalSystemPrompt;
   TestGatewayShapedDrainByStampedKey;
+  TestShellBackground;
+  TestDoneHookTeardownWaitsForInFlightCall;
+  TestCancelAndTimeoutKillTheTree;
+  TestBothTUILoopsDrainTheFlash;
   WriteLn('subagent_bg_tests: OK');
 end.

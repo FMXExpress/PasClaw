@@ -37,7 +37,7 @@ unit PasClaw.TUI;
 interface
 
 uses
-  SysUtils,
+  SysUtils, SyncObjs,              { TCriticalSection for the background-done flash }
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
   PasClaw.Providers.Models,        { TModelInfoArray is referenced from the
@@ -88,6 +88,10 @@ type
       so a session-lifetime snapshot is correct and matches the CLI's
       session-scoped easy-provider cache. }
     FRouteCfg: TConfig;
+    { Background-job completions arrive on the job's thread; they are
+      parked here and flashed from the UI loop. }
+    FBgFlashLock:    TCriticalSection;
+    FBgFlashPending: string;
     { NB: RouteConfig is declared further down, after every field -- dcc64
       (E2169) forbids a field definition after a method/property in the same
       visibility section, and the build branches below add more fields. }
@@ -243,6 +247,7 @@ type
       field-before-method rule isn't broken by the conditional field blocks
       above. Lazily loads + caches FRouteCfg for the per-turn auto-router. }
     function RouteConfig: TConfig;
+    procedure DrainBackgroundFlash;   { both builds: parks -> footer flash }
   public
     (* Operator's prompt-cache settings. Defaults to default-on (matches
        DefaultChatOptions). Cmd_TUI_Run copies Cfg.PromptCache into this
@@ -300,6 +305,11 @@ type
     constructor Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
     {$IFNDEF FPC}destructor Destroy; override;{$ENDIF}
     procedure Run;
+    { SetBackgroundDoneHook target: a spawn_background / shell_background
+      job finished. Called on the job's thread, so it only parks the line;
+      the UI loop flashes it. The model gets the result itself at the top
+      of its next turn through the drain. }
+    procedure BackgroundDone(const Key, Handle, Summary: string);
   end;
 
 implementation
@@ -307,7 +317,6 @@ implementation
 uses
   PasClaw.Workspaces,
   Classes,
-  SyncObjs,
   DateUtils,
   PasClaw.CliUI,
   PasClaw.Utils,                   { VisibleLength + PadVisibleRight +
@@ -497,9 +506,44 @@ begin
   PromptCacheTTL     := '';
   RenderMarkdownEnabled := True;
   FRouteCfg := nil;
+  FBgFlashLock := TCriticalSection.Create;
+  FBgFlashPending := '';
   {$IFNDEF FPC}
   FToolActivityLock := TCriticalSection.Create;
   SetLength(FToolActivity, 0);
+  {$ENDIF}
+end;
+
+procedure TTUI.BackgroundDone(const Key, Handle, Summary: string);
+begin
+  FBgFlashLock.Enter;
+  try
+    FBgFlashPending := 'background ' + Handle + ' finished -- ' + Summary +
+                       ' (delivered on your next turn)';
+  finally
+    FBgFlashLock.Leave;
+  end;
+end;
+
+procedure TTUI.DrainBackgroundFlash;
+var
+  S: string;
+begin
+  FBgFlashLock.Enter;
+  try
+    S := FBgFlashPending;
+    FBgFlashPending := '';
+  finally
+    FBgFlashLock.Leave;
+  end;
+  if S = '' then Exit;
+  {$IFNDEF FPC}
+  Flash(S);
+  {$ELSE}
+  { The FPC build is a line REPL with no footer; a dim line will do.
+    PrintLn, not WriteLn, like the rest of this surface -- it is the
+    helper that gets UTF-8 onto a Windows console. }
+  PrintLn(Ansi.Dim + '[' + S + ']' + Ansi.Reset);
   {$ENDIF}
 end;
 
@@ -569,6 +613,14 @@ begin
   end;
   FSession.Free;
   FRouteCfg.Free;
+  { Safe to free, unlike FToolActivityLock below: the only thing that
+    touches it from another thread is BackgroundDone, and Cmd_TUI_Run
+    calls SetBackgroundDoneHook(nil) -- which blocks until any in-flight
+    callback has returned -- before it frees this object. (The FPC build
+    has no destructor at all and leaks this one; it is a single critical
+    section in a one-TUI-per-process surface.) }
+  FBgFlashLock.Free;
+  FBgFlashLock := nil;
   { FToolActivityLock is deliberately NOT freed: on the bounded-wait timeout
     path above a worker is handed to FreeOnTerminate and may still fire
     OnToolCall/OnToolResult into LiveToolCall during teardown. Freeing the lock
@@ -2693,6 +2745,7 @@ begin
     begin
       PollLoopWorker;
       PollModelRefresh;
+      DrainBackgroundFlash;
 
       { Periodic ListSessions refresh so cron-side / parallel-CLI
         session changes show up without keystrokes. 3s cadence. }
@@ -3166,9 +3219,19 @@ begin
   FQuit := False;
   while not FQuit do
   begin
+    (* Background completions, as a line. There is no footer to flash
+       into here and no frame loop to flash from -- this REPL blocks in
+       ReadLn -- so they print at the two moments the operator is looking
+       at the prompt: before it (a job that finished during the last
+       turn) and right after their Enter (one that finished while they
+       were typing). Without this the parked line was never shown at all:
+       DrainBackgroundFlash was only called from the Delphi frame loop, so
+       the FPC branch of it was dead code. (Codex P2 on #610.) *)
+    DrainBackgroundFlash;
     Print(Ansi.BoldBlue + 'you' + Ansi.Reset + '      > ');
     if EOF then Break;
     ReadLn(Line);
+    DrainBackgroundFlash;
     Line := Trim(Line);
     if Line = '' then Continue;
     if (Line[1] = '/') then

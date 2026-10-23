@@ -802,7 +802,15 @@ begin
       begin
         N := P.Output.Read(Buf, SizeOf(Buf));
         if N > 0 then begin M.WriteBuffer(Buf, N); Inc(Total, N); end;
-        if Total > OneShotMaxBytes then begin P.Terminate(124); Break; end;
+        if Total > OneShotMaxBytes then
+        begin
+          { The tree here too: a command killed for flooding its output
+            had started the flooders. #608 fixed the timeout exit and
+            left this one signalling the shell alone. }
+          TerminateProcessTree(P.ProcessID);
+          if P.Running then try P.Terminate(124); except end;
+          Break;
+        end;
       end;
       if (TimeoutMs > 0) and P.Running and
          (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
@@ -934,7 +942,15 @@ begin
       begin
         N := P.Output.Read(Buf, SizeOf(Buf));
         if N > 0 then begin M.WriteBuffer(Buf, N); Inc(Total, N); end;
-        if Total > OneShotMaxBytes then begin P.Terminate(124); Break; end;
+        if Total > OneShotMaxBytes then
+        begin
+          { The tree here too: a command killed for flooding its output
+            had started the flooders. #608 fixed the timeout exit and
+            left this one signalling the shell alone. }
+          TerminateProcessTree(P.ProcessID);
+          if P.Running then try P.Terminate(124); except end;
+          Break;
+        end;
       end;
       if (TimeoutMs > 0) and P.Running and
          (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
@@ -1262,7 +1278,13 @@ begin
       begin
         Acc.WriteBuffer(Buf, N);
         Inc(Total, N);
-        if Total > OneShotMaxBytes then begin P.Terminate; Break; end;
+        if Total > OneShotMaxBytes then
+        begin
+          { The tree here too -- see the timeout exit below. }
+          TerminateProcessTree(P.ProcessId);
+          if P.Running then P.Terminate;
+          Break;
+        end;
       end
       else if not P.Running then Break;
       if (TimeoutMs > 0) and (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
@@ -1550,7 +1572,13 @@ begin
       begin
         Acc.WriteBuffer(Buf, N);
         Inc(Total, N);
-        if Total > OneShotMaxBytes then begin P.Terminate; Break; end;
+        if Total > OneShotMaxBytes then
+        begin
+          { The tree here too -- see the timeout exit below. }
+          TerminateProcessTree(P.ProcessId);
+          if P.Running then P.Terminate;
+          Break;
+        end;
       end
       else if not P.Running then Break;
       if (TimeoutMs > 0) and (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
@@ -1643,7 +1671,9 @@ begin
         if Total > OneShotMaxBytes then
         begin
           Overflow := True;
-          P.Terminate;
+          { The tree here too -- see the timeout exit below. }
+          TerminateProcessTree(P.ProcessId);
+          if P.Running then P.Terminate;
           Break;
         end;
       end
