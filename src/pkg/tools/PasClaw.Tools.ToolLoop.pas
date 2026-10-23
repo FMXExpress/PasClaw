@@ -192,6 +192,13 @@ type
        then refuses: it must never quietly become allow. "Allow for
        this session" is remembered under SteeringKey. *)
     OnAsk:          TPermAskFn;
+    (* The directory this loop's tools work in, when it is not the
+       process-wide sandbox workspace: a subagent given a git worktree.
+       DispatchOneToolCall sets it as the thread's sandbox workspace
+       around every dispatch (loop thread and parallel workers alike)
+       and restores the previous value after, so relative paths, the
+       write boundary and the shell cwd all point here. '' = inherit. *)
+    Workspace:      string;
     { Bounded same-provider retry on a transient HTTP status. 0 disables.
       Populated from TConfig; see the field comments there for why this
       excludes status <= 0. }
@@ -414,6 +421,7 @@ uses
   PasClaw.Condense.JSON,
   PasClaw.Promptware,       { injection scan on tool results -- chokepoint 1 }
   PasClaw.Tools.PlanWrite,  { ResolvePlanPath -- the SPACE-mode gate key }
+  PasClaw.Tools.Sandbox,    { SetThreadSandboxWorkspace -- Cfg.Workspace per dispatch }
   PasClaw.Utils,            { NowStampWithZone -- the per-turn clock }
   PasClaw.Otel;             (* agent.turn / chat / execute_tool spans.
                                All helpers are no-ops when OTel is
@@ -803,6 +811,7 @@ var
   HasUnsup: Boolean;
   PlanTool: TTool;
   SavedCfg: PToolLoopConfig;
+  SavedWs: string;
 begin
   { Publish this run's config to the dispatching thread (loop thread for
     serial/mutating tools, worker thread for parallel read-only ones) so any
@@ -812,6 +821,8 @@ begin
   SetActiveConfig(Cfg.ActiveConfig);
   SavedCfg := GDispatchingCfg;
   GDispatchingCfg := @Cfg;
+  SavedWs := ThreadSandboxWorkspace;
+  if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(Cfg.Workspace);
   try
   D.Err        := '';
   D.ResultText := '';
@@ -916,6 +927,7 @@ begin
       D.Err := 'format_error: unable to canonicalize patch for deterministic retry; regenerate patch intent or use safer apply-patch/unified-diff edit path. original=' + D.Err;
   end;
   finally
+    if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(SavedWs);
     GDispatchingCfg := SavedCfg;
     SetActiveConfig(nil);
   end;

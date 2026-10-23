@@ -112,6 +112,20 @@ type
     procedure SetContext(const ACtx: TSubagentContext);
   end;
 
+(* worktree.enabled, as the spawn tools see it. A nil Cfg (tests, an
+   embedder that never set one) reads as the documented default, on.
+
+   With the feature off, the standalone worktree_* tools were the only
+   thing that disappeared: spawn and spawn_background still advertised a
+   `worktree` argument and still created a branch and a checkout when it
+   was passed -- the opt-out held for one door out of three. Both
+   handlers now refuse the argument and neither schema offers it.
+   (Codex P2 on #612.) *)
+function WorktreeArgEnabled(Cfg: TConfig): Boolean;
+{ The refusal both handlers return for a worktree argument when the
+  feature is off. Prefix is the tool name. }
+function WorktreeDisabledRefusal(const Prefix: string): string;
+
 (* Build a TToolRegistry holding a subset of the source registry,
    keyed by name. Tools not present in the source are silently
    skipped (logged as a warning so the operator notices a typo).
@@ -155,6 +169,7 @@ uses
   PasClaw.Logger,
   PasClaw.MCP.Disclosure,   { TMCPDisclosure / per-registry tool_search for subagents }
   PasClaw.Tools.ExecuteCode,{ RegisterExecuteCodeTool -- rebind per child registry }
+  PasClaw.Tools.Worktree,   { EnsureWorktree -- spawn(worktree:"<branch>") }
   PasClaw.Tools.ToolLoop;
 
 function RegisterSpawnTool(Reg: TToolRegistry;
@@ -215,6 +230,18 @@ var
 begin
   if (Child <> nil) and Child.Find('execute_code', T) then
     RegisterExecuteCodeTool(Child);
+end;
+
+function WorktreeArgEnabled(Cfg: TConfig): Boolean;
+begin
+  Result := (Cfg = nil) or Cfg.Worktree.Enabled;
+end;
+
+function WorktreeDisabledRefusal(const Prefix: string): string;
+begin
+  Result := Prefix + ': worktrees are turned off here (worktree.enabled is ' +
+            'false in config) -- spawn without the worktree argument, and the ' +
+            'subagent works in the current checkout';
 end;
 
 function BuildFilteredRegistry(Source: TToolRegistry;
@@ -422,6 +449,21 @@ begin
       finally
         Props.PutObject('model', ModelP);
       end;
+
+      { Offered only when the feature is on; see WorktreeArgEnabled. }
+      if WorktreeArgEnabled(FCtx.Cfg) then
+      begin
+        ModelP := TJsonObject.Create;
+        try
+          ModelP.PutStr('type', 'string');
+          ModelP.PutStr('description',
+            'Optional: a git branch name. The subagent runs inside a worktree ' +
+            'for that branch (created if needed, beside the repository), so its ' +
+            'edits never touch your checkout. Use one per parallel task.');
+        finally
+          Props.PutObject('worktree', ModelP);
+        end;
+      end;
     finally
       Obj.PutObject('properties', Props);
     end;
@@ -462,6 +504,7 @@ var
   ChildHist: TMessageArray;
   Loop: TToolLoopResult;
   Model, ReqModel: string;
+  Worktree, WorkDir, WtErr: string;
   MaxIter: Integer;
 begin
   Result := '';
@@ -476,6 +519,7 @@ begin
     AgentName := Args.GetStr('agent', '');
     Prompt    := Args.GetStr('prompt', '');
     ReqModel  := Trim(Args.GetStr('model', ''));
+    Worktree  := Trim(Args.GetStr('worktree', ''));
   finally
     Args.Free;
   end;
@@ -495,6 +539,23 @@ begin
                      [AgentName, JoinSpecNames]);
     Exit;
   end;
+  if (Worktree <> '') and (not WorktreeArgEnabled(FCtx.Cfg)) then
+  begin
+    ErrMsg := WorktreeDisabledRefusal('spawn');
+    Exit;
+  end;
+  { A worktree: the child's own checkout. Created (or found) before the
+    loop starts so a failure is this call's error, not the child's -- and
+    only AFTER every cheap check above, which it used to precede: a spawn
+    with no prompt or a misspelt agent made a branch and a checkout on
+    disk on its way to being refused. }
+  WorkDir := '';
+  if Worktree <> '' then
+    if not EnsureWorktree(Worktree, WorkDir, WtErr) then
+    begin
+      ErrMsg := 'spawn: ' + WtErr;
+      Exit;
+    end;
 
   { Model precedence: an explicit per-call `model` arg wins, so the spawning
     model can pick a cheaper/faster sibling from the SAME active provider
@@ -539,14 +600,23 @@ begin
     ChildCfg.OnText        := nil;
     ChildCfg.OnToolCall    := nil;
     ChildCfg.OnToolResult  := nil;
+    ChildCfg.Workspace     := WorkDir;   { '' = the parent's workspace }
+    if WorkDir <> '' then
+      ChildCfg.Options.SystemPrompt := ChildCfg.Options.SystemPrompt + sLineBreak + sLineBreak +
+        'You are working in the git worktree ' + WorkDir + ' (branch ' + Worktree + '). ' +
+        'Relative paths and shell commands resolve there. Commit your work on that branch.';
 
     SetLength(ChildHist, 1);
     ChildHist[0] := MakeMessage(mrUser, Prompt);
 
-    LogInfo('subagent spawn: name=%s model=%s tools=%d',
-            [AgentName, Model, ChildReg.Count]);
+    LogInfo('subagent spawn: name=%s model=%s tools=%d workspace=%s',
+            [AgentName, Model, ChildReg.Count, WorkDir]);
     if RunToolLoop(ChildCfg, ChildHist, Loop) then
-      Result := LoopResultText(Loop)   { never a bare '' for a successful run }
+    begin
+      Result := LoopResultText(Loop);   { never a bare '' for a successful run }
+      if WorkDir <> '' then
+        Result := '(worked in worktree ' + WorkDir + ', branch ' + Worktree + ')' + sLineBreak + Result;
+    end
     else
       ErrMsg := Format('spawn: subagent "%s" failed', [AgentName]);
   finally

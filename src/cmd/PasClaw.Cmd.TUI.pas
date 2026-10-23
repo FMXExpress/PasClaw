@@ -35,6 +35,7 @@ uses
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.MemoryFetch,
+  PasClaw.Tools.Worktree,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
   PasClaw.Shell.Backend,           { StartShellSession / SetCurrentSessionId
@@ -178,6 +179,7 @@ begin
       { memory_fetch shares the WebFetch gate -- same HTTP path,
         same SSRF semantics, no point exposing one without the other. }
       if Cfg.WebFetchEnabled then RegisterMemoryFetchTool(Reg);
+      if Cfg.Worktree.Enabled then RegisterWorktreeTools(Reg);
       { tool_output_get is only useful when the truncation feature is
         on -- otherwise the model sees a tool it'd only call against
         non-existent handles. Pair the registration with the cap. }

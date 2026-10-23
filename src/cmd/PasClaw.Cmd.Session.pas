@@ -76,6 +76,8 @@ begin
   begin
     Title := Sessions[i].Title;
     if Title = '' then Title := Ansi.Dim + '(untitled)' + Ansi.Reset;
+    if Sessions[i].Location <> '' then
+      Title := Title + Ansi.Dim + '  @ ' + Sessions[i].Location + Ansi.Reset;
     PrintLn(Format('%28s', [Sessions[i].Id]) + '  ' +
             Format('%12s', [FormatAge(Now_, Sessions[i].UpdatedAt)]) + '  ' +
             Format('%5s', ['']) +
@@ -105,6 +107,8 @@ begin
     PrintLn(Ansi.Bold + 'provider:  ' + Ansi.Reset + Sess.Meta.Provider);
     if Sess.Meta.Profile <> '' then
       PrintLn(Ansi.Bold + 'profile:   ' + Ansi.Reset + Sess.Meta.Profile);
+    if Sess.Meta.Location <> '' then
+      PrintLn(Ansi.Bold + 'location:  ' + Ansi.Reset + Sess.Meta.Location);
     PrintLn(Ansi.Bold + 'messages:  ' + Ansi.Reset + IntToStr(Length(Sess.Messages)));
     if Sess.Meta.SystemPromptOverride <> '' then
       PrintLn(Ansi.Bold + 'compacted: ' + Ansi.Reset + Ansi.Dim + 'yes' + Ansi.Reset);

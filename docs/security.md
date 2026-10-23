@@ -104,6 +104,12 @@ Three paths used to reach a shell or a tool around the gates above, and no longe
 
 When `restrict_to_workspace=true`, `Tool_Shell` invokes `RunOneShot` with `WorkingDir = workspace` so the child shell starts inside the boundary. Combined with the `cd` token ban and `..` traversal check, a sandboxed model has no relative-path escape — even if a future denylist gap let a command through, the shell still starts in the workspace, not wherever `pasclaw` was launched from.
 
+## Worktrees move the boundary
+
+A subagent spawned with `worktree: "<branch>"` runs with its sandbox workspace set to that worktree directory (per thread, bracketed around each tool dispatch; the parent's threads are untouched). Under `restrict_to_workspace` the child's boundary is therefore the worktree, not the parent checkout: it can edit its own branch and nothing else. Worktrees are created under `worktree.directory`, which the operator sets; by default they sit beside the repository, outside the parent's workspace, which is why the child needs its own boundary at all. `worktree_remove` with `force` discards uncommitted work, so it is a natural target for an `ask` rule in `permissions`.
+
+**Under the Docker backend, git stays in the container.** The worktree tools run every git command through the active shell backend, including `git worktree add`, and that is deliberate: `fs_write` runs on the host, so a model could plant a `.git/hooks/post-checkout` or a smudge filter in `.git/config`, and a host-side checkout would run it outside the container. For the container's checkout to be the host's checkout too, the container bind-mounts the worktree directory at the same path. With the default location, beside the repository, that means a Docker session in a git workspace **creates an empty `<repo>-worktrees/` next to the repository** when the container starts. Set `worktree.directory` to a path inside the workspace to keep everything under the existing mount, or `worktree.enabled: false` to have neither. If a worktree still ends up somewhere the host cannot see it (Windows, or an unusual mount layout), `worktree_create` refuses it and undoes the registration and any branch it created, rather than returning an empty path.
+
 ## Known limitation: symlinks
 
 Path canonicalisation uses `ExpandFileName`, which resolves `..` but not symlinks. Picoclaw's equivalent (`os.OpenRoot` in Go 1.24+) enforces the boundary at the syscall layer; PasClaw runs on FPC and Delphi RTLs that have no equivalent.

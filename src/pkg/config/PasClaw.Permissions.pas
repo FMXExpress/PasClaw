@@ -300,6 +300,9 @@ begin
   if (N = 'shell_exec') or (N = 'shell_background') then Exit(ArgStr(ArgsJSON, 'command'));
   if N = 'execute_code' then Exit(ArgStr(ArgsJSON, 'code'));
   if (N = 'web_fetch') or (N = 'memory_fetch') then Exit(ArgStr(ArgsJSON, 'url'));
+  { A worktree is named by its branch; no generic field below would find
+    it. worktree_remove takes a `path` and needs no case of its own. }
+  if N = 'worktree_create' then Exit(ArgStr(ArgsJSON, 'branch'));
   Result := ArgStr(ArgsJSON, 'path');
   if Result <> '' then Exit;
   Result := ArgStr(ArgsJSON, 'url');

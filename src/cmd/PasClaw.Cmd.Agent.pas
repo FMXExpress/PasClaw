@@ -42,6 +42,7 @@ uses
   PasClaw.Tools.DelphiBuild,
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.PlanWrite,
+  PasClaw.Tools.Worktree,
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.DB,
   PasClaw.Tools.Cron,
@@ -418,7 +419,8 @@ function NewBuiltinRegistry(UseHashline: Boolean = True;
                             EnableOutputCache: Boolean = False;
                             EnableCron: Boolean = False;
                             const DBConfigJSON: string = '';
-                            EnableDesktopTools: Boolean = False): TToolRegistry;
+                            EnableDesktopTools: Boolean = False;
+                            EnableWorktree: Boolean = True): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -499,6 +501,9 @@ begin
     PLAN.md it writes is picked up by the Active Plan section in every
     mode except pmPlan itself. }
   RegisterPlanWriteTool(Result);
+  { git worktrees: worktree_create / list / remove, and the `worktree`
+    argument on spawn / spawn_background. worktree.enabled (default on). }
+  if EnableWorktree then RegisterWorktreeTools(Result);
   (* send_message gates itself: it registers only when config.json
      declares named channels (a "channels" array of name/kind/target
      entries), so there's no flag to thread through here. The model
@@ -808,7 +813,8 @@ begin
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
                               Cfg.DatabaseJSON,
-                              Cfg.DesktopToolsEnabled);
+                              Cfg.DesktopToolsEnabled,
+                              Cfg.Worktree.Enabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -1090,7 +1096,8 @@ begin
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
                               Cfg.DatabaseJSON,
-                              Cfg.DesktopToolsEnabled);
+                              Cfg.DesktopToolsEnabled,
+                              Cfg.Worktree.Enabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -1538,7 +1545,8 @@ begin
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
                               Cfg.DatabaseJSON,
-                              Cfg.DesktopToolsEnabled);
+                              Cfg.DesktopToolsEnabled,
+                              Cfg.Worktree.Enabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -1573,6 +1581,17 @@ begin
       SetLength(Msgs, Length(Session.Messages));
       for i := 0 to High(Session.Messages) do Msgs[i] := Session.Messages[i];
       SystemPromptOverride := Session.Meta.SystemPromptOverride;
+      { Go back to where the session worked (a project dir, a worktree)
+        when it still exists and differs from where we were launched.
+        The workspace is the directory relative paths and the shell cwd
+        resolve against, so without this a resume from $HOME would put
+        the session's edits in the wrong tree. }
+      if (Session.Meta.Location <> '') and DirectoryExists(Session.Meta.Location) and
+         (ExcludeTrailingPathDelimiter(ExpandFileName(Session.Meta.Location)) <> CurrentWorkspace) then
+      begin
+        ConfigureSandbox(Cfg.Sandbox, Session.Meta.Location);
+        PrintLn(Ansi.Dim + '(workspace: ' + Session.Meta.Location + ')' + Ansi.Reset);
+      end;
       PrintLn(Ansi.Dim + '(resumed session ' + Session.Meta.Id +
               ' -- ' + IntToStr(Length(Msgs)) + ' messages' +
               ProfileSuffix(Session.Meta.Profile) + ')' + Ansi.Reset);
