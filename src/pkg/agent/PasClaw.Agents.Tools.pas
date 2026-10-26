@@ -48,6 +48,17 @@ procedure RegisterAgentTools(R: TToolRegistry);
    workspace pin is per-thread. *)
 procedure SetCallingAgent(const Name: string);
 
+(* The agent this thread is running a turn for; '' outside one.
+
+   Read by the `task` tool, whose review rules turn on who is asking: a
+   builder may not give the verdict on its own work. Mutating tools
+   dispatch inline on the loop thread (PasClaw.Tools.ToolLoop gives each a
+   batch of one), which is the thread the agent runner set this on.
+   Anywhere else -- a parallel worker, a background subagent's own thread
+   -- it reads '', and the task tool treats '' as "cannot tell", never as
+   the operator. *)
+function CallingAgent: string;
+
 { The handler, exposed for tests. }
 function Tool_Agent(const ArgsJSON: string; out ErrMsg: string): string;
 
@@ -83,6 +94,11 @@ threadvar
 procedure SetCallingAgent(const Name: string);
 begin
   GCallerAgent := Name;
+end;
+
+function CallingAgent: string;
+begin
+  Result := GCallerAgent;
 end;
 
 function AgentJSON(const Info: TAgentInfo): TJsonObject;

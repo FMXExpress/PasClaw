@@ -49,6 +49,11 @@ team projects need not be git repositories, which most of them (a
 
 ## Phase 1 -- a second agent's verdict, frozen criteria, receipts
 
+**Status: built.** What users see is in [teams](./teams.md#review-the-board-holds-the-rule)
+and [desktop](./desktop.md); `team_review_tests` pins it. Where the build
+differs from what follows, it says so in *As built* at the end of this
+section.
+
 One PR. It changes the fewest moving parts and everything after it builds
 on the record it starts keeping.
 
@@ -103,7 +108,8 @@ task action=verdict project id reject reason reviewer: review -> active
   that cannot tell who is calling must refuse, never default to allow.
 
 **Green at submit.** When a project has held-out scenarios
-(`projects/<p>/scenarios/`, the same format as `verification.scenarios`
+(`projects/<p>/scenarios/` -- *as built, outside the workspace; see
+below* -- the same format as `verification.scenarios`
 from #618, run by `RunScenarios`), `submit` runs them first and refuses a
 red set with the failing output: work the operator's checks already reject
 never reaches a reviewer. A project without scenarios submits as above.
@@ -159,6 +165,47 @@ submission's evidence and the verdict. The checklist mirror
 - Teams: a task in review wakes its reviewer and not its owner; a board
   with a task in review is not done.
 - Scenarios: a red project scenario refuses `submit` with its output.
+
+### As built
+
+- **The project's scenarios live outside the workspace**, at
+  `$PASCLAW_HOME/scenarios/<workspace>/<project>/`, not in
+  `projects/<p>/scenarios/`. A held-out check inside the project is one
+  the builder can open and "fix" -- the reason `PasClaw.Agent.Verify`
+  keeps `verification.scenarios` outside the workspace too. They still
+  run with the project directory as their cwd.
+- **A reopen does not clear the owner.** A failed job already returns
+  its task to `todo`, and clearing the owner there would stop the wake
+  loop waking anyone to retry it. What the plan wanted from "reopening
+  clears the owner" -- the builder does not move its own bar -- is held
+  directly instead: an agent never writes the criteria of a task
+  assigned to it. The freeze keys on a `started` stamp rather than the
+  status, so a builder cannot block, edit and unblock its way past it.
+- **The verdict also refuses the task's owner**, not only its submitter,
+  and a submission by a job runner or an unattributed turn is recorded
+  as the owner's work. Otherwise a builder could have a background
+  subagent submit and then accept the result itself.
+- **The file tools cannot rewrite the board.** `task.json`, `job.json`,
+  `project.json` and `activity.jsonl` are refused to every file-writing
+  tool, whatever the sandbox policy, with a pointer to the `task` tool.
+  Without that, every rule above was one `fs_write` away from not
+  applying. `shell_exec` is still outside it.
+- **The desktop's checklist mirror** writes as the operator (the route
+  cannot tell it from a click), so on a reviewed board it only adds
+  tasks, and it never touches a task in review on any board.
+- **Operator routes**: `POST /v1/projects/<p>/tasks/<t>/verdict` (the
+  desktop's Accept / Reject) and `POST /v1/projects/<p>/review` to
+  switch review on for a hand-made board.
+- **`submit` works on any board.** On one that does not require review
+  it is an opt-in second opinion; nothing else about that board changes.
+- **Parallel dispatch** needed no carrying: `task` is mutating, so it
+  always dispatches inline on the loop thread the runner set the caller
+  on. The test drives a round with a parallel read-only batch beside the
+  `task` call through the real tool loop, and also shows a thread that
+  set no identity is refused even while another thread holds one.
+- The open questions below were settled as recommended: review on for
+  team boards only; in `duo` the Foreman reviews the developer; the
+  operator may close any task, recorded as theirs.
 
 ## Phase 2 -- dependencies, and "next"
 
@@ -219,9 +266,9 @@ submission's evidence and the verdict. The checklist mirror
   worktree of the two commits when the project is a repository, else the
   checkpoint snapshot taken for that turn. A draft without that proof is
   refused, as Pullboard refuses it.
-- **You decide.** The draft waits in Needs you. Approved, it joins
-  `projects/<p>/scenarios/`, and from then on every `submit` is held to
-  it by Phase 1's gate. Declined, the decline is recorded so the same
+- **You decide.** The draft waits in Needs you. Approved, it joins the
+  project's held-out scenarios (`$PASCLAW_HOME/scenarios/<workspace>/<p>/`),
+  and from then on every `submit` is held to it by Phase 1's gate. Declined, the decline is recorded so the same
   cause does not nag again.
 - The operator can write a rule directly with the same tool; it still
   needs the proof.

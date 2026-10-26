@@ -458,6 +458,8 @@ end;
 function ProjectJSON(const P: TProjectInfo): TJsonObject;
 var
   App: TAppInfo;
+  Arr: TJsonArray;
+  I: Integer;
 begin
   Result := TJsonObject.Create;
   Result.PutStr ('name',        P.Name);
@@ -473,6 +475,11 @@ begin
   Result.PutInt ('open_tasks',   P.OpenTasks);
   Result.PutInt ('done_tasks',   P.DoneTasks);
   Result.PutInt ('blocked_tasks', P.BlockedTasks);
+  Result.PutInt ('review_tasks', P.ReviewTasks);
+  Result.PutBool('review',       P.Review);
+  Arr := TJsonArray.Create;
+  for I := 0 to High(P.Reviewers) do Arr.AddStr(P.Reviewers[I]);
+  Result.PutArray('reviewers', Arr);
   (* "Everything on this board is finished."
 
      Computed here rather than left to each client to derive, because
@@ -510,6 +517,16 @@ begin
   Result.PutStr('status',  TaskStatusToStr(T.Status));
   Result.PutStr('notes',   T.Notes);
   Result.PutStr('assignee', T.Assignee);
+  Result.PutStr('criteria', T.Criteria);
+  Result.PutStr('started', T.Started);
+  Result.PutStr('submitted_by',  T.SubmittedBy);
+  Result.PutStr('submitted_at',  T.SubmittedAt);
+  Result.PutStr('evidence',      T.Evidence);
+  Result.PutStr('submitted_job', T.SubmittedJob);
+  Result.PutStr('verdict',       T.Verdict);
+  Result.PutStr('verdict_by',    T.VerdictBy);
+  Result.PutStr('verdict_at',    T.VerdictAt);
+  Result.PutStr('verdict_note',  T.VerdictNote);
   Result.PutStr('created', T.Created);
   Result.PutStr('updated', T.Updated);
   Result.PutInt('jobs',    T.JobCount);
@@ -757,6 +774,14 @@ begin
                  'goal project: ' + Err);
         Exit;
       end;
+    end;
+
+    { The team's rules on its board -- review, and who gives verdicts --
+      whether the team made the project or was pointed at it. }
+    if not BindTeamBoard(T, Project, Err) then
+    begin
+      ReplyErr(Resp, 500, 'could not set review on ' + Project + ': ' + Err);
+      Exit;
     end;
 
     { The state file is what the tick loop reads; parked = everything
@@ -1717,8 +1742,10 @@ var
   List: TTaskInfoArray;
   I: Integer;
   Obj: TJsonObject;
-  TaskId, Err, Title, Notes, Status, Assignee, JobId, Prompt: string;
+  TaskId, Err, Title, Notes, Status, Assignee, JobId, Prompt, Criteria,
+    Verdict: string;
   Info: TTaskInfo;
+  NoReviewers: TStringArray;
 begin
   Result := True;
 
@@ -1753,7 +1780,8 @@ begin
           Exit;
         end;
         TaskId := CreateTask(Project, Obj.GetStr('title', ''),
-                             Obj.GetStr('notes', ''), Err);
+                             Obj.GetStr('notes', ''), Err,
+                             Obj.GetStr('criteria', ''));
         if TaskId = '' then
         begin
           ReplyErr(Resp, 400, Err);
@@ -1781,6 +1809,63 @@ begin
   if (Segs.Count >= 6) and (LowerCase(Segs[5]) = 'jobs') then
   begin
     Result := RouteJobs(Method, Project, TaskId, Segs, Body, Resp);
+    Exit;
+  end;
+
+  (* /v1/projects/<p>/tasks/<t>/verdict -- the operator's verdict on a
+     submitted task: {"verdict":"accept"|"reject","reason":"..."}.
+
+     The same store call the task tool makes, as the operator: no
+     reviewer list to satisfy and the submitter rule does not bind a
+     person. A reject still needs its reason -- the builder reads it --
+     and a task not in review is still refused, so a click on a stale
+     board says what happened instead of reopening finished work. *)
+  if (Segs.Count = 6) and (LowerCase(Segs[5]) = 'verdict') and (Method = 'POST') then
+  begin
+    Obj := BodyObj(Body);
+    try
+      if Obj = nil then
+      begin
+        ReplyErr(Resp, 400, 'expected {"verdict":"accept"} or ' +
+                 '{"verdict":"reject","reason":"..."}');
+        Exit;
+      end;
+      Verdict := LowerCase(Trim(Obj.GetStr('verdict', '')));
+      if (Verdict <> 'accept') and (Verdict <> 'reject') then
+      begin
+        ReplyErr(Resp, 400, 'verdict must be "accept" or "reject"');
+        Exit;
+      end;
+      { A malformed request is 400; everything the store refuses after
+        this is about the task's state, and is 409. }
+      if (Verdict = 'reject') and
+         (Trim(Obj.GetStr('reason', Obj.GetStr('note', ''))) = '') then
+      begin
+        ReplyErr(Resp, 400, 'a reject needs a "reason" the builder can act on');
+        Exit;
+      end;
+      SetLength(NoReviewers, 0);
+      if not VerdictTask(Project, TaskId, ActorOperator, Verdict = 'accept',
+                         Obj.GetStr('reason', Obj.GetStr('note', '')),
+                         NoReviewers, Err) then
+      begin
+        ReplyErr(Resp, 409, Err);
+        Exit;
+      end;
+    finally
+      Obj.Free;
+    end;
+    if not GetTask(Project, TaskId, Info) then
+    begin
+      ReplyErr(Resp, 404, 'no such task');
+      Exit;
+    end;
+    Item := TaskJSON(Info);
+    try
+      ReplyJSON(Resp, 200, Item.ToJSON);
+    finally
+      Item.Free;
+    end;
     Exit;
   end;
 
@@ -1837,7 +1922,7 @@ begin
     begin
       Obj := BodyObj(Body);
       try
-        Title := ''; Notes := '-'; Status := ''; Assignee := '-';
+        Title := ''; Notes := '-'; Status := ''; Assignee := '-'; Criteria := '-';
         if Obj <> nil then
         begin
           Title  := Obj.GetStr('title', '');
@@ -1846,8 +1931,15 @@ begin
           { Same two-sentinel contract as notes: absent = leave alone,
             "" = explicitly unassign. }
           if Obj.Has('assignee') then Assignee := Obj.GetStr('assignee', '');
+          if Obj.Has('criteria') then Criteria := Obj.GetStr('criteria', '');
         end;
-        if not UpdateTask(Project, TaskId, Title, Notes, Status, Err, Assignee) then
+        (* As the OPERATOR. This route is a person at the desktop (or a
+           script of theirs): the authority review exists for, so a task
+           in review can be closed or sent back from here and frozen
+           criteria can be edited -- recorded in the activity log as
+           theirs, which is what makes the override visible. *)
+        if not UpdateTask(Project, TaskId, Title, Notes, Status, Err, Assignee,
+                          Criteria, ActorOperator) then
         begin
           ReplyErr(Resp, 400, Err);
           Exit;
@@ -1865,13 +1957,16 @@ begin
   ReplyErr(Resp, 404, 'no such route');
 end;
 
-function RouteProjectItem(const Method, Doc, Body: string;
+function RouteProjectItem(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
   Segs: TStringList;
   Project, Err, StopErr, Blueprint: string;
   Info: TProjectInfo;
   Item, Obj, Root: TJsonObject;
+  Lines, Revs: TStringArray;
+  Arr, RevArr: TJsonArray;
+  I: Integer;
 begin
   Result := True;
   Segs := PathSegments(Doc);
@@ -1965,6 +2060,77 @@ begin
         Exit;
       end;
       ReplyJSON(Resp, 200, Blueprint);
+      Exit;
+    end;
+
+    (* GET /v1/projects/<name>/activity[?task=T0004&limit=50] -- the
+       receipts: who moved which task, when, and why, oldest first. *)
+    if (Segs.Count = 4) and (LowerCase(Segs[3]) = 'activity') and (Method = 'GET') then
+    begin
+      if not ProjectExists(Project) then
+      begin
+        ReplyErr(Resp, 404, 'no such project');
+        Exit;
+      end;
+      Lines := ReadActivity(Project, QueryValue(Query, 'task'),
+                            StrToIntDef(QueryValue(Query, 'limit'), 0));
+      Root := TJsonObject.Create;
+      try
+        Arr := TJsonArray.Create;
+        { ReadActivity only returns lines that parsed, so each one can go
+          into the array as it is. }
+        for I := 0 to High(Lines) do Arr.AddRaw(Lines[I]);
+        Root.PutArray('events', Arr);
+        ReplyJSON(Resp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+      Exit;
+    end;
+
+    (* POST /v1/projects/<name>/review {"review":true,"reviewers":["qa"]}
+
+       Its own gesture, like archive: turning review on changes what
+       every agent on the board may do, and should not ride along on a
+       metadata edit. `team up` sets it for a team's board; this is how
+       a person sets it on one of their own, or turns it off. *)
+    if (Segs.Count = 4) and (LowerCase(Segs[3]) = 'review') and (Method = 'POST') then
+    begin
+      Obj := BodyObj(Body);
+      try
+        if Obj = nil then
+        begin
+          ReplyErr(Resp, 400, 'expected {"review":true|false, "reviewers":[...]}');
+          Exit;
+        end;
+        SetLength(Revs, 0);
+        RevArr := Obj.ChildArray('reviewers');
+        if RevArr <> nil then
+        try
+          SetLength(Revs, RevArr.Count);
+          for I := 0 to RevArr.Count - 1 do Revs[I] := RevArr.ItemStr(I);
+        finally
+          RevArr.Free;
+        end;
+        if not SetProjectReview(Project, Obj.GetBool('review', True), Revs, Err) then
+        begin
+          ReplyErr(Resp, 404, Err);
+          Exit;
+        end;
+      finally
+        Obj.Free;
+      end;
+      if not GetProject(Project, Info) then
+      begin
+        ReplyErr(Resp, 404, 'no such project');
+        Exit;
+      end;
+      Item := ProjectJSON(Info);
+      try
+        ReplyJSON(Resp, 200, Item.ToJSON);
+      finally
+        Item.Free;
+      end;
       Exit;
     end;
 
@@ -3720,7 +3886,7 @@ begin
   if HasPrefix(Doc, '/v1/projects') then
   begin
     if RouteProjectCollection(M, Doc, Query, Body, Resp) then Exit(True);
-    Exit(RouteProjectItem(M, Doc, Body, Resp));
+    Exit(RouteProjectItem(M, Doc, Query, Body, Resp));
   end;
 
   if HasPrefix(Doc, '/v1/apps') then

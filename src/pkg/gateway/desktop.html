@@ -1013,6 +1013,9 @@ h1,h2,h3 { margin: 0 0 6px; font-size: 12px; }
 .st-active  { color: var(--accent); font-weight: bold; }
 .st-done    { color: var(--text); }
 .st-blocked { color: #a00; font-weight: bold; }
+/* Submitted, waiting for someone else's verdict: not the builder's to
+   move, so not the active colour either. */
+.st-review  { color: #a60; font-weight: bold; font-style: italic; }
 
 /* ---- chat ---- */
 .chat { display: flex; flex-direction: column; height: 100%; }
@@ -3620,6 +3623,13 @@ function paintTree() {
        board gets a tick; an archived one says so and greys out. */
     if (p.open_tasks) {
       row.appendChild(el("span", "badge", String(p.open_tasks)));
+      /* Work waiting on a verdict is open, but it is waiting on a
+         REVIEWER (or you), not on its builder -- worth its own mark. */
+      if (p.review_tasks) {
+        const rv = el("span", "badge st-review", "⚖ " + p.review_tasks);
+        rv.title = p.review_tasks + " task(s) submitted and waiting for a verdict";
+        row.appendChild(rv);
+      }
     } else if (p.blocked_tasks) {
       /* Nothing open and not finished means everything left is BLOCKED
          -- work waiting on somebody. Marking it needs saying, because
@@ -3694,21 +3704,63 @@ function paintTree() {
     shown.forEach(t => {
       const tr = el("div", "node");
       tr.style.paddingLeft = "18px";
-      const tt = el("span", "twist", t.jobs ? (t.__open ? "▼" : "▶") : "");
+      /* Expandable when there is anything behind the row: jobs, the
+         acceptance criteria, a submission or a verdict. */
+      const hasDetail = t.jobs || t.criteria || t.submitted_at || t.verdict;
+      const tt = el("span", "twist", hasDetail ? (t.__open ? "▼" : "▶") : "");
       tr.appendChild(tt);
       const lbl = el("span", "st-" + t.status,
-        t.id + "  " + t.title + (t.assignee ? "  @" + t.assignee : ""));
+        t.id + "  " + t.title + (t.assignee ? "  @" + t.assignee : "") +
+        (t.status === "review" ? "  -- waiting for a verdict" : ""));
       lbl.style.flex = "1 1 auto";
       tr.appendChild(lbl);
-      tr.title = t.notes || "";
+      tr.title = [t.notes, t.criteria ? "Criteria:\n" + t.criteria : ""]
+        .filter(Boolean).join("\n\n");
+
+      /* A task in review waits for a verdict, and you can give it: you
+         are the authority the review exists for. Accept closes it; reject
+         asks for the reason its builder will read. Recorded as yours. */
+      if (t.status === "review") {
+        const verdict = async (accept) => {
+          let reason = "";
+          if (accept) {
+            const msg = `Accept ${t.id} "${t.title}"?\n\n` +
+              (t.criteria ? `Criteria:\n${t.criteria}\n\n` : "") +
+              `Submitted by ${t.submitted_by}:\n${t.evidence || "(no evidence)"}`;
+            if (!confirm(msg)) return;
+          } else {
+            reason = prompt(`Reject ${t.id}: what is wrong? ` +
+                            `(${t.submitted_by} reads this)`, "");
+            if (!reason) return;
+          }
+          try {
+            await api(`/v1/projects/${p.name}/tasks/${t.id}/verdict`,
+              { method: "POST",
+                body: { verdict: accept ? "accept" : "reject", reason } });
+            await loadTasks(p.name);
+            await loadProjects();
+          } catch (err) { alert(err.message); }
+        };
+        const ok = el("button", "btn", "Accept");
+        const no = el("button", "btn", "Reject");
+        [ok, no].forEach(b => b.style.cssText =
+          "padding:0 6px;font-size:10px;line-height:14px");
+        ok.title = "Accept the submission: the task is done";
+        no.title = "Send it back to its builder with a reason";
+        ok.addEventListener("click", e => { e.stopPropagation(); verdict(true); });
+        no.addEventListener("click", e => { e.stopPropagation(); verdict(false); });
+        tr.appendChild(ok);
+        tr.appendChild(no);
+      }
 
       /* Run the task. The route has always existed and the tree has
          always shown the jobs it produces -- there was simply no gesture
          to start one, so "run this task" meant leaving the desktop for
          curl. A task the agent is already working on is not offered the
          button; a finished one is, because re-running a done task is a
-         normal thing to want. */
-      if (t.status !== "active") {
+         normal thing to want. Nor is one waiting for a verdict: running
+         it again answers a question nobody asked. */
+      if (t.status !== "active" && t.status !== "review") {
         const run = el("button", "btn", "Run");
         run.title = "Hand this task to PasClaw and watch the job log";
         run.style.cssText = "padding:0 6px;font-size:10px;line-height:14px";
@@ -3734,17 +3786,33 @@ function paintTree() {
       }
 
       tr.addEventListener("click", async () => {
-        if (!t.jobs) return;
+        if (!hasDetail) return;
         t.__open = !t.__open;
-        if (t.__open && !t.__jobs) {
-          const j = await api(`/v1/projects/${p.name}/tasks/${t.id}/jobs`);
-          t.__jobs = j.jobs || [];
-        }
+        if (t.__open && !t.__jobs) await loadTaskDetail(p.name, t);
         paintTree();
       });
       tree.appendChild(tr);
 
       if (!t.__open) return;
+      /* The detail: what the work is held to, what was claimed, what
+         was decided -- then the runs, then who did what (the receipts). */
+      const detail = (cls, text) => {
+        const d = el("div", "node " + cls);
+        d.style.cssText = "padding-left:36px;white-space:pre-wrap;align-items:flex-start";
+        d.appendChild(el("span", null, text));
+        tree.appendChild(d);
+      };
+      if (t.criteria) detail("muted", "criteria:\n" + t.criteria);
+      if (t.submitted_at)
+        detail(t.status === "review" ? "st-review" : "muted",
+               `submitted by ${t.submitted_by} ${t.submitted_at}` +
+               (t.submitted_job ? ` (job ${t.submitted_job})` : "") +
+               (t.evidence ? ":\n" + t.evidence : ""));
+      if (t.verdict)
+        detail(t.verdict === "reject" ? "st-blocked" : "muted",
+               `${t.verdict === "accept" ? "accepted" : "rejected"} by ` +
+               `${t.verdict_by} ${t.verdict_at}` +
+               (t.verdict_note ? ":\n" + t.verdict_note : ""));
       (t.__jobs || []).forEach(job => {
         const jr = el("div", "node");
         jr.style.paddingLeft = "36px";
@@ -3754,6 +3822,13 @@ function paintTree() {
           job.id + "  " + job.status + (job.summary ? " -- " + job.summary : "")));
         jr.addEventListener("dblclick", () => openJobLog(p.name, t.id, job.id));
         tree.appendChild(jr);
+      });
+      (t.__activity || []).forEach(ev => {
+        const extra = ev.reason || ev.note ||
+          (ev.event === "assign" ? "-> " + (ev.to || "nobody") :
+           ev.from || ev.to ? `${ev.from || ""} -> ${ev.to || ""}` : "");
+        detail("muted", `${(ev.at || "").replace("T", " ").replace("Z", "")}  ` +
+               `${ev.event}  ${ev.by}${extra ? "  " + extra : ""}`);
       });
     });
 
@@ -3798,10 +3873,20 @@ async function loadTasks(project) {
   st.tasks = j.tasks || [];
   await Promise.all(st.tasks.filter(t => wasOpen.has(t.id)).map(async t => {
     t.__open = true;
-    try {
-      t.__jobs = (await api(`/v1/projects/${project}/tasks/${t.id}/jobs`)).jobs || [];
-    } catch { t.__jobs = []; }
+    await loadTaskDetail(project, t);
   }));
+}
+
+/* What an expanded task row shows below itself: its jobs, and its
+   history from the board's activity log. */
+async function loadTaskDetail(project, t) {
+  try {
+    t.__jobs = (await api(`/v1/projects/${project}/tasks/${t.id}/jobs`)).jobs || [];
+  } catch { t.__jobs = []; }
+  try {
+    t.__activity = (await api(
+      `/v1/projects/${project}/activity?task=${t.id}&limit=20`)).events || [];
+  } catch { t.__activity = []; }
 }
 
 async function newProject() {
@@ -3871,6 +3956,16 @@ function mirrorChecklist(project, argsStr) {
       const wanted = items.filter(
         it => !seen.has(it.title) && seen.add(it.title));
 
+      /* On a board that requires review, the checklist only ADDS tasks.
+         These PATCHes go out as the operator -- the route cannot tell this
+         page's mirror from your click -- so ticking an item would let the
+         model close its own work past the review it is held to. Status
+         there moves by submit and verdict. And a task already in review
+         is never touched by the mirror on any board: neither "done" (that
+         is the verdict's) nor "todo" (that would pull it out of review). */
+      const proj = (S.projects || []).find(x => x.name === project);
+      const reviewed = !!(proj && proj.review);
+
       /* allSettled, not all: Promise.all rejects the moment ONE write
          fails, which would release this project's queue while the other
          writes were still in flight -- and the next reconcile would then
@@ -3885,9 +3980,11 @@ function mirrorChecklist(project, argsStr) {
           const made = await api(`/v1/projects/${project}/tasks`,
             { method: "POST", body: { title: it.title } });
           have.set(it.title, { id: made.id, status: "todo" });
-          if (it.done)
+          if (it.done && !reviewed)
             await api(`/v1/projects/${project}/tasks/${made.id}`,
               { method: "PATCH", body: { status: "done" } });
+        } else if (reviewed || t.status === "review") {
+          /* see above: status is not the mirror's to move here */
         } else if (it.done && t.status !== "done") {
           await api(`/v1/projects/${project}/tasks/${t.id}`,
             { method: "PATCH", body: { status: "done" } });

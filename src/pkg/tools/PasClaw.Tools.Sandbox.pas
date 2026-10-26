@@ -358,11 +358,72 @@ begin
   Result := False;
 end;
 
+(* The task board's own records: written by PasClaw.Projects.Store and
+   nothing else, whatever the sandbox policy says.
+
+   The board's review rules -- an agent cannot close its own task, a task
+   in review moves only by a verdict, criteria freeze once work starts --
+   are held in the store, at the `task` tool and the HTTP routes. A file
+   tool that could rewrite task.json would walk straight past all of
+   them, and leave no receipt. So the records are refused here, for every
+   model-driven write, regardless of restrict_to_workspace: this is not a
+   boundary question (the file is inside the workspace), it is "this file
+   has an owner". The app the team builds (projects/<p>/app/) and a job's
+   artifacts/ stay writable.
+
+   What this does NOT reach: shell_exec. A shell command's writes cannot
+   be path-checked reliably, and docs/team-board-plan.md says so. *)
+function IsBoardRecord(const Canon: string): Boolean;
+var
+  Root, Rel, Seg: string;
+  Segs: array of string;
+  P: Integer;
+begin
+  Result := False;
+  Root := ExcludeTrailingPathDelimiter(Canonicalize(WorkspacePath('projects')));
+  if not PathInsideDirectory(Canon, Root) then Exit;
+  if PathsEqual(Canon, Root) then Exit(True);
+  Rel := Copy(Canon, Length(Root) + 2, MaxInt);
+  SetLength(Segs, 0);
+  { Canonicalize has already turned every separator into PathDelim. }
+  while Rel <> '' do
+  begin
+    P := Pos(PathDelim, Rel);
+    if P = 0 then begin Seg := Rel; Rel := ''; end
+    else begin Seg := Copy(Rel, 1, P - 1); Rel := Copy(Rel, P + 1, MaxInt); end;
+    if Seg = '' then Continue;
+    SetLength(Segs, Length(Segs) + 1);
+    Segs[High(Segs)] := LowerCase(Seg);
+  end;
+  case Length(Segs) of
+    0: Result := True;
+    { the project directory itself, its manifest, its receipts }
+    1: Result := True;
+    2: Result := (Segs[1] = 'project.json') or (Segs[1] = 'activity.jsonl') or
+                 (Segs[1] = 'tasks');
+  else
+    { everything under tasks/ except what is inside a job's artifacts/
+      (<p>/tasks/<T>/jobs/<J>/artifacts/...) }
+    Result := (Segs[1] = 'tasks') and
+              not ((Length(Segs) > 6) and (Segs[3] = 'jobs') and
+                   (Segs[5] = 'artifacts'));
+  end;
+end;
+
 function CanWritePath(const Path: string; out Reason: string): Boolean;
 var
   Canon: string;
 begin
   Reason := '';
+  if IsBoardRecord(Canonicalize(Path)) then
+  begin
+    Reason := 'refused: "' + Canonicalize(Path) + '" is part of the task ' +
+              'board, which only the task and project tools write -- the ' +
+              'board''s rules (review, frozen criteria, the activity log) ' +
+              'live there. Use the task tool (action=update, submit, ' +
+              'verdict) instead.';
+    Exit(False);
+  end;
   if not GPolicy.RestrictToWorkspace then Exit(True);
   Canon := Canonicalize(Path);
   if PathInsideDirectory(Canon, CurrentWorkspace) then Exit(True);

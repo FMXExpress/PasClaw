@@ -118,7 +118,7 @@ default**:
 | Tool | Actions |
 |---|---|
 | `project` | `list`, `create`, `get`, `update` |
-| `task` | `list`, `create`, `update`, `job` |
+| `task` | `list`, `create`, `update`, `job`, `submit`, `verdict` |
 
 The desktop does not need them — both clients drive the board over HTTP, and
 everything in this document works with the flag off. They exist for when you
@@ -130,6 +130,22 @@ turn. Same opt-in shape as `cron_tool_enabled`.
 Jobs are opened by the runtime when a turn starts working a task, so the
 model only has to close them. Opening a job marks its task **active**;
 reporting a job **done** closes the task. The desktop tree shows this live.
+
+**Boards that require review.** An agent team's board requires a second
+agent's verdict ([teams](./teams.md#review-the-board-holds-the-rule)):
+there, a job reported done **submits** its task instead, and the task
+waits in **review** until someone other than its builder gives the
+verdict. The tree shows such a task in its own colour, "waiting for a
+verdict", with **Accept** and **Reject** on the row — you are the
+authority the review exists for, so your verdict needs no reviewer
+list (a reject still asks for the reason its builder will read). A
+project row carries `⚖ 1` for work waiting on a verdict. Expanding a task
+shows its criteria, the submission's evidence, the verdict, its jobs, and
+its history from the board's activity log. The checklist mirror (the
+model's `todo_write` list reflected onto the board) only *adds* tasks on
+such a board and never touches a task in review: its writes go out as
+yours, and ticking an item must not close work past the review it is
+held to.
 
 **Finished work gets out of the way.** A board never forgets, which is
 right for the record and wrong for a dock — after a team has worked a
@@ -162,8 +178,8 @@ GET  /v1/projects                                       # archived excluded
 GET  /v1/projects?archived=1                            # all of them
 ```
 
-A project carries `tasks`, `open_tasks`, `done_tasks`, `blocked_tasks`
-and `finished`. The list response carries `archived` (how many were
+A project carries `tasks`, `open_tasks`, `done_tasks`, `blocked_tasks`,
+`review_tasks` (also counted open), `review`, `reviewers` and `finished`. The list response carries `archived` (how many were
 left out) and `names` (every project name, archived included) so a
 client can offer "show archived (2)" without a second request, and can
 still answer "does this project exist?" correctly about one that is
@@ -901,8 +917,11 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | GET/PATCH/DELETE | `/v1/projects/<name>` | inspect / edit / remove |
 | GET | `/v1/projects/<name>/blueprint` | export |
 | POST | `/v1/projects/import` | import |
-| GET/POST | `/v1/projects/<n>/tasks` | list / create |
-| GET/PATCH | `/v1/projects/<n>/tasks/<t>` | inspect / edit |
+| POST | `/v1/projects/<n>/review` | `{"review":true,"reviewers":["qa"]}` -- require a verdict on this board |
+| GET | `/v1/projects/<n>/activity` | the receipts, oldest first (`?task=T0004&limit=50`) |
+| GET/POST | `/v1/projects/<n>/tasks` | list / create (`criteria` optional) |
+| GET/PATCH | `/v1/projects/<n>/tasks/<t>` | inspect / edit, as the operator (`criteria` too; `status: review` is refused -- submit is how a task gets there) |
+| POST | `/v1/projects/<n>/tasks/<t>/verdict` | the operator's verdict on a task in review: `{"verdict":"accept"}` or `{"verdict":"reject","reason":"..."}` (400 malformed, 409 not in review) |
 | POST | `/v1/projects/<n>/tasks/<t>/run` | start an agent turn (503 without an agent) |
 | GET/POST | `/v1/projects/<n>/tasks/<t>/jobs` | list / open |
 | GET/PATCH | `/v1/projects/<n>/tasks/<t>/jobs/<j>` | inspect / report |

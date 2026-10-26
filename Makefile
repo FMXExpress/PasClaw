@@ -520,6 +520,15 @@ test-teams: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/teams_tests.pas -o$(BUILDDIR)/teams_tests
 	@PASCLAW_HOME=$(BUILDDIR)/teams-test-home $(BUILDDIR)/teams_tests
 
+# docs/team-board-plan.md Phase 1: submit / verdict / frozen criteria /
+# receipts, the scenario gate, the board-records guard, and the caller
+# identity through the real tool loop.
+test-team-review: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/team-review-test-home
+	$(FPC) $(FPCFLAGS) src/tests/team_review_tests.pas -o$(BUILDDIR)/team_review_tests
+	@PASCLAW_HOME=$(BUILDDIR)/team-review-test-home $(BUILDDIR)/team_review_tests
+
 test-tool-schema: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/tool-schema-test-home
@@ -609,7 +618,7 @@ test-client-api: $(BIN) | $(BUILDDIR)
 		rm -f $(BUILDDIR)/client-api.pid; exit $$rc
 
 # Everything the desktop client depends on, in dependency order.
-test-desktop: lint-pascal-shape test-workspaces test-projects test-tool-schema test-teams test-apps test-mail test-workspace-isolation test-desktop-routes test-client-markdown test-client-api
+test-desktop: lint-pascal-shape test-workspaces test-projects test-tool-schema test-teams test-team-review test-apps test-mail test-workspace-isolation test-desktop-routes test-client-markdown test-client-api
 
 # Provider catalog rows + ChatPath override (Perplexity uses /chat/completions).
 test-provider-catalog: | $(BUILDDIR)

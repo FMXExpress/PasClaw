@@ -10,12 +10,20 @@
   Two tools rather than five, because a tool list is prompt budget:
 
     project  action = list | create | get | update
-    task     action = list | create | update | job
+    task     action = list | create | update | job | submit | verdict
 
   `task action=job` is how a run reports itself: status/summary against a job
   the runtime opened. Jobs are created by the runtime (PasClaw.Projects.Store
   CreateJob) when a turn starts working a task, so the model never has to
   remember to open one -- it only closes them.
+
+  `submit` and `verdict` are the review loop (docs/team-board-plan.md): the
+  builder submits with evidence, someone else gives the verdict against
+  the task's frozen criteria. The rules are the store's; this unit's part
+  is telling the store WHO is asking -- the calling agent, or ActorModel
+  when the turn is not a standing agent's, which is never the operator --
+  naming the reviewers, and messaging them so the handoff does not wait
+  for the next tick.
 
   Both are tcMutating: they write manifests under the active workspace.
 *)
@@ -77,12 +85,16 @@ function DesktopActionsJSON(const ArgsJSON: string): string;
 implementation
 
 uses
-  SysUtils,
+  SysUtils, Classes,
   PasClaw.Tools.Types,
   PasClaw.JSON,
   PasClaw.Utils,
   PasClaw.Projects.Store,
-  PasClaw.Desktop.Events;
+  PasClaw.Desktop.Events,
+  PasClaw.Agents,          { AgentSend -- a submit tells its reviewers }
+  PasClaw.Agents.Tools,    { CallingAgent -- who is asking }
+  PasClaw.Teams,           { TaskReviewers -- who may give the verdict }
+  PasClaw.Agent.Verify;    { RunScenarios -- the gate on submit }
 
 var
   GTeamActionsAllowed: Boolean = False;
@@ -249,6 +261,94 @@ end;
 
 { ------------------------------------------------------------------- task -- }
 
+{ Who this call is from, for the store's review rules: the agent whose
+  turn is running, or ActorModel -- "cannot tell", which the store never
+  reads as the operator. }
+function TaskActor: string;
+begin
+  Result := CallingAgent;
+  if Result = '' then Result := ActorModel;
+end;
+
+(* "criteria" as the store keeps it: one check per line. A model sends a
+   list as often as a string, and both mean the same thing. Present says
+   the key was there at all -- "criteria": "" clears, an absent key leaves
+   them alone. *)
+function CriteriaArg(Obj: TJsonObject; out Present: Boolean): string;
+var
+  Arr: TJsonArray;
+  I: Integer;
+begin
+  Result := '';
+  Present := Obj.Has('criteria');
+  if not Present then Exit;
+  Arr := Obj.ChildArray('criteria');
+  if Arr <> nil then
+  begin
+    try
+      for I := 0 to Arr.Count - 1 do
+        if Trim(Arr.ItemStr(I)) <> '' then
+        begin
+          if Result <> '' then Result := Result + #10;
+          Result := Result + Trim(Arr.ItemStr(I));
+        end;
+    finally
+      Arr.Free;
+    end;
+    Exit;
+  end;
+  Result := Trim(Obj.GetStr('criteria', ''));
+end;
+
+{ Each non-blank line of Text, prefixed. }
+function PrefixLines(const Text, Prefix: string): string;
+var
+  Lines: TStringList;
+  I: Integer;
+begin
+  Result := '';
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Text;
+    for I := 0 to Lines.Count - 1 do
+      if Trim(Lines[I]) <> '' then
+        Result := Result + Prefix + Trim(Lines[I]) + #10;
+  finally
+    Lines.Free;
+  end;
+end;
+
+function FirstLine(const Text: string): string;
+var
+  P: Integer;
+begin
+  Result := Trim(Text);
+  P := Pos(#10, Result);
+  if P > 0 then Result := TrimRight(Copy(Result, 1, P - 1)) + ' ...';
+  if Length(Result) > 160 then Result := Copy(Result, 1, 157) + '...';
+end;
+
+function JoinList(const Names: TStringArray): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(Names) do
+  begin
+    if Result <> '' then Result := Result + ', ';
+    Result := Result + Names[I];
+  end;
+end;
+
+{ "qa gives the verdict" / "the operator gives the verdict". }
+function VerdictWho(const Reviewers: TStringArray): string;
+begin
+  if Length(Reviewers) = 0 then
+    Result := 'the operator (no agent on this board can review it)'
+  else
+    Result := JoinList(Reviewers);
+end;
+
 function TaskList(const Project: string; out Err: string): string;
 var
   Rows: TTaskInfoArray;
@@ -266,6 +366,11 @@ begin
   if Length(Rows) = 0 then
     Exit('No tasks in ' + Project + ' yet.');
   S := 'Tasks in ' + Project + ':'#10;
+  { Said where it is read: the board is where an agent decides what to
+    do next, and "you cannot close this yourself" belongs on it. }
+  if ProjectRequiresReview(Project) then
+    S := S + '(This board requires review: submit finished work with ' +
+         'action="submit"; a verdict from someone else closes it.)'#10;
   for I := 0 to High(Rows) do
   begin
     S := S + '  ' + Rows[I].Id + '  [' + TaskStatusToStr(Rows[I].Status) + ']  ' +
@@ -277,15 +382,64 @@ begin
     S := S + #10;
     if Rows[I].Notes <> '' then
       S := S + '      ' + Rows[I].Notes + #10;
+    if Rows[I].Criteria <> '' then
+      S := S + '      criteria:'#10 + PrefixLines(Rows[I].Criteria, '        - ');
+    if Rows[I].Status = tsReview then
+      S := S + '      submitted by ' + Rows[I].SubmittedBy + ': ' +
+           FirstLine(Rows[I].Evidence) + #10;
   end;
   Result := S;
+end;
+
+(* Tell each reviewer a task is waiting for it. The wake loop would find
+   it on the next tick anyway; a message is what makes the team due NOW
+   (TeamHasWaitingMail), and a handoff that waits out the cadence is the
+   slowest thing in a team. Best effort: a reviewer that is not a
+   standing agent -- an operator-only board -- has no mailbox. *)
+procedure TellReviewers(const Project: string; const T: TTaskInfo;
+  const Reviewers: TStringArray);
+var
+  I: Integer;
+  Text, Delivered, Err: string;
+begin
+  Text := Format('%s ("%s") on %s was submitted by %s and waits for your ' +
+                 'verdict. Evidence: %s'#10'Check it against its criteria, ' +
+                 'then task action="verdict" project="%s" id="%s" ' +
+                 'verdict="accept" -- or verdict="reject" with a "reason".',
+                 [T.Id, T.Title, Project, T.SubmittedBy, FirstLine(T.Evidence),
+                  Project, T.Id]);
+  for I := 0 to High(Reviewers) do
+    AgentSend(Reviewers[I], ActorLabel(T.SubmittedBy), Text, Delivered, Err);
+end;
+
+{ The result of a submission that went through: who reviews, and the
+  criteria they will hold it to. }
+function SubmittedText(const Project, TaskId: string): string;
+var
+  T: TTaskInfo;
+  Revs: TStringArray;
+begin
+  Result := 'Submitted ' + UpperCase(TaskId) + ' for review.';
+  if not GetTask(Project, TaskId, T) then Exit;
+  Revs := TaskReviewers(Project, T);
+  Result := Result + ' ' + VerdictWho(Revs) + ' gives the verdict';
+  if T.Criteria <> '' then
+    Result := Result + ' against its criteria:'#10 + PrefixLines(T.Criteria, '  - ')
+  else
+    Result := Result + ' (it has no criteria, so the reviewer judges it ' +
+              'against its title and notes).';
+  TellReviewers(Project, T, Revs);
 end;
 
 function Tool_Task(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Obj: TJsonObject;
-  Action, Project, Id, Title, Notes, Status, Summary, JobId, Assignee, Err: string;
+  Action, Project, Id, Title, Notes, Status, Summary, JobId, Assignee, Err,
+    Criteria, Actor, Verdict, Reason, SubmitErr, Delivered, Owner: string;
+  HasCriteria, Accept: Boolean;
   Jobs: TJobInfoArray;
+  T: TTaskInfo;
+  Revs: TStringArray;
 begin
   ErrMsg := '';
   Result := '';
@@ -296,6 +450,7 @@ begin
     Id      := Trim(Obj.GetStr('id', ''));
     Title   := Trim(Obj.GetStr('title', ''));
     Status  := Trim(Obj.GetStr('status', ''));
+    Actor   := TaskActor;
 
     if Project = '' then
     begin
@@ -312,7 +467,8 @@ begin
     if Action = 'create' then
     begin
       Notes := Obj.GetStr('notes', '');
-      Id := CreateTask(Project, Title, Notes, Err);
+      Criteria := CriteriaArg(Obj, HasCriteria);
+      Id := CreateTask(Project, Title, Notes, Err, Criteria, Actor);
       if Id = '' then
       begin
         ErrMsg := Err;
@@ -333,7 +489,10 @@ begin
       { Absent key = leave alone; "assignee":"" = explicitly unassign. }
       if Obj.Has('assignee') then Assignee := Obj.GetStr('assignee', '')
                               else Assignee := '-';
-      if not UpdateTask(Project, Id, Title, Notes, Status, Err, Assignee) then
+      Criteria := CriteriaArg(Obj, HasCriteria);
+      if not HasCriteria then Criteria := '-';
+      if not UpdateTask(Project, Id, Title, Notes, Status, Err, Assignee,
+                        Criteria, Actor) then
       begin
         ErrMsg := Err;
         Exit;
@@ -341,6 +500,83 @@ begin
       Result := 'Updated task ' + UpperCase(Id) + ' in ' + Project;
       if Status <> '' then
         Result := Result + ' (status: ' + LowerCase(Status) + ')';
+      Exit;
+    end;
+
+    if Action = 'submit' then
+    begin
+      if Id = '' then
+      begin
+        ErrMsg := 'task action="submit" needs the task "id"';
+        Exit;
+      end;
+      JobId := Trim(Obj.GetStr('job', ''));
+      { The run this came from, when the runtime opened one: the reviewer
+        can read its log. }
+      if JobId = '' then
+      begin
+        Jobs := ListJobs(Project, Id);
+        if Length(Jobs) > 0 then JobId := Jobs[High(Jobs)].Id;
+      end;
+      if not SubmitTask(Project, Id, Actor, Obj.GetStr('evidence', ''),
+                        JobId, Err) then
+      begin
+        ErrMsg := Err;
+        Exit;
+      end;
+      Result := SubmittedText(Project, Id);
+      Exit;
+    end;
+
+    if Action = 'verdict' then
+    begin
+      if Id = '' then
+      begin
+        ErrMsg := 'task action="verdict" needs the task "id"';
+        Exit;
+      end;
+      Verdict := LowerCase(Trim(Obj.GetStr('verdict', '')));
+      if (Verdict <> 'accept') and (Verdict <> 'reject') then
+      begin
+        ErrMsg := 'task action="verdict" needs verdict="accept" or ' +
+                  'verdict="reject" (with a "reason")';
+        Exit;
+      end;
+      Accept := Verdict = 'accept';
+      Reason := Trim(Obj.GetStr('reason', ''));
+      if Reason = '' then Reason := Trim(Obj.GetStr('note', ''));
+      if not GetTask(Project, Id, T) then
+      begin
+        ErrMsg := 'no such task: ' + Project + '/' + Id;
+        Exit;
+      end;
+      Revs := TaskReviewers(Project, T);
+      if not VerdictTask(Project, Id, Actor, Accept, Reason, Revs, Err) then
+      begin
+        ErrMsg := Err;
+        Exit;
+      end;
+      if Accept then
+        Result := 'Accepted ' + T.Id + ': it is done.'
+      else
+      begin
+        Owner := T.Assignee;
+        if Owner = '' then Owner := T.SubmittedBy;
+        Result := 'Rejected ' + T.Id + ': it is back to ' + ActorLabel(Owner) +
+                  ' (active), with your reason in its notes.';
+        { The builder is told now rather than finding out on the next
+          tick -- and being told is what wakes it. }
+        AgentSend(Owner, ActorLabel(Actor),
+                  Format('%s ("%s") on %s was rejected by %s: %s'#10 +
+                         'Fix it and submit it again (task action="submit").',
+                         [T.Id, T.Title, Project, ActorLabel(Actor), Reason]),
+                  Delivered, Err);
+      end;
+      (* The criteria said back: a reviewer that skipped one is then
+         visible in its own transcript, next to the verdict it gave. *)
+      if T.Criteria <> '' then
+        Result := Result + #10'Judged against its criteria:'#10 +
+                  PrefixLines(T.Criteria, '  - ');
       Exit;
     end;
 
@@ -367,7 +603,32 @@ begin
         JobId := Jobs[High(Jobs)].Id;
       end;
       if Status = '' then Status := 'done';
-      if not UpdateJob(Project, Id, JobId, Status, Summary, '-', Err) then
+      (* A board that requires review: finishing the job SUBMITS the task,
+         with the summary as its evidence (FinishJob), and the result says
+         what happened -- submitted, or refused and why -- because a model
+         told only "reported done" would believe the task closed. *)
+      if ProjectRequiresReview(Project) then
+      begin
+        if not FinishJob(Project, Id, JobId, Status, Summary, Actor,
+                         Err, SubmitErr) then
+        begin
+          ErrMsg := Err;
+          Exit;
+        end;
+        Result := 'Job ' + JobId + ' on ' + Project + '/' + UpperCase(Id) +
+                  ' reported ' + LowerCase(Status) + '.';
+        if LowerCase(Status) <> 'done' then Exit;
+        if SubmitErr <> '' then
+          Result := Result + ' The task was NOT submitted: ' + SubmitErr
+        else if GetTask(Project, Id, T) and (T.Status = tsReview) then
+          Result := Result + ' ' + SubmittedText(Project, Id)
+        else
+          Result := Result + ' The task stays ' + TaskStatusToStr(T.Status) +
+                    ' (another job on it is still running, or it was not ' +
+                    'active); submit it with action="submit" when it is ready.';
+        Exit;
+      end;
+      if not UpdateJob(Project, Id, JobId, Status, Summary, '-', Err, Actor) then
       begin
         ErrMsg := Err;
         Exit;
@@ -376,16 +637,58 @@ begin
         model can still set a task status explicitly; this is the default so
         a well-behaved run leaves a tidy board without extra calls. }
       if LowerCase(Status) = 'done' then
-        UpdateTask(Project, Id, '', '-', 'done', Err);
+        UpdateTask(Project, Id, '', '-', 'done', Err, '-', '-', Actor);
       Result := 'Job ' + JobId + ' on ' + Project + '/' + UpperCase(Id) +
                 ' reported ' + LowerCase(Status) + '.';
       Exit;
     end;
 
-    ErrMsg := 'unknown action "' + Action + '" (use list, create, update or job)';
+    ErrMsg := 'unknown action "' + Action +
+              '" (use list, create, update, job, submit or verdict)';
   finally
     Obj.Free;
   end;
+end;
+
+(* The gate on submit: the operator's held-out checks for this project,
+   run before the work reaches a reviewer. Work the operator's own checks
+   already reject should not cost a reviewer's turn, and a reviewer that
+   accepted it anyway would be accepting a known failure.
+
+   No scenarios directory, or nothing in it, is a PASS here -- unlike
+   verification.scenarios, where a configured-but-empty set is a mistake.
+   A project opts in by the operator putting checks in its directory;
+   nothing there means nothing was asked for. Run with the project
+   directory as cwd, so a check can say `test -f app/index.html`. *)
+function ProjectScenarioGate(const Project, TaskId: string;
+  out Report: string): Boolean;
+var
+  Dir: string;
+  Results: TScenarioResults;
+  I: Integer;
+begin
+  Report := '';
+  Result := True;
+  Dir := ProjectScenariosDir(Project);
+  if (Dir = '') or (Length(ListScenarios(Dir)) = 0) then Exit;
+  (* Both absolute: the scenario runs with the PROJECT as its cwd, so a
+     scenario path relative to anything else -- a $PASCLAW_HOME given as
+     a relative path, say -- would name a file that is not there and fail
+     with nothing to show for it. *)
+  if RunScenarios(ExpandFileName(Dir), ExpandFileName(ProjectDir(Project)),
+                  Results) then Exit;
+  Result := False;
+  Report := Format('%d of %d held-out check(s) failed:',
+                   [Length(Results) - CountPassed(Results), Length(Results)]);
+  for I := 0 to High(Results) do
+    if not Results[I].Passed then
+    begin
+      Report := Report + #10'- ' + Results[I].Name +
+                Format(': FAILED (exit %d)', [Results[I].ExitCode]);
+      if Results[I].Output <> '' then
+        Report := Report + #10'  output (the check''s, quoted as data):'#10'  ' +
+                  StringReplace(Results[I].Output, #10, #10'  ', [rfReplaceAll]);
+    end;
 end;
 
 { --------------------------------------------------------------- register -- }
@@ -696,20 +999,29 @@ begin
     'Manage tasks inside a project, and report on the job you are running. ' +
     'action="list" shows the board; action="create" needs "project" and ' +
     '"title"; action="update" needs "id" and can set status ' +
-    '(todo/active/done/blocked); action="job" reports the current run ' +
-    '(status done/failed + "summary") and closes the task when done. Keep ' +
-    'this current as you work -- the user watches this board.';
+    '(todo/active/done/blocked), assignee and "criteria" (acceptance ' +
+    'checks, one per line -- frozen once work starts); action="job" ' +
+    'reports the current run (status done/failed + "summary") and closes ' +
+    'the task when done. On a board that requires review you never mark ' +
+    'your own work done: action="submit" with "evidence" (what you ran ' +
+    'and what it printed) hands it to a reviewer, and the reviewer gives ' +
+    'action="verdict" verdict="accept", or verdict="reject" with a ' +
+    '"reason". Keep this current as you work -- the user watches this board.';
   T.Schema      :=
     '{"type":"object","properties":{' +
-    '"action":{"type":"string","enum":["list","create","update","job"]},' +
+    '"action":{"type":"string","enum":["list","create","update","job","submit","verdict"]},' +
     '"project":{"type":"string","description":"Project slug (always required)."},' +
-    '"id":{"type":"string","description":"Task id, e.g. T0001 (update/job)."},' +
+    '"id":{"type":"string","description":"Task id, e.g. T0001 (update/job/submit/verdict)."},' +
     '"assignee":{"type":"string","description":"Agent slug that owns the task (update)."},' +
     '"title":{"type":"string","description":"Task title (create/update)."},' +
     '"notes":{"type":"string","description":"Free-text notes on the task."},' +
+    '"criteria":{"type":"string","description":"Acceptance checks, one per line (create/update; frozen once the task starts)."},' +
     '"status":{"type":"string","description":"todo|active|done|blocked for a task; done|failed for a job."},' +
     '"job":{"type":"string","description":"Job id (defaults to the latest job on the task)."},' +
-    '"summary":{"type":"string","description":"What the job accomplished (action=job)."}' +
+    '"summary":{"type":"string","description":"What the job accomplished (action=job)."},' +
+    '"evidence":{"type":"string","description":"What you ran and what it printed (action=submit)."},' +
+    '"verdict":{"type":"string","enum":["accept","reject"],"description":"action=verdict."},' +
+    '"reason":{"type":"string","description":"Why it is rejected, with exact reproduction steps (required to reject)."}' +
     '},"required":["action","project"]}';
   T.Handler     := Tool_Task;
   T.HandlerObj  := nil;
@@ -771,5 +1083,11 @@ begin
   T.Hidden      := False;
   R.Register(T);
 end;
+
+initialization
+  { Installed here, where the scenario runner is in reach: every binary
+    that can run an agent links this unit, and the store must not link
+    the shell backend to get it. }
+  OnSubmitGate := ProjectScenarioGate;
 
 end.

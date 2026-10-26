@@ -95,6 +95,8 @@ tool only to *show* the result.
 3. **Sends the kickoff** to the lead, goal or board named.
 4. **Starts the lead's first run**, so something happens in seconds.
 5. **Writes the team's state file**, which is what the wake loop reads.
+6. **Turns review on for the board** (unless the template opts out), with
+   the template's reviewers. See [Review](#review-the-board-holds-the-rule).
 
 Templates are validated before anything is created: unique slugs, every
 `parent` naming an agent in the same template, no reporting cycles, and
@@ -109,6 +111,87 @@ decoration — it is how the wake loop knows who has work, and how two
 workers avoid grabbing the same task. A handover said only in a message
 is invisible to everything else.
 
+## Review: the board holds the rule
+
+The role prompts used to say "claiming done without evidence is the one
+prohibited move" and "have the test engineer verify before you close it",
+and nothing stopped either. On a team's board the **store** holds the
+rule now, so no route to the board skips it
+([plan](./team-board-plan.md), Phase 1):
+
+```
+task action=submit  project id evidence        builder: todo/active -> review
+task action=verdict project id verdict=accept  reviewer: review -> done
+task action=verdict project id verdict=reject reason
+                                                reviewer: review -> active
+```
+
+- **An agent never marks its own work done.** `task update status=done`
+  from an agent is refused with the `submit` it should have been, and a
+  finished job (`task action=job status=done`, or the desktop's job
+  runner) *submits* the task instead of closing it, with the job's
+  summary as the evidence.
+- **A submission needs evidence** — what was run and what it printed —
+  and is recorded with who submitted it, when, and from which job.
+- **The verdict is someone else's.** Refused from the submitter, from the
+  task's owner, from anyone not on the reviewer list, and from a caller
+  that cannot be identified: the caller is the agent whose turn is
+  making the call (the same per-thread identity `agent action=send`
+  uses), and a turn that is not a standing agent's — the desktop chat, a
+  background subagent — is *not* treated as the operator. The refusal
+  names who can give the verdict instead.
+- **A reject needs a reason**, goes back to `active` with the same owner,
+  and the reason is appended to the task's notes. The builder is
+  messaged, which wakes it; the reviewers are messaged on a submit for
+  the same reason. A task in review is not its builder's to move — only
+  a verdict moves it.
+- **Who reviews** is the template's `review.by` (`software-team`: `qa`).
+  Without one, the submitter's `parent` reviews — in `duo`, the Foreman
+  reviews the developer. A submitter is never its own reviewer, even when
+  listed: the Test Engineer's own work goes to *its* parent.
+- **The operator can do anything** — close a task in review, send it
+  back, edit frozen criteria — from the desktop's **Accept** / **Reject**
+  buttons, `POST /v1/projects/<p>/tasks/<t>/verdict`, or a `PATCH`. A
+  person is the authority the review exists for, and every override is
+  recorded as theirs.
+
+**Criteria** are a task field of their own, one check per line, apart
+from the notes. The Product Manager writes them while the task is
+`todo`; once work starts they are **frozen** for agents ("reopen it —
+status todo — to change them"), and a builder never writes the criteria
+for its own task. The verdict is judged against them, and the `verdict`
+result lists them back so a reviewer that skipped one is visible in its
+own transcript.
+
+**Held-out checks on submit.** Executables in
+`$PASCLAW_HOME/scenarios/<workspace>/<project>/` (the
+[verification](./configuration.md) scenario format: `*.sh`, `*.py`,
+anything executable; run by name order, with the project directory as
+the working directory) run before a submission is accepted. A red one
+refuses the submit with its output, so work the operator's checks
+already reject never costs a reviewer a turn. They live outside the
+workspace for the reason verification scenarios do: a check the builder
+can open is a check it can "fix". No directory, no gate.
+
+**Receipts.** Every create, assign, start, submit, accept, reject,
+reopen, criteria change and direct status change is a line in
+`projects/<p>/activity.jsonl`, written by the store so the HTTP routes
+and the desktop are recorded alongside the tool. `GET
+/v1/projects/<p>/activity[?task=T0004&limit=50]` serves it, and the
+desktop shows a task's history when its row is expanded.
+
+**The file tools cannot go around it.** `task.json`, `job.json`,
+`project.json` and `activity.jsonl` are refused to every file-writing
+tool (whatever `restrict_to_workspace` says) with a pointer to the task
+tool; the app the team builds and a job's `artifacts/` stay writable.
+What this does not reach is `shell_exec`, whose writes cannot be
+path-checked reliably.
+
+A template opts its board out with `"review": false`; a project made by
+hand or by the desktop's Ask path does not require review unless you
+switch it on (`POST /v1/projects/<p>/review {"review":true}`), so one
+person building one app sees no change.
+
 ## The wake loop
 
 The gateway ticks every 30 seconds and, for each team whose own cadence
@@ -119,10 +202,12 @@ is due (`wake_minutes`, default 15):
   two cadences, whose owner is idle, produces a message to the
   *Foreman*, not another poke at the stuck worker. Waking a stuck worker
   repeats the stall; telling its manager is what unsticks it;
-- **wakes agents that have a reason to run** — pending messages, or open
-  tasks assigned to them. An agent with nothing to do is left alone: a
-  loop that burns a provider call per agent per tick to be told "no
-  news" is a bill, not a team;
+- **wakes agents that have a reason to run** — pending messages, open
+  tasks assigned to them, or tasks **waiting for their verdict**. A task
+  in review wakes its reviewer, not its owner: it is not the owner's to
+  move. An agent with nothing to do is left alone: a loop that burns a
+  provider call per agent per tick to be told "no news" is a bill, not
+  a team;
 - **parks a finished team** — a board fully done for two ticks stops
   being woken.
 
@@ -239,9 +324,14 @@ software team.
       "parent": "boss" }
   ],
   "kickoff": "Goal: {{goal}}  Project: {{project}}",
-  "wake": { "minutes": 15 }
+  "wake": { "minutes": 15 },
+  "review": { "by": ["boss"] }
 }
 ```
+
+`review.by` must name agents in the template; leave it out and each
+submitter's parent reviews. `"review": false` (or `{"required": false}`)
+leaves the board without review.
 
 `pasclaw team export <file>` writes the live roster out as one of these
 — how a team you hand-tuned becomes a team you can share.
