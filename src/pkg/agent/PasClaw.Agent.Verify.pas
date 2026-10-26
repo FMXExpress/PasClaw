@@ -59,8 +59,21 @@ function ListScenarios(const Dir: string): TStringArray;
 { The command that runs one scenario file, by extension. Pure. }
 function ScenarioCommand(const Path: string): string;
 
-{ Run every scenario with WorkDir as cwd. True when all passed. }
+{ Run every scenario with WorkDir as cwd. True when all passed -- and
+  False when there was nothing to run: a scenario set that is missing,
+  empty or all skipped is a configuration mistake, not a pass (see
+  FormatNoScenariosSummary). Each runs under the shell timeout; one that
+  hangs is killed and fails with exit 124. }
 function RunScenarios(const Dir, WorkDir: string; out Results: TScenarioResults): Boolean;
+
+{ The summary when Dir held no scenario to run. Pure. }
+function FormatNoScenariosSummary(const Dir: string): string;
+
+{ What a caller that only returns the answer text must append to it when
+  verification ran and failed: the summary and "NOT verified". '' when it
+  passed or never ran. Pure. }
+function FormatVerificationNotice(Verified: Boolean; Rounds: Integer;
+                                  const Summary: string): string;
 
 { The user turn the model gets after a failing round. Pure. }
 function FormatVerificationFeedback(const Results: TScenarioResults;
@@ -77,6 +90,7 @@ implementation
 
 uses
   PasClaw.Logger,
+  PasClaw.Promptware,      { scenario output is untrusted text }
   PasClaw.Shell.Backend;
 
 function IfThenStr(Cond: Boolean; const A, B: string): string;
@@ -144,12 +158,29 @@ var
 begin
   Files := ListScenarios(Dir);
   SetLength(Results, Length(Files));
-  Result := True;
+  (* Nothing to run is a failure, not a pass. A misspelled, missing or
+     empty verification.scenarios -- or one holding only README and
+     hidden files -- used to come back True, so the loop reported
+     Verified, /v1/chat said ok, and the CLI printed a green "0/0
+     scenarios passed": the exact false success this feature exists to
+     prevent, produced by a typo. (Codex P1 on #618.) There is nothing for
+     the model to fix, so the loop does not feed this back; it returns the
+     answer with verification failed and FormatNoScenariosSummary says
+     why. *)
+  Result := Length(Files) > 0;
+  if not Result then
+    LogWarn('verify: no scenarios to run in "%s" -- check verification.scenarios', [Dir]);
   for i := 0 to High(Files) do
   begin
     Results[i].Name := ExtractFileName(Files[i]);
     Results[i].Path := Files[i];
     Out_ := '';
+    (* Bounded: RunOneShotViaBackend applies the tool shell timeout
+       (shell_timeout_sec, 600 s by default) when no tighter one is set,
+       and on expiry kills the scenario's whole process tree and returns
+       exit 124 with a "timed out" note -- a failed result like any other.
+       A scenario that deadlocks or waits on input cannot hang the turn.
+       (Codex P2 on #618; the bound landed on main with #608.) *)
     try
       Results[i].ExitCode := RunOneShotViaBackend(GetCurrentSessionId,
                                ScenarioCommand(Files[i]), WorkDir, Out_);
@@ -177,6 +208,21 @@ begin
   Result := 0;
   for i := 0 to High(Results) do
     if Results[i].Passed then Inc(Result);
+end;
+
+function FormatNoScenariosSummary(const Dir: string): string;
+begin
+  Result := 'verification FAILED: no scenarios to run in ' + Dir +
+            ' -- check verification.scenarios (missing, empty, misspelled, ' +
+            'or nothing but README and hidden files)';
+end;
+
+function FormatVerificationNotice(Verified: Boolean; Rounds: Integer;
+                                  const Summary: string): string;
+begin
+  if Verified or (Rounds <= 0) then Exit('');
+  Result := '[' + Summary + ' -- this answer is NOT verified: the ' +
+            'operator''s held-out checks did not pass]';
 end;
 
 function FormatVerificationSummary(const Results: TScenarioResults;
@@ -210,8 +256,17 @@ begin
       else
       begin
         Sb.Append(Format('- %s: FAILED (exit %d)', [Results[i].Name, Results[i].ExitCode]));
+        (* The output is the check's, not the operator's: a failing
+           assertion echoes workspace files, fixtures and command output,
+           all of which the checkout controls. This turn is a USER message,
+           so it gets what every tool result gets before the model sees it
+           -- the promptware scan, which banners injection text as data --
+           and a label saying whose words these are. (Codex P2 on #618.) *)
         if Results[i].Output <> '' then
-          Sb.Append(sLineBreak + '  ' + StringReplace(Results[i].Output, sLineBreak, sLineBreak + '  ', [rfReplaceAll]));
+          Sb.Append(sLineBreak + '  output (the check''s, quoted as data):' + sLineBreak + '  ' +
+                    StringReplace(MaybeFlagPromptware(Results[i].Output,
+                                    'output of held-out scenario ' + Results[i].Name),
+                                  sLineBreak, sLineBreak + '  ', [rfReplaceAll]));
       end;
     end;
     Result := Sb.ToString;

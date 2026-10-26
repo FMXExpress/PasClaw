@@ -2498,7 +2498,13 @@ begin
         Loop.VerifyRounds := VerifyRound;
         Loop.VerifyPassed := CountPassed(VerifyResults);
         Loop.VerifyFailed := Length(VerifyResults) - Loop.VerifyPassed;
-        Loop.VerifyReport := FormatVerificationSummary(VerifyResults, VerifyRound, VerifyMax);
+        { No scenario to run is a configuration mistake: Verified is False
+          (RunScenarios), the summary says so, and nothing goes back to
+          the model -- it has nothing to fix. }
+        if Length(VerifyResults) = 0 then
+          Loop.VerifyReport := FormatNoScenariosSummary(Cfg.ScenariosDir)
+        else
+          Loop.VerifyReport := FormatVerificationSummary(VerifyResults, VerifyRound, VerifyMax);
         LogInfo('toolloop: %s', [Loop.VerifyReport]);
         if (not Loop.Verified) and (VerifyRound < VerifyMax) and (Length(VerifyResults) > 0) then
         begin
