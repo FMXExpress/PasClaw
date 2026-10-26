@@ -70,6 +70,11 @@ begin
   AssertEqStr(Info.TokenHash, TokenHashHex('tok'), 'token hash');
   AssertEqStr(Info.Version, '0.1.6', 'version');
   AssertTrue(Info.StartedAt <> '', 'started_at stamped');
+  { ISO 8601 UTC, "2026-10-26T21:30:05Z": the separators are literal, not
+    the locale's (NowIsoUtc quotes them). }
+  AssertTrue((Length(Info.StartedAt) = 20) and (Info.StartedAt[5] = '-') and
+             (Info.StartedAt[11] = 'T') and (Info.StartedAt[14] = ':') and
+             (Info.StartedAt[20] = 'Z'), 'started_at is ISO 8601 UTC: ' + Info.StartedAt);
   AssertEqStr(GatewayBaseURL(Info), 'http://127.0.0.1:8099', 'wildcard bind -> loopback');
   Info.Bind := '192.168.1.5';
   AssertEqStr(GatewayBaseURL(Info), 'http://192.168.1.5:8099', 'explicit bind kept');
