@@ -2226,6 +2226,14 @@ function paintNeedsYou(w) {
     const r = row();
     r.appendChild(el("div", null, `${d.id} from ${d.asked_by}: ${d.question}`));
     if (d.task) r.appendChild(el("div", "muted", `holds up ${d.task} on ${d.project}`));
+    /* A proposed rule shows the check itself: approving it holds every
+       future submit to this script, so it is read before it is approved. */
+    if (d.kind === "rule" && d.payload && d.payload.script) {
+      const pre = el("pre", "muted", d.payload.script);
+      pre.style.cssText = "margin:0;max-height:120px;overflow:auto;" +
+                          "white-space:pre-wrap;font-size:10px";
+      r.appendChild(pre);
+    }
     const a = acts();
     const answer = ans => api(`/v1/decisions/${d.id}/answer`,
                               { method: "POST", body: { answer: ans } });

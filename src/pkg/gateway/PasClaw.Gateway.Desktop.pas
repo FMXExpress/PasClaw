@@ -140,6 +140,7 @@ uses
   PasClaw.Agents,        { standing agents + the mailbox between them }
   PasClaw.Teams,         { ready-made teams: templates, seeding, the tick }
   PasClaw.Decisions,     { the operator's queue -- /v1/decisions, /v1/needs-you }
+  PasClaw.Projects.Tools,  { ProposeRule / RulesJSON -- /v1/projects/<p>/rules }
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
   PasClaw.Apps,
@@ -2070,7 +2071,7 @@ begin
       SetLength(NoReviewers, 0);
       if not VerdictTask(Project, TaskId, ActorOperator, Verdict = 'accept',
                          Obj.GetStr('reason', Obj.GetStr('note', '')),
-                         NoReviewers, Err) then
+                         NoReviewers, Err, Obj.GetStr('cause', '')) then
       begin
         ReplyErr(Resp, 409, Err);
         Exit;
@@ -2317,6 +2318,58 @@ begin
       finally
         Root.Free;
       end;
+      Exit;
+    end;
+
+    (* /v1/projects/<name>/rules
+
+         GET   the project's rules, rule/declined causes and cause counts
+         POST  {"cause","script","name"} -- the operator's own rule
+
+       The operator's rule is proven like any other (it must fail on the
+       rejected submission and pass on the accepted fix) and then goes
+       straight in: there is nobody above the operator to approve it. *)
+    if (Segs.Count = 4) and (LowerCase(Segs[3]) = 'rules') then
+    begin
+      if not ProjectExists(Project) then
+      begin
+        ReplyErr(Resp, 404, 'no such project');
+        Exit;
+      end;
+      if Method = 'GET' then
+      begin
+        ReplyJSON(Resp, 200, RulesJSON(Project));
+        Exit;
+      end;
+      if Method = 'POST' then
+      begin
+        Obj := BodyObj(Body);
+        try
+          if Obj = nil then
+          begin
+            ReplyErr(Resp, 400, 'expected {"cause":"...","script":"..."}');
+            Exit;
+          end;
+          if not ProposeRule(Project, Obj.GetStr('cause', ''), Obj.GetStr('name', ''),
+                             Obj.GetStr('script', ''), ActorOperator, True,
+                             Blueprint, Err) then
+          begin
+            ReplyErr(Resp, 422, Err);
+            Exit;
+          end;
+        finally
+          Obj.Free;
+        end;
+        Root := TJsonObject.Create;
+        try
+          Root.PutStr('report', Blueprint);
+          ReplyJSON(Resp, 200, Root.ToJSON);
+        finally
+          Root.Free;
+        end;
+        Exit;
+      end;
+      ReplyErr(Resp, 405, 'method not allowed');
       Exit;
     end;
 

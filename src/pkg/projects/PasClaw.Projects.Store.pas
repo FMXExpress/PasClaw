@@ -145,9 +145,16 @@ type
     SubmittedAt:  string;
     Evidence:     string;   { what was run and what it printed }
     SubmittedJob: string;
+    { The copy of the project taken at that submission
+      (PasClaw.Projects.Snapshots); '' when none could be taken. }
+    SubmittedSnapshot: string;
     { The verdict on that submission (VerdictTask); cleared by the next
       submit, so a task back in review never shows the old verdict. }
     Verdict:      string;   { 'accept' | 'reject' | '' }
+    { A reject's cause: a short slug the reviewer picks
+      ("untested-empty-input"), the same across tasks, so a cause that
+      keeps rejecting work can be noticed and turned into a rule. }
+    VerdictCause: string;
     VerdictBy:    string;
     VerdictAt:    string;
     VerdictNote:  string;
@@ -320,10 +327,27 @@ function SubmitTask(const Project, TaskId, Actor, Evidence, JobId: string;
    a verdict that cannot tell who is giving it must refuse, never default
    to allow), and -- when Reviewers is non-empty -- when the caller is not
    one of them. Reviewers is the CALLER's answer to "who reviews this"
-   (PasClaw.Teams.TaskReviewers); the store does not know the org chart. *)
+   (PasClaw.Teams.TaskReviewers); the store does not know the org chart.
+   Cause is a reject's cause key (slugged); '' for none. *)
 function VerdictTask(const Project, TaskId, Actor: string; Accept: Boolean;
   const Note: string; const Reviewers: TStringArray;
-  out Err: string): Boolean;
+  out Err: string; const Cause: string = ''): Boolean;
+
+type
+  { Told after a reject that named a cause, however it was given. }
+  TTaskRejectedHook = procedure(const Project, TaskId, Cause: string);
+
+var
+  (* PasClaw.Projects.Tools installs one that counts the cause across the
+     board and, the second time it rejects work, tells the lead -- the
+     first step from a repeated mistake to a proven rule (Phase 4). *)
+  OnTaskRejected: TTaskRejectedHook = nil;
+
+(* A project's lists of causes: 'rule_causes' (a proven rule exists for
+   it) and 'declined_causes' (the operator said no to a rule for it, so it
+   does not nag again). Slugged. *)
+function ProjectCauses(const Project, Key: string): TStringArray;
+function AddProjectCause(const Project, Key, Cause: string; out Err: string): Boolean;
 
 (* The receipts: projects/<p>/activity.jsonl, one JSON object per line
    ({"at","task","event","by",...}), oldest first. Every create, assign,
@@ -333,6 +357,10 @@ function VerdictTask(const Project, TaskId, Actor: string; Accept: Boolean;
    TaskId '' = the whole board; Limit > 0 keeps the newest Limit lines. *)
 function ReadActivity(const Project, TaskId: string;
   Limit: Integer = 0): TStringArray;
+(* A receipt from outside the store -- a rule approved or declined is the
+   board's history too. Pairs is key, value, key, value. *)
+procedure RecordActivity(const Project, TaskId, Event, Actor: string;
+  const Pairs: array of string);
 
 (* What this task waits on. Every id must name another task on the same
    board, and an edge that would close a cycle is refused -- a cycle is a
@@ -434,6 +462,7 @@ uses
   SyncObjs,
   PasClaw.JSON,
   PasClaw.Config,       { GetHome -- the held-out scenarios live beside, not in, the workspace }
+  PasClaw.Projects.Snapshots,  { the project as submitted }
   PasClaw.Workspaces,
   PasClaw.Desktop.Events;
 
@@ -1242,7 +1271,11 @@ begin
   if not Result then
     Err := 'could not remove ' + Dir
   else
+  begin
+    { Its snapshots go with it: they are copies of a board that is gone. }
+    RemoveSnapshots(Project);
     PublishProjects;
+  end;
 end;
 
 { ------------------------------------------------------------------ tasks -- }
@@ -1344,6 +1377,12 @@ begin
   end;
 end;
 
+procedure RecordActivity(const Project, TaskId, Event, Actor: string;
+  const Pairs: array of string);
+begin
+  AppendActivity(Project, TaskId, Event, Actor, Pairs);
+end;
+
 function ReadActivity(const Project, TaskId: string;
   Limit: Integer): TStringArray;
 var
@@ -1435,6 +1474,8 @@ begin
       Info.VerdictBy    := Obj.GetStr('verdict_by', '');
       Info.VerdictAt    := Obj.GetStr('verdict_at', '');
       Info.VerdictNote  := Obj.GetStr('verdict_note', '');
+      Info.VerdictCause := Obj.GetStr('verdict_cause', '');
+      Info.SubmittedSnapshot := Obj.GetStr('submitted_snapshot', '');
       Info.WaitsOn      := ManifestNames(Obj, 'waits_on', True);
       Info.LeaseBy      := Obj.GetStr('lease_by', '');
       Info.LeaseUntil   := Obj.GetStr('lease_until', '');
@@ -1734,7 +1775,7 @@ end;
 function SubmitTask(const Project, TaskId, Actor, Evidence, JobId: string;
   out Err: string): Boolean;
 var
-  Path, Id, St, By, Report, Owner: string;
+  Path, Id, St, By, Report, Owner, Snap, SnapErr: string;
   Obj: TJsonObject;
   T: TTaskInfo;
 
@@ -1784,6 +1825,12 @@ begin
     Exit;
   end;
 
+  (* The project as submitted, kept outside the workspace: what a reviewer
+     judged, and what a rule for a repeated cause is proven against
+     (PasClaw.Projects.Snapshots). A project too big to copy still
+     submits -- the snapshot is evidence, not a gate. *)
+  if not TakeSnapshot(Project, Id, Snap, SnapErr) then Snap := '';
+
   (* Whose work this is. The caller when it is a named agent; otherwise
      the task's owner -- a job finishing, or an unattributed model turn,
      is still the owner's work, and recording it as anyone else's would
@@ -1811,6 +1858,7 @@ begin
       Obj.PutStr('submitted_at', NowIsoUtc);
       Obj.PutStr('evidence', Evidence);
       Obj.PutStr('submitted_job', UpperCase(Trim(JobId)));
+      Obj.PutStr('submitted_snapshot', Snap);
       Obj.PutStr('verdict', '');
       Obj.PutStr('verdict_by', '');
       Obj.PutStr('verdict_at', '');
@@ -1830,6 +1878,7 @@ begin
   AppendActivity(Project, Id, 'submit', Actor,
                  ['submitted_by', By, 'owner', Owner,
                   'job', UpperCase(Trim(JobId)),
+                  'snapshot', Snap, 'snapshot_error', SnapErr,
                   'evidence', Copy(Evidence, 1, 500)]);
   PublishTask(Project, Id, 'review');
   Result := True;
@@ -1837,9 +1886,9 @@ end;
 
 function VerdictTask(const Project, TaskId, Actor: string; Accept: Boolean;
   const Note: string; const Reviewers: TStringArray;
-  out Err: string): Boolean;
+  out Err: string; const Cause: string): Boolean;
 var
-  Path, Id, St, Who, Notes, Stamp: string;
+  Path, Id, St, Who, Notes, Stamp, CauseKey: string;
   Obj: TJsonObject;
   T: TTaskInfo;
 begin
@@ -1851,6 +1900,7 @@ begin
     Err := 'no such task: ' + Project + '/' + TaskId;
     Exit;
   end;
+  CauseKey := SanitizeName(Cause);
   if T.Status <> tsReview then
   begin
     Err := Id + ' is not waiting for a verdict (it is ' +
@@ -1939,6 +1989,7 @@ begin
       Obj.PutStr('verdict_by', ActorLabel(Actor));
       Obj.PutStr('verdict_at', Stamp);
       Obj.PutStr('verdict_note', Trim(Note));
+      Obj.PutStr('verdict_cause', CauseKey);
       Obj.PutStr('updated', Stamp);
       WriteManifest(Path, Obj);
     finally
@@ -1947,17 +1998,83 @@ begin
   finally
     GTaskLock.Leave;
   end;
+  (* The snapshot rides on the verdict's receipt: a rule for a repeated
+     cause is proven against the submission a reject was given on and the
+     one accepted after it, and this line is how they are found. *)
   if Accept then
     AppendActivity(Project, Id, 'accept', Actor,
                    ['submitted_by', T.SubmittedBy, 'job', T.SubmittedJob,
-                    'note', Trim(Note)])
+                    'snapshot', T.SubmittedSnapshot, 'note', Trim(Note)])
   else
     AppendActivity(Project, Id, 'reject', Actor,
                    ['submitted_by', T.SubmittedBy, 'job', T.SubmittedJob,
+                    'snapshot', T.SubmittedSnapshot, 'cause', CauseKey,
                     'reason', Trim(Note)]);
   if Accept then PublishTask(Project, Id, 'done')
             else PublishTask(Project, Id, 'active');
   if Accept and Assigned(OnTaskClosed) then OnTaskClosed(Project, Id);
+  if (not Accept) and (CauseKey <> '') and Assigned(OnTaskRejected) then
+    OnTaskRejected(Project, Id, CauseKey);
+  Result := True;
+end;
+
+function ProjectCauses(const Project, Key: string): TStringArray;
+var
+  Dir: string;
+  Obj: TJsonObject;
+begin
+  SetLength(Result, 0);
+  Dir := ProjectDir(Project);
+  if Dir = '' then Exit;
+  Obj := ReadManifest(JoinPath(Dir, 'project.json'));
+  if Obj = nil then Exit;
+  try
+    Result := ManifestNames(Obj, Key);
+  finally
+    Obj.Free;
+  end;
+end;
+
+function AddProjectCause(const Project, Key, Cause: string; out Err: string): Boolean;
+var
+  Dir, Path, C: string;
+  Obj: TJsonObject;
+  Have: TStringArray;
+  Arr: TJsonArray;
+  I: Integer;
+begin
+  Err := '';
+  Result := False;
+  C := SanitizeName(Cause);
+  Dir := ProjectDir(Project);
+  if (Dir = '') or not DirectoryExists(Dir) or (C = '') then
+  begin
+    Err := 'no such project, or no cause: ' + Project + ' / ' + Cause;
+    Exit;
+  end;
+  Path := JoinPath(Dir, 'project.json');
+  GTaskLock.Enter;
+  try
+    Obj := ReadManifest(Path);
+    if Obj = nil then
+    begin
+      Obj := TJsonObject.Create;
+      Obj.PutStr('name', Project);
+    end;
+    try
+      Have := ManifestNames(Obj, Key);
+      Arr := TJsonArray.Create;
+      for I := 0 to High(Have) do
+        if Have[I] <> C then Arr.AddStr(Have[I]);
+      Arr.AddStr(C);
+      Obj.PutArray(Key, Arr);
+      WriteManifest(Path, Obj);
+    finally
+      Obj.Free;
+    end;
+  finally
+    GTaskLock.Leave;
+  end;
   Result := True;
 end;
 

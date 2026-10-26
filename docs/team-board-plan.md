@@ -272,6 +272,19 @@ records, so an agent cannot answer its own.
 
 ## Phase 4 -- a repeated cause becomes a proven rule
 
+**Status: built** ([teams](./teams.md#a-repeated-cause-becomes-a-proven-rule);
+`team_board_tests`). **The open question is settled by snapshots, not
+git:** PasClaw copies the project at every submit (after the held-out
+gate, outside the workspace, minus the board's records and dependency
+folders, 50 MB cap, newest ten per task), so a proof runs against exactly
+what the reviewer judged, the same way for a git repository and for a
+plain `app/` folder. No worktrees, no checkpoint lookups. The proof pair
+is the newest reject for the cause that has a later accept of the same
+task. Drafts are kept in `$PASCLAW_HOME/scenario-drafts/` -- never in the
+scenarios directory, where an unapproved draft would already be gating
+submits -- and the operator's own rule (`POST .../rules`) is proven and
+then installed without an approval step.
+
 - A `reject` verdict carries a **cause**: a short key the reviewer picks
   (`untested-empty-input`, `wrong-path`), normalised to a slug and kept
   in the activity line.

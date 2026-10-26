@@ -384,6 +384,15 @@ begin
     could write one could answer its own question. }
   if PathInsideDirectory(Canon, Canonicalize(WorkspacePath('decisions'))) then
     Exit(True);
+  (* And what the board's rules are judged with, which live outside the
+     workspace so a builder cannot see them -- but with the sandbox off
+     (the default) the file tools reach anywhere, so outside is not enough:
+     the operator's held-out checks, the drafts waiting for approval, and
+     the snapshots a rule is proven against. *)
+  if PathInsideDirectory(Canon, Canonicalize(IncludeTrailingPathDelimiter(GetHome) + 'scenarios')) or
+     PathInsideDirectory(Canon, Canonicalize(IncludeTrailingPathDelimiter(GetHome) + 'scenario-drafts')) or
+     PathInsideDirectory(Canon, Canonicalize(IncludeTrailingPathDelimiter(GetHome) + 'snapshots')) then
+    Exit(True);
   Root := ExcludeTrailingPathDelimiter(Canonicalize(WorkspacePath('projects')));
   if not PathInsideDirectory(Canon, Root) then Exit;
   if PathsEqual(Canon, Root) then Exit(True);

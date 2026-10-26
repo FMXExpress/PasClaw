@@ -367,6 +367,14 @@ begin
   SubmitTask('lone', 'T0001', 'nobody-above', 'ran it', '', Err);
   ExpectBodyContains('GET', '/v1/needs-you', '', '"project":"lone"',
                      'a verdict only the operator can give needs you');
+
+  { The operator's own rule still has to be proven. }
+  ExpectBodyContains('GET', '/v1/projects/lone/rules', '', '"rules"', 'the rules are listed');
+  ExpectStatus('POST', '/v1/projects/lone/rules', '{"cause":"x","script":"exit 0"}', 422,
+               'a rule with nothing to prove it against is a 422');
+  ExpectStatus('POST', '/v1/projects/lone/rules', '', 400, 'a rule needs a body');
+  ExpectStatus('POST', '/v1/projects/nope/rules', '{"cause":"x","script":"exit 0"}', 404,
+               'and a project');
 end;
 
 var

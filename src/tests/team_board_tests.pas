@@ -36,6 +36,7 @@ uses
   PasClaw.Agents.Tools,
   PasClaw.Decisions,
   PasClaw.Tools.Sandbox,
+  PasClaw.Projects.Snapshots,
   PasClaw.Teams;
 
 var
@@ -513,6 +514,150 @@ begin
   AssertContains(Err, 'standing agents', 'a turn that is not an agent''s is told to ask in its reply');
 end;
 
+{ ------------------------------------------------------------- phase 4 -- }
+
+procedure WriteApp(const Project, Html: string);
+begin
+  ForceDirectories(ProjectAppDir(Project));
+  WriteFileText(JoinPath(ProjectAppDir(Project), 'index.html'), Html);
+end;
+
+function Has(const Name: string; const List: TStringArray): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to High(List) do
+    if List[I] = Name then Exit(True);
+end;
+
+procedure TestRules;
+var
+  Err, T1, T2, T3, Out_, Snap, Rep: string;
+  S: TTeamState;
+  List: TDecisionInfoArray;
+  D: TDecisionInfo;
+  Lines: TStringArray;
+  Mail: Integer;
+begin
+  WriteLn('-- causes, snapshots and proven rules');
+  MakeAgent('foreman', '');
+  MakeAgent('r-dev', 'foreman');
+  MakeAgent('r-qa', 'foreman');
+  CreateProject('Rules', 'rules', '', Err);
+  SetProjectReview('rules', True, Names(['r-qa']), Err);
+  { A team on the board, so a repeated cause has a lead to tell (duo's
+    lead is the foreman). Parked: nothing here runs turns. }
+  S := Default(TTeamState);
+  S.Name := 'duo';
+  S.Project := 'rules';
+  SaveTeamState(S, Err);
+
+  T1 := CreateTask('rules', 'Signup form', '', Err);
+  UpdateTask('rules', T1, '', '-', 'active', Err, 'r-dev', '-', 'r-dev');
+  WriteApp('rules', '<form><input name=email></form>');
+  AssertTrue(SubmitTask('rules', T1, 'r-dev', 'form renders', '', Err), 'submitted');
+  AssertEqStr(Task_('rules', T1).SubmittedSnapshot, 'S0001', 'the submission is snapshotted');
+  Snap := SnapshotDir('rules', T1, 'S0001');
+  AssertTrue(FileExists(JoinPath(JoinPath(Snap, 'app'), 'index.html')), 'with the app as it was');
+  AssertTrue(not DirectoryExists(JoinPath(Snap, 'tasks')), 'and without the board''s records');
+  AssertTrue(Pos(ActiveWorkspaceRoot, ExpandFileName(Snap)) <> 1, 'outside the workspace');
+  AssertTrue(not CanWritePath(JoinPath(JoinPath(Snap, 'app'), 'index.html'), Rep),
+             'and out of the file tools'' reach');
+
+  AssertTrue(VerdictTask('rules', T1, 'r-qa', False, 'email is not required',
+                         Names(['r-qa']), Err, 'Missing Required'), 'rejected with a cause');
+  AssertEqStr(Task_('rules', T1).VerdictCause, 'missing-required', 'the cause is slugged');
+  Lines := ReadActivity('rules', T1);
+  AssertContains(Lines[High(Lines)], 'missing-required', 'and on the receipt');
+  AssertContains(Lines[High(Lines)], 'S0001', 'with the snapshot it was given on');
+  AssertTrue(AgentPending('foreman') = 0, 'one reject is not a pattern');
+
+  WriteApp('rules', '<form><input name=email required></form>');
+  SubmitTask('rules', T1, 'r-dev', 'email required now', '', Err);
+  AssertEqStr(Task_('rules', T1).SubmittedSnapshot, 'S0002', 'a resubmission has its own snapshot');
+  VerdictTask('rules', T1, 'r-qa', True, '', Names(['r-qa']), Err);
+
+  T2 := CreateTask('rules', 'Login form', '', Err);
+  UpdateTask('rules', T2, '', '-', 'active', Err, 'r-dev', '-', 'r-dev');
+  WriteApp('rules', '<form><input name=pass></form>');
+  SubmitTask('rules', T2, 'r-dev', 'login renders', '', Err);
+  VerdictTask('rules', T2, 'r-qa', False, 'password not required', Names(['r-qa']),
+              Err, 'missing-required');
+  AssertTrue(AgentPending('foreman') > 0, 'the second reject for one cause tells the lead');
+
+  SetCallingAgent('foreman');
+  Out_ := Tool_Rule('{"action":"draft","project":"rules","cause":"missing-required",' +
+                    '"script":"exit 0"}', Err);
+  AssertContains(Err, 'does not catch', 'a check that passes everything is not proven');
+  Out_ := Tool_Rule('{"action":"draft","project":"rules","cause":"missing-required",' +
+                    '"script":"exit 1"}', Err);
+  AssertContains(Err, 'reject good work', 'nor is one that fails everything');
+  Out_ := Tool_Rule('{"action":"draft","project":"rules","cause":"never-seen",' +
+                    '"script":"exit 0"}', Err);
+  AssertContains(Err, 'nothing to prove', 'a cause with no rejected-then-accepted task cannot be proven');
+  Out_ := Tool_Rule('{"action":"draft","project":"rules","cause":"missing-required",' +
+                    '"name":"inputs-required.sh","script":"grep -q required app/index.html"}', Err);
+  AssertEqStr(Err, '', 'a real check is proven');
+  AssertContains(Out_, 'waiting for the operator', 'and waits for the operator');
+  Tool_Rule('{"action":"draft","project":"rules","cause":"missing-required",' +
+            '"script":"grep -q required app/index.html"}', Err);
+  AssertContains(Err, 'already proposes', 'one draft per cause at a time');
+  List := ListDecisions(True);
+  D := List[High(List)];
+  AssertEqStr(D.Kind, 'rule', 'the draft is a rule decision');
+  AssertContains(D.Payload, 'grep -q required', 'carrying the script the operator will read');
+  AssertTrue(not FileExists(JoinPath(ProjectScenariosDir('rules'), 'inputs-required.sh')),
+             'nothing is installed before approval');
+
+  AssertTrue(AnswerDecision(D.Id, 'approve', 'operator', Err), 'the operator approves');
+  AssertTrue(FileExists(JoinPath(ProjectScenariosDir('rules'), 'inputs-required.sh')),
+             'and it joins the project''s held-out checks');
+  AssertTrue(Has('missing-required', ProjectCauses('rules', 'rule_causes')),
+             'the cause is recorded as ruled');
+  AssertTrue(not SubmitTask('rules', T2, 'r-dev', 'trying again', '', Err),
+             'from now on, a submit that makes the mistake is refused');
+  AssertContains(Err, 'held-out', 'by the gate');
+  WriteApp('rules', '<form><input name=pass required></form>');
+  AssertTrue(SubmitTask('rules', T2, 'r-dev', 'password required now', '', Err),
+             'and the fixed work goes through');
+  VerdictTask('rules', T2, 'r-qa', True, '', Names(['r-qa']), Err);
+
+  { Decline: recorded, and the cause stops nagging. }
+  T3 := CreateTask('rules', 'Labels', '', Err);
+  UpdateTask('rules', T3, '', '-', 'active', Err, 'r-dev', '-', 'r-dev');
+  WriteApp('rules', '<form><input name=pass required></form>');
+  SubmitTask('rules', T3, 'r-dev', 'v1', '', Err);
+  VerdictTask('rules', T3, 'r-qa', False, 'no label', Names(['r-qa']), Err, 'no-label');
+  WriteApp('rules', '<form><label>Pass</label><input name=pass required></form>');
+  SubmitTask('rules', T3, 'r-dev', 'v2', '', Err);
+  VerdictTask('rules', T3, 'r-qa', True, '', Names(['r-qa']), Err);
+  Tool_Rule('{"action":"draft","project":"rules","cause":"no-label",' +
+            '"script":"grep -q label app/index.html"}', Err);
+  AssertEqStr(Err, '', 'a second cause is proven too');
+  List := ListDecisions(True);
+  D := List[High(List)];
+  AssertTrue(AnswerDecision(D.Id, 'decline', 'operator', Err), 'the operator declines');
+  AssertTrue(Has('no-label', ProjectCauses('rules', 'declined_causes')), 'and that is recorded');
+  AssertTrue(not FileExists(JoinPath(ProjectScenariosDir('rules'), 'no-label.sh')),
+             'nothing installed');
+  Mail := AgentPending('foreman');
+  UpdateTask('rules', T3, '', '-', 'todo', Err);
+  UpdateTask('rules', T3, '', '-', 'active', Err, '-', '-', 'r-dev');
+  SubmitTask('rules', T3, 'r-dev', 'v3', '', Err);
+  VerdictTask('rules', T3, 'r-qa', False, 'still no label', Names(['r-qa']), Err, 'no-label');
+  AssertTrue(AgentPending('foreman') = Mail, 'a declined cause does not nag again');
+
+  { The operator's own rule is proven and goes straight in. }
+  AssertTrue(ProposeRule('rules', 'no-label', 'labels.sh', 'grep -q label app/index.html',
+                         ActorOperator, True, Rep, Err), 'the operator writes a rule directly: ' + Err);
+  AssertTrue(FileExists(JoinPath(ProjectScenariosDir('rules'), 'labels.sh')), 'installed');
+  Out_ := Tool_Rule('{"action":"list","project":"rules"}', Err);
+  AssertContains(Out_, 'inputs-required.sh', 'list shows the rules');
+  AssertContains(Out_, '"rejects" : 2', 'and how often each cause rejected work');
+  SetCallingAgent('');
+end;
+
 begin
   TestWaitsOn;
   TestNext;
@@ -522,6 +667,7 @@ begin
   TestTool;
   TestDecisionStore;
   TestAskOperator;
+  TestRules;
 
   if Failures = 0 then
     WriteLn('team_board_tests: OK')

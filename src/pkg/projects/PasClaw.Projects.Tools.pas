@@ -74,6 +74,22 @@ procedure RegisterProjectTools(R: TToolRegistry);
 { Handlers, exposed for tests. }
 function Tool_Project(const ArgsJSON: string; out ErrMsg: string): string;
 function Tool_Task(const ArgsJSON: string; out ErrMsg: string): string;
+function Tool_Rule(const ArgsJSON: string; out ErrMsg: string): string;
+
+(* A held-out check for a repeated cause, PROVEN before anyone sees it
+   (docs/team-board-plan.md, Phase 4): the script must fail against the
+   snapshot of a submission rejected for Cause and pass against the
+   snapshot of that task's accepted fix. Proven, it becomes a decision
+   for the operator (Install = False -- the `rule` tool) or goes straight
+   into the project's scenarios (Install = True -- the operator's own
+   rule, POST /v1/projects/<p>/rules). Report says what the proof found
+   either way; Err is why nothing happened. *)
+function ProposeRule(const Project, Cause, Name, Script, Actor: string;
+  Install: Boolean; out Report, Err: string): Boolean;
+
+{ The rule files installed for a project, its rule and declined causes,
+  and how often each cause has rejected work -- as JSON. }
+function RulesJSON(const Project: string): string;
 function Tool_Desktop(const ArgsJSON: string; out ErrMsg: string): string;
 
 (* Exposed for tests: what a `desktop` call is READ as, before anything
@@ -94,7 +110,11 @@ uses
   PasClaw.Agents,          { AgentSend -- a submit tells its reviewers }
   PasClaw.Agents.Tools,    { CallingAgent -- who is asking }
   PasClaw.Teams,           { TaskReviewers -- who may give the verdict }
-  PasClaw.Agent.Verify;    { RunScenarios -- the gate on submit }
+  PasClaw.Agent.Verify,    { RunScenarios -- the gate on submit, and a rule's proof }
+  PasClaw.Decisions,       { a proven rule waits for the operator }
+  PasClaw.Projects.Snapshots,  { what a rule is proven against }
+  PasClaw.Config,          { GetHome -- where drafts are kept }
+  PasClaw.Workspaces;      { ActiveWorkspaceName }
 
 var
   GTeamActionsAllowed: Boolean = False;
@@ -730,7 +750,8 @@ begin
         Exit;
       end;
       Revs := TaskReviewers(Project, T);
-      if not VerdictTask(Project, Id, Actor, Accept, Reason, Revs, Err) then
+      if not VerdictTask(Project, Id, Actor, Accept, Reason, Revs, Err,
+                         Obj.GetStr('cause', '')) then
       begin
         ErrMsg := Err;
         Exit;
@@ -868,6 +889,503 @@ begin
         Report := Report + #10'  output (the check''s, quoted as data):'#10'  ' +
                   StringReplace(Results[I].Output, #10, #10'  ', [rfReplaceAll]);
     end;
+end;
+
+{ ------------------------------------------------------------------ rules -- }
+
+function Names2(const A, B: string): TStringArray;
+begin
+  SetLength(Result, 2);
+  Result[0] := A;
+  Result[1] := B;
+end;
+
+{ One field of one activity line. }
+function LineField(const Line, Key: string): string;
+var
+  O: TJsonObject;
+begin
+  Result := '';
+  O := nil;
+  try
+    O := TJsonObject.Parse(Line);
+  except
+    O := nil;
+  end;
+  if O = nil then Exit;
+  try
+    Result := O.GetStr(Key, '');
+  finally
+    O.Free;
+  end;
+end;
+
+type
+  { A submission rejected for the cause, and the same task's accepted fix. }
+  TProofPair = record
+    Task, Rejected, Accepted: string;   { task id, two snapshot ids }
+  end;
+
+(* The newest reject for Cause that has a snapshot and a LATER accept of
+   the same task with one. Newest first, because the most recent instance
+   of a mistake is the one the current code most resembles. *)
+function FindProofPair(const Project, Cause: string; out P: TProofPair): Boolean;
+var
+  Lines: TStringArray;
+  I, J: Integer;
+  Tk: string;
+begin
+  Result := False;
+  P := Default(TProofPair);
+  Lines := ReadActivity(Project, '');
+  for I := High(Lines) downto 0 do
+  begin
+    if (LineField(Lines[I], 'event') <> 'reject') or
+       (LineField(Lines[I], 'cause') <> Cause) or
+       (LineField(Lines[I], 'snapshot') = '') then Continue;
+    Tk := LineField(Lines[I], 'task');
+    for J := I + 1 to High(Lines) do
+      if (LineField(Lines[J], 'event') = 'accept') and
+         (LineField(Lines[J], 'task') = Tk) and
+         (LineField(Lines[J], 'snapshot') <> '') then
+      begin
+        P.Task := Tk;
+        P.Rejected := LineField(Lines[I], 'snapshot');
+        P.Accepted := LineField(Lines[J], 'snapshot');
+        Exit(True);
+      end;
+  end;
+end;
+
+{ Rejects naming Cause on the board, and the distinct tasks they hit. }
+function CauseRejects(const Project, Cause: string; out Tasks: TStringArray): Integer;
+var
+  Lines: TStringArray;
+  I: Integer;
+  Tk: string;
+begin
+  Result := 0;
+  SetLength(Tasks, 0);
+  Lines := ReadActivity(Project, '');
+  for I := 0 to High(Lines) do
+    if (LineField(Lines[I], 'event') = 'reject') and
+       (LineField(Lines[I], 'cause') = Cause) then
+    begin
+      Inc(Result);
+      Tk := LineField(Lines[I], 'task');
+      if not InList(Tk, Tasks) then
+      begin
+        SetLength(Tasks, Length(Tasks) + 1);
+        Tasks[High(Tasks)] := Tk;
+      end;
+    end;
+end;
+
+{ An open rule decision for this project and cause, or ''. }
+function OpenRuleDecision(const Project, Cause: string): string;
+var
+  Open: TDecisionInfoArray;
+  I: Integer;
+  P: TJsonObject;
+begin
+  Result := '';
+  Open := ListDecisions(True);
+  for I := 0 to High(Open) do
+  begin
+    if (Open[I].Kind <> 'rule') or (Open[I].Project <> Project) or
+       (Open[I].Payload = '') then Continue;
+    P := TJsonObject.Parse(Open[I].Payload);
+    if P = nil then Continue;
+    try
+      if P.GetStr('cause', '') = Cause then Exit(Open[I].Id);
+    finally
+      P.Free;
+    end;
+  end;
+end;
+
+(* Drafts live beside the scenarios, never in them -- a draft in the
+   scenarios directory would already be gating submissions before anyone
+   approved it -- and outside the workspace for the same reason. *)
+function RuleDraftDir(const Project, Cause: string): string;
+begin
+  Result := JoinPath(JoinPath(JoinPath(JoinPath(GetHome, 'scenario-drafts'),
+                     ActiveWorkspaceName), Project), Cause);
+end;
+
+{ A safe file name for the rule: [a-z0-9._-], .sh or .py, default <cause>.sh. }
+function RuleFileName(const Name, Cause: string): string;
+var
+  I: Integer;
+  S: string;
+begin
+  S := '';
+  for I := 1 to Length(Name) do
+    if LowerCase(Name)[I] in ['a'..'z', '0'..'9', '-', '_', '.'] then
+      S := S + LowerCase(Name)[I];
+  while (S <> '') and (S[1] = '.') do Delete(S, 1, 1);
+  if S = '' then S := Cause;
+  if not (SameText(ExtractFileExt(S), '.sh') or SameText(ExtractFileExt(S), '.py')) then
+    S := S + '.sh';
+  Result := S;
+end;
+
+(* Into the project's held-out scenarios -- from where every submit is
+   held to it by the Phase 1 gate. Never over an existing check. *)
+function InstallRule(const Project, Cause, DraftPath, FileName, Actor: string;
+  out Installed, Err: string): Boolean;
+var
+  Dir, Dest, Base, Ext: string;
+  N: Integer;
+begin
+  Result := False;
+  Installed := '';
+  Err := '';
+  if not FileExists(DraftPath) then
+  begin
+    Err := 'the proven draft is gone (' + DraftPath + ')';
+    Exit;
+  end;
+  Dir := ProjectScenariosDir(Project);
+  ForceDirectories(Dir);
+  Ext := ExtractFileExt(FileName);
+  Base := ChangeFileExt(FileName, '');
+  Dest := JoinPath(Dir, FileName);
+  N := 2;
+  while FileExists(Dest) do
+  begin
+    Dest := JoinPath(Dir, Base + '-' + IntToStr(N) + Ext);
+    Inc(N);
+  end;
+  WriteFileText(Dest, ReadFileText(DraftPath));
+  AddProjectCause(Project, 'rule_causes', Cause, Err);
+  Err := '';
+  Installed := ExtractFileName(Dest);
+  RecordActivity(Project, '', 'rule', Actor, ['cause', Cause, 'file', Installed]);
+  Result := True;
+end;
+
+function ProposeRule(const Project, Cause, Name, Script, Actor: string;
+  Install: Boolean; out Report, Err: string): Boolean;
+var
+  C, FileName, DraftDir, DraftPath, RejDir, AccDir, Id, Q, Installed: string;
+  P: TProofPair;
+  R1, R2: TScenarioResults;
+  Failed1, Passed2: Boolean;
+  Obj, Sub: TJsonObject;
+  SR: TSearchRec;
+
+  function Outcome(const R: TScenarioResults): string;
+  begin
+    if Length(R) = 0 then Exit('did not run');
+    if R[0].Passed then Result := 'passed' else
+      Result := Format('failed (exit %d)', [R[0].ExitCode]);
+    if R[0].Output <> '' then
+      Result := Result + #10'    output: ' + FirstLine(R[0].Output);
+  end;
+
+begin
+  Report := '';
+  Err := '';
+  Result := False;
+  if not ProjectExists(Project) then
+  begin
+    Err := 'no such project: ' + Project;
+    Exit;
+  end;
+  C := SanitizeName(Cause);
+  if C = '' then
+  begin
+    Err := 'a rule needs the "cause" it catches -- the key the reviewer ' +
+           'gave the rejects (e.g. untested-empty-input)';
+    Exit;
+  end;
+  if Trim(Script) = '' then
+  begin
+    Err := 'a rule needs a "script": a shell (or python) check that exits ' +
+           '0 when the work is right, run with the project as its cwd';
+    Exit;
+  end;
+  if not Install then
+  begin
+    Id := OpenRuleDecision(Project, C);
+    if Id <> '' then
+    begin
+      Err := Id + ' already proposes a rule for "' + C + '"; it is waiting ' +
+             'for the operator.';
+      Exit;
+    end;
+  end;
+  if not FindProofPair(Project, C, P) then
+  begin
+    Err := 'nothing to prove "' + C + '" against yet: a rule has to FAIL on ' +
+           'a submission that was rejected for it and PASS on that task''s ' +
+           'accepted fix, and ' + Project + ' has no task rejected for "' + C +
+           '" that was accepted since (with both submissions snapshotted).';
+    Exit;
+  end;
+  RejDir := SnapshotDir(Project, P.Task, P.Rejected);
+  AccDir := SnapshotDir(Project, P.Task, P.Accepted);
+  if not (DirectoryExists(RejDir) and DirectoryExists(AccDir)) then
+  begin
+    Err := 'the snapshots of ' + P.Task + ' it would be proven against are ' +
+           'gone (older ones are pruned).';
+    Exit;
+  end;
+
+  (* The draft alone in its directory, so RunScenarios runs exactly it. *)
+  FileName := RuleFileName(Name, C);
+  DraftDir := RuleDraftDir(Project, C);
+  ForceDirectories(DraftDir);
+  if FindFirst(JoinPath(DraftDir, '*'), faAnyFile, SR) = 0 then
+  try
+    repeat
+      if (SR.Attr and faDirectory) = 0 then
+        SysUtils.DeleteFile(JoinPath(DraftDir, SR.Name));
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+  DraftPath := JoinPath(DraftDir, FileName);
+  WriteFileText(DraftPath, Script);
+
+  RunScenarios(ExpandFileName(DraftDir), ExpandFileName(RejDir), R1);
+  RunScenarios(ExpandFileName(DraftDir), ExpandFileName(AccDir), R2);
+  Failed1 := (Length(R1) = 1) and not R1[0].Passed;
+  Passed2 := (Length(R2) = 1) and R2[0].Passed;
+  Report := 'proof for "' + C + '" on ' + P.Task + ':'#10 +
+            '  the rejected submission (' + P.Rejected + '): ' + Outcome(R1) + #10 +
+            '  the accepted fix (' + P.Accepted + '): ' + Outcome(R2);
+  if not Failed1 then
+  begin
+    Err := 'not proven: the check does not catch "' + C + '" -- it passed on ' +
+           'the submission that was rejected for it.'#10 + Report;
+    Exit;
+  end;
+  if not Passed2 then
+  begin
+    Err := 'not proven: the check would reject good work -- it failed on ' +
+           'the accepted fix.'#10 + Report;
+    Exit;
+  end;
+
+  if Install then
+  begin
+    if not InstallRule(Project, C, DraftPath, FileName, Actor, Installed, Err) then Exit;
+    Report := 'Proven and installed as ' + Installed + ' in ' +
+              ProjectScenariosDir(Project) + '; every submit on ' + Project +
+              ' is held to it from now on.'#10 + Report;
+    Result := True;
+    Exit;
+  end;
+
+  Obj := TJsonObject.Create;
+  try
+    Obj.PutStr('cause', C);
+    Obj.PutStr('name', FileName);
+    Obj.PutStr('draft', DraftPath);
+    Obj.PutStr('script', Copy(Script, 1, 4000));
+    Sub := TJsonObject.Create;
+    Sub.PutStr('task', P.Task);
+    Sub.PutStr('snapshot', P.Rejected);
+    Obj.PutObject('rejected', Sub);
+    Sub := TJsonObject.Create;
+    Sub.PutStr('task', P.Task);
+    Sub.PutStr('snapshot', P.Accepted);
+    Obj.PutObject('accepted', Sub);
+    Q := 'Add a held-out check for "' + C + '" to ' + Project + '? It fails ' +
+         'on ' + P.Task + '''s rejected submission and passes on its ' +
+         'accepted fix; approved, every submit is held to it.';
+    Id := CreateDecision('rule', ActorLabel(Actor), Q, Names2('approve', 'decline'),
+                         Project, '', '', Obj.ToJSON, Err);
+  finally
+    Obj.Free;
+  end;
+  if Id = '' then Exit;
+  Report := 'Proven, and waiting for the operator as ' + Id + ' (approve or ' +
+            'decline in Needs you).'#10 + Report;
+  Result := True;
+end;
+
+(* A rule decision answered: approve installs the proven draft, decline
+   records the cause so it does not nag again. The asker hears either way
+   from PasClaw.Agents.Tools's listener. *)
+procedure RuleDecisionAnswered(const D: TDecisionInfo);
+var
+  P: TJsonObject;
+  Cause, Draft, Name_, Installed, Err: string;
+begin
+  if (D.Kind <> 'rule') or (D.Payload = '') then Exit;
+  P := TJsonObject.Parse(D.Payload);
+  if P = nil then Exit;
+  try
+    Cause := P.GetStr('cause', '');
+    Draft := P.GetStr('draft', '');
+    Name_ := P.GetStr('name', Cause + '.sh');
+  finally
+    P.Free;
+  end;
+  if SameText(D.Answer, 'approve') then
+  begin
+    if not InstallRule(D.Project, Cause, Draft, Name_, D.AnsweredBy, Installed, Err) then
+      RecordActivity(D.Project, '', 'rule-failed', D.AnsweredBy,
+                     ['cause', Cause, 'reason', Err]);
+  end
+  else
+  begin
+    AddProjectCause(D.Project, 'declined_causes', Cause, Err);
+    RecordActivity(D.Project, '', 'rule-declined', D.AnsweredBy, ['cause', Cause]);
+  end;
+end;
+
+{ The leads of the team(s) working this board -- who a repeated cause is
+  reported to. }
+function LeadsFor(const Project: string): TStringArray;
+var
+  States: TTeamStateArray;
+  T: TTeamTemplate;
+  Leads: TStringArray;
+  I, J: Integer;
+begin
+  SetLength(Result, 0);
+  States := ListTeamStates;
+  for I := 0 to High(States) do
+    if (States[I].Project = Project) and FindTeamTemplate(States[I].Name, T) then
+    begin
+      Leads := TeamLeads(T);
+      for J := 0 to High(Leads) do
+        if not InList(Leads[J], Result) then
+        begin
+          SetLength(Result, Length(Result) + 1);
+          Result[High(Result)] := Leads[J];
+        end;
+    end;
+end;
+
+(* OnTaskRejected: the second time one cause rejects work on a board, the
+   lead hears -- the cause, the tasks, and the call that turns it into a
+   proven rule. Not again once a rule exists, the operator declined one,
+   or a draft is waiting. *)
+procedure NoticeRepeatedCause(const Project, TaskId, Cause: string);
+var
+  Tasks, Leads: TStringArray;
+  N, I: Integer;
+  Text, Delivered, Err: string;
+begin
+  N := CauseRejects(Project, Cause, Tasks);
+  if N < 2 then Exit;
+  if InList(Cause, ProjectCauses(Project, 'rule_causes')) or
+     InList(Cause, ProjectCauses(Project, 'declined_causes')) or
+     (OpenRuleDecision(Project, Cause) <> '') then Exit;
+  Leads := LeadsFor(Project);
+  Text := Format('Cause "%s" has now rejected work %d times on %s (%s). If ' +
+                 'a check would catch it, draft one: rule action="draft" ' +
+                 'project="%s" cause="%s" script="..." -- it must fail on the ' +
+                 'rejected submission and pass on the accepted fix, and then ' +
+                 'the operator decides whether every submit is held to it.',
+                 [Cause, N, Project, JoinList(Tasks), Project, Cause]);
+  for I := 0 to High(Leads) do
+    AgentSend(Leads[I], 'board', Text, Delivered, Err);
+end;
+
+function RulesJSON(const Project: string): string;
+var
+  Root, Item: TJsonObject;
+  Arr, TArr: TJsonArray;
+  Lines, Seen, Tasks, L: TStringArray;
+  SR: TSearchRec;
+  I, J: Integer;
+  C, Dir: string;
+begin
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    Dir := ProjectScenariosDir(Project);
+    if (Dir <> '') and (FindFirst(JoinPath(Dir, '*'), faAnyFile, SR) = 0) then
+    try
+      repeat
+        if ((SR.Attr and faDirectory) = 0) and (SR.Name <> '') and (SR.Name[1] <> '.') then
+          Arr.AddStr(SR.Name);
+      until FindNext(SR) <> 0;
+    finally
+      FindClose(SR);
+    end;
+    Root.PutArray('rules', Arr);
+    Arr := TJsonArray.Create;
+    L := ProjectCauses(Project, 'rule_causes');
+    for I := 0 to High(L) do Arr.AddStr(L[I]);
+    Root.PutArray('rule_causes', Arr);
+    Arr := TJsonArray.Create;
+    L := ProjectCauses(Project, 'declined_causes');
+    for I := 0 to High(L) do Arr.AddStr(L[I]);
+    Root.PutArray('declined_causes', Arr);
+    Arr := TJsonArray.Create;
+    SetLength(Seen, 0);
+    Lines := ReadActivity(Project, '');
+    for I := 0 to High(Lines) do
+    begin
+      C := LineField(Lines[I], 'cause');
+      if (LineField(Lines[I], 'event') <> 'reject') or (C = '') or InList(C, Seen) then
+        Continue;
+      SetLength(Seen, Length(Seen) + 1);
+      Seen[High(Seen)] := C;
+      Item := TJsonObject.Create;
+      Item.PutStr('cause', C);
+      Item.PutInt('rejects', CauseRejects(Project, C, Tasks));
+      TArr := TJsonArray.Create;
+      for J := 0 to High(Tasks) do TArr.AddStr(Tasks[J]);
+      Item.PutArray('tasks', TArr);
+      Item.PutStr('open_draft', OpenRuleDecision(Project, C));
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('causes', Arr);
+    Result := Root.ToJSON;
+  finally
+    Root.Free;
+  end;
+end;
+
+function Tool_Rule(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  Obj: TJsonObject;
+  Action, Project, Report, Err: string;
+begin
+  ErrMsg := '';
+  Result := '';
+  if not ArgObj(ArgsJSON, Obj, ErrMsg) then Exit;
+  try
+    Action  := LowerCase(Trim(Obj.GetStr('action', '')));
+    Project := Trim(Obj.GetStr('project', ''));
+    if Project = '' then
+    begin
+      ErrMsg := 'every rule action needs a "project"';
+      Exit;
+    end;
+    if (Action = '') or (Action = 'list') then
+    begin
+      if not ProjectExists(Project) then
+      begin
+        ErrMsg := 'no such project: ' + Project;
+        Exit;
+      end;
+      Result := RulesJSON(Project);
+      Exit;
+    end;
+    if Action = 'draft' then
+    begin
+      if not ProposeRule(Project, Obj.GetStr('cause', ''), Obj.GetStr('name', ''),
+                         Obj.GetStr('script', ''), TaskActor, False, Report, Err) then
+      begin
+        ErrMsg := Err;
+        Exit;
+      end;
+      Result := Report;
+      Exit;
+    end;
+    ErrMsg := 'unknown action "' + Action + '" (use draft or list)';
+  finally
+    Obj.Free;
+  end;
 end;
 
 { --------------------------------------------------------------- register -- }
@@ -1187,7 +1705,9 @@ begin
     'your own work done: action="submit" with "evidence" (what you ran ' +
     'and what it printed) hands it to a reviewer, and the reviewer gives ' +
     'action="verdict" verdict="accept", or verdict="reject" with a ' +
-    '"reason". Keep this current as you work -- the user watches this board.';
+    '"reason" and a "cause" (a short key for the kind of mistake, reused ' +
+    'across tasks). Keep this current as you work -- the user watches ' +
+    'this board.';
   T.Schema      :=
     '{"type":"object","properties":{' +
     '"action":{"type":"string","enum":["list","create","update","next","job","submit","verdict"]},' +
@@ -1203,9 +1723,36 @@ begin
     '"summary":{"type":"string","description":"What the job accomplished (action=job)."},' +
     '"evidence":{"type":"string","description":"What you ran and what it printed (action=submit)."},' +
     '"verdict":{"type":"string","enum":["accept","reject"],"description":"action=verdict."},' +
-    '"reason":{"type":"string","description":"Why it is rejected, with exact reproduction steps (required to reject)."}' +
+    '"reason":{"type":"string","description":"Why it is rejected, with exact reproduction steps (required to reject)."},' +
+    '"cause":{"type":"string","description":"A short key naming the KIND of mistake, reused across tasks, e.g. untested-empty-input (reject)."}' +
     '},"required":["action","project"]}';
   T.Handler     := Tool_Task;
+  T.HandlerObj  := nil;
+  T.IsCore      := False;
+  T.Category    := tcMutating;
+  T.IsDeferred  := False;
+  T.Hidden      := False;
+  R.Register(T);
+
+  T.Name        := 'rule';
+  T.Description :=
+    'Turn a mistake that keeps getting work rejected into a check every ' +
+    'submit is held to. action="draft" needs "project", "cause" (the key ' +
+    'reviewers gave the rejects) and "script" (a shell check, run with the ' +
+    'project as its cwd, exit 0 = right); optional "name" (file name). The ' +
+    'draft is PROVEN first -- it must fail on a submission rejected for ' +
+    'that cause and pass on the accepted fix -- and then waits for the ' +
+    'operator to approve. action="list" shows the rules, and how often ' +
+    'each cause has rejected work.';
+  T.Schema      :=
+    '{"type":"object","properties":{' +
+    '"action":{"type":"string","enum":["draft","list"]},' +
+    '"project":{"type":"string","description":"Project slug (always required)."},' +
+    '"cause":{"type":"string","description":"The reject cause the check catches (draft)."},' +
+    '"script":{"type":"string","description":"The check: shell (or python with name *.py), cwd = the project, exit 0 when the work is right (draft)."},' +
+    '"name":{"type":"string","description":"File name for the check, e.g. empty-title.sh (draft; optional)."}' +
+    '},"required":["action","project"]}';
+  T.Handler     := Tool_Rule;
   T.HandlerObj  := nil;
   T.IsCore      := False;
   T.Category    := tcMutating;
@@ -1272,5 +1819,7 @@ initialization
     the shell backend to get it. }
   OnSubmitGate := ProjectScenarioGate;
   OnTaskClosed := NotifyDependents;
+  OnTaskRejected := NoticeRepeatedCause;
+  AddDecisionAnsweredListener(RuleDecisionAnswered);
 
 end.

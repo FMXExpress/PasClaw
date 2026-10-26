@@ -310,6 +310,12 @@ const
     'or sends it back. When a task waits for your verdict, give it. ' +
     'When the whole board is done, tell the operator plainly and stop ' +
     '-- do not invent work to stay busy.'#10 +
+    'When the board tells you one cause has rejected work twice, turn ' +
+    'it into a check if one would catch it: rule action=draft with a ' +
+    'small shell script that exits 0 only when the work is right. The ' +
+    'board proves it against the rejected submission and the accepted ' +
+    'fix before the operator sees it, so write it to the mistake, not to ' +
+    'the one task.'#10 +
     'When a task needs another one finished first, say so on the board: ' +
     'task action=update waits_on=["T0002"]. The board then wakes its ' +
     'owner only once everything it waits on is done, and tells the owner ' +
@@ -423,8 +429,11 @@ const
     'twice, reload in the middle. Then give the verdict: task ' +
     'action=verdict verdict=accept, or verdict=reject with a "reason" ' +
     'carrying EXACT reproduction steps -- what you did, what happened, ' +
-    'what should have happened. A break outside this task''s criteria ' +
-    'becomes a new task instead.'#10 +
+    'what should have happened -- and a "cause": a short key for the ' +
+    'KIND of mistake (untested-empty-input, wrong-path), the same key ' +
+    'every time the same kind comes back, because a cause that keeps ' +
+    'rejecting work is how the board learns a new check. A break outside ' +
+    'this task''s criteria becomes a new task instead.'#10 +
     'A fixed bug is re-tested by you before it closes; the developer ' +
     'cannot close their own work, and the board will not let them. A ' +
     'pass nobody hears about blocks the board as surely as a failure, ' +

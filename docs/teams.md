@@ -187,6 +187,39 @@ tool; the app the team builds and a job's `artifacts/` stay writable.
 What this does not reach is `shell_exec`, whose writes cannot be
 path-checked reliably.
 
+### A repeated cause becomes a proven rule
+
+- **Every submission is snapshotted** — a copy of the project as
+  submitted, minus the board's records and dependency folders (`.git`,
+  `node_modules`, …), at
+  `$PASCLAW_HOME/snapshots/<workspace>/<project>/<task>/S0003/`, outside
+  the workspace. It is what the reviewer judged; a project over 50 MB is
+  not copied (a partial copy would prove things about files that were
+  never there), and the newest ten per task are kept.
+- **A reject carries a cause**: a short key for the *kind* of mistake
+  (`untested-empty-input`, `wrong-path`), slugged and kept on the task
+  and its receipt.
+- **The second time one cause rejects work on a board**, the team's lead
+  is told: the cause, the tasks, and the call that drafts a rule.
+- **`rule action=draft`** (`project`, `cause`, `script`, optional `name`)
+  proves the check before anyone sees it: it has to **fail** against the
+  snapshot of a submission rejected for that cause and **pass** against
+  the same task's accepted fix. A check that passes everything ("does
+  not catch it") or fails everything ("would reject good work") is
+  refused with both results.
+- **You decide.** A proven draft is a decision in Needs you, with the
+  script shown. Approved, it joins the project's held-out checks and
+  every submit is held to it by the gate above. Declined, the cause is
+  recorded and stops nagging.
+- You can write one directly: `POST /v1/projects/<p>/rules
+  {"cause","script","name"}` — proven the same way, then installed with
+  no approval step. `GET /v1/projects/<p>/rules` (and `rule
+  action=list`) shows the rules, the ruled and declined causes, and how
+  often each cause has rejected work.
+
+The scenarios, the drafts and the snapshots are all outside the
+workspace, and all refused to the file tools.
+
 A template opts its board out with `"review": false`; a project made by
 hand or by the desktop's Ask path does not require review unless you
 switch it on (`POST /v1/projects/<p>/review {"review":true}`), so one

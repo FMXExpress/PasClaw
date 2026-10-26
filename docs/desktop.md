@@ -119,6 +119,7 @@ default**:
 |---|---|
 | `project` | `list`, `create`, `get`, `update` |
 | `task` | `list`, `create`, `update`, `next`, `job`, `submit`, `verdict` |
+| `rule` | `draft`, `list` -- a proven held-out check for a repeated reject cause |
 
 The desktop does not need them — both clients drive the board over HTTP, and
 everything in this document works with the flag off. They exist for when you
@@ -930,6 +931,7 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | GET | `/v1/decisions/<id>` | one decision |
 | POST | `/v1/decisions/<id>/answer` | `{"answer":"yes"}` -- recorded as the operator's (409 when answered or not one of the choices) |
 | GET | `/v1/needs-you` | open decisions, and tasks in review no agent can give the verdict on |
+| GET/POST | `/v1/projects/<n>/rules` | the project's proven checks / the operator's own rule (`{"cause","script","name"}` -- proven, then installed; 422 when it cannot be proven) |
 | POST | `/v1/projects/<n>/review` | `{"review":true,"reviewers":["qa"]}` -- require a verdict on this board |
 | GET | `/v1/projects/<n>/activity` | the receipts, oldest first (`?task=T0004&limit=50`) |
 | GET/POST | `/v1/projects/<n>/tasks` | list / create (`criteria`, `waits_on` optional) |
