@@ -125,6 +125,7 @@ uses
   {$ELSE}
     System.Zip,
   {$ENDIF}
+  PasClaw.Platform,   { CurrentPid -- GetProcessID is FPC's only (E2003 on dcc64) }
   PasClaw.JSON,
   PasClaw.Utils,
   PasClaw.Config,
@@ -694,7 +695,7 @@ begin
   end;
   DestAbs := ExpandFileName(ExcludeTrailingPathDelimiter(DestDir));
 
-  Stage := IncludeTrailingPathDelimiter(DestDir) + '.stage-' + IntToStr(GetProcessID);
+  Stage := IncludeTrailingPathDelimiter(DestDir) + '.stage-' + IntToStr(CurrentPid);
   Files := TStringList.Create;
   try
     RemoveTreeQuiet(Stage);
@@ -783,7 +784,7 @@ begin
     Err := 'cannot create home: ' + Home;
     Exit;
   end;
-  Tmp := IncludeTrailingPathDelimiter(Home) + '.restore-' + IntToStr(GetProcessID);
+  Tmp := IncludeTrailingPathDelimiter(Home) + '.restore-' + IntToStr(CurrentPid);
   RemoveTreeQuiet(Tmp);
   try
     { ExtractZipToDir validates every member name against the destination

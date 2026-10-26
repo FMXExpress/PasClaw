@@ -163,6 +163,14 @@ function RunOneShotWithEnv(const Cmd, WorkingDir: string;
    actually uses: the override when set, else the default. *)
 procedure SetShellToolTimeoutMs(Ms: Integer);
 function  ShellToolTimeoutMs: Integer;
+
+(* This process's id, on both compilers. FPC has SysUtils.GetProcessID;
+   dcc64 does not (E2003), and goes through the platform RTL --
+   GetCurrentProcessId on Windows, getpid on POSIX -- which this unit
+   already uses. Here so a unit that needs a pid does not have to pull
+   Winapi.Windows into its own scope, where Windows' DeleteFile and
+   friends shadow SysUtils'. *)
+function  CurrentPid: Integer;
 procedure SetShellTimeoutOverrideMs(Ms: Integer);
 function  ShellTimeoutOverrideMs: Integer;
 function  EffectiveShellTimeoutMs: Integer;
@@ -267,6 +275,17 @@ end;
 function ShellToolTimeoutMs: Integer;
 begin
   Result := GShellToolTimeoutMs;
+end;
+
+function CurrentPid: Integer;
+begin
+  {$IFDEF FPC}
+  Result := Integer(GetProcessID);
+  {$ELSE}{$IFDEF MSWINDOWS}
+  Result := Integer(GetCurrentProcessId);
+  {$ELSE}
+  Result := Integer(getpid);
+  {$ENDIF}{$ENDIF}
 end;
 
 procedure SetShellTimeoutOverrideMs(Ms: Integer);

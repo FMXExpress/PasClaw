@@ -3562,7 +3562,11 @@ begin
   FAskLock.Enter;
   try
     Inc(FAskSeq);
-    P.Id := 'ask-' + IntToHex(Integer(GetTickCount64 and $FFFFFF), 6) + '-' + IntToStr(FAskSeq);
+    { Millisecond of the day, not GetTickCount64: that one is FPC's
+      SysUtils only (dcc64 E2003 -- see PasClaw.Cmd.Relay). The prefix
+      keeps a restarted gateway's ids apart from ones a stale web UI tab
+      may still answer; FAskSeq makes them unique within the process. }
+    P.Id := 'ask-' + IntToHex(MilliSecondOfTheDay(Now) and $FFFFFF, 6) + '-' + IntToStr(FAskSeq);
     P.Session := CurrentDispatchDrainKey;
     P.Tool := ToolName;
     P.Resource := Resource;
