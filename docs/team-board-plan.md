@@ -209,6 +209,15 @@ submission's evidence and the verdict. The checklist mirror
 
 ## Phase 2 -- dependencies, and "next"
 
+**Status: built** ([teams](./teams.md#the-wake-loop); `team_board_tests`).
+As built: `next` offers only `todo` work (an agent's active task is its
+own to carry on, and *nothing ready* says so); leases are taken whenever
+an agent starts a task, not only through `next`, and a reject leases the
+task back to its owner; the "owners are due on the next tick" half is a
+message from the board to each dependent's owner, which is what makes a
+team due (mail skips the cadence). Built-in templates stay `routed`;
+`takes: "any"` is for templates that want a pool.
+
 - **`waits_on`**: a task lists the tasks it needs (`["T0002"]`). It is
   *ready* when every one of them is `done`. Ready is computed, not
   stored, so it cannot go stale; a cycle is refused when the edge is

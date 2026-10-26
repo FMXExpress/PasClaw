@@ -42,6 +42,7 @@ uses
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.Cron,             { cron tool -- gated on cron_tool_enabled }
   PasClaw.Projects.Tools,         { project / task -- the desktop board }
+  PasClaw.Projects.Store,         { SetClaimLeaseMinutes }
   PasClaw.Agents.Tools,           { agent -- standing agents and their mailbox }
   PasClaw.Gateway.Desktop,        { SetAppsOrigin -- the apps listener's origin }
   PasClaw.Apps,                   { SetFrameParentOrigin -- who may frame apps }
@@ -356,6 +357,9 @@ begin
       { Same flag gates the desktop tool's team_up: seeding standing
         agents is agent-tool territory, not window management. }
       SetTeamActionsAllowed(Cfg.AgentToolsEnabled);
+      { How long an agent's claim on a task lasts untouched; the team tick
+        hands back what a dead run was holding. }
+      SetClaimLeaseMinutes(Cfg.TeamsClaimLeaseMinutes);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }

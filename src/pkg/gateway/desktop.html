@@ -3709,9 +3709,14 @@ function paintTree() {
       const hasDetail = t.jobs || t.criteria || t.submitted_at || t.verdict;
       const tt = el("span", "twist", hasDetail ? (t.__open ? "▼" : "▶") : "");
       tr.appendChild(tt);
+      /* A todo task still waiting on unfinished work says on what, and
+         is drawn quieter: it is not something anyone can start yet. */
+      const waiting = (t.waiting_on || []).length && t.status === "todo";
       const lbl = el("span", "st-" + t.status,
         t.id + "  " + t.title + (t.assignee ? "  @" + t.assignee : "") +
-        (t.status === "review" ? "  -- waiting for a verdict" : ""));
+        (t.status === "review" ? "  -- waiting for a verdict" : "") +
+        (waiting ? "  -- waits on " + t.waiting_on.join(", ") : ""));
+      if (waiting) lbl.style.opacity = ".6";
       lbl.style.flex = "1 1 auto";
       tr.appendChild(lbl);
       tr.title = [t.notes, t.criteria ? "Criteria:\n" + t.criteria : ""]

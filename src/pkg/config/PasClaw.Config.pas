@@ -827,6 +827,12 @@ type
        one answers "may the model create colleagues and message them",
        and an operator can reasonably want either without the other. *)
     AgentToolsEnabled: Boolean;
+    (* teams.claim_lease_minutes: how long an agent's claim on an active
+       task lasts without the agent touching the task. The team tick hands
+       back a task whose lease ran out while its holder runs no turn -- a
+       claim held by a run that died (docs/team-board-plan.md, Phase 2).
+       Default 120. *)
+    TeamsClaimLeaseMinutes: Integer;
     (* Per-Chat() wait timeout in milliseconds for the relay provider
        (PasClaw.Providers.Relay -- the pull-worker pattern). 0 = use
        the Pascal default RelayDefaultWaitTimeoutMs (5 minutes).
@@ -1431,6 +1437,7 @@ begin
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
   DesktopToolsEnabled  := False; { off by default -- see the field comment: the desktop works without it. }
   AgentToolsEnabled    := False; { off by default -- standing agents are an opt-in autonomy step. }
+  TeamsClaimLeaseMinutes := 120;
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
   MCPCompactResults := True;  { on by default: the conversion is refused unless the result is rectangular, all-scalar and genuinely shorter, so the failure mode is "no change" rather than a mangled result. Flip off if a server's rows must reach the model as literal JSON. }
   { Compaction defaults MUST match DefaultCompactOptions in
@@ -2209,6 +2216,17 @@ begin
       Root.PutObject('compaction', Tmp);
     end;
 
+    if TeamsClaimLeaseMinutes <> 120 then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutInt('claim_lease_minutes', TeamsClaimLeaseMinutes);
+        Root.PutObject('teams', Tmp);
+      finally
+        Tmp.Free;
+      end;
+    end;
+
     if (Verification.ScenariosDir <> '') or (Verification.MaxRounds <> 2) then
     begin
       Tmp := TJsonObject.Create;
@@ -2499,6 +2517,15 @@ begin
     MemoryCoreBudgetBytes := Integer(Root.GetInt('memory_core_budget_bytes', MemoryCoreBudgetBytes));
     if MemoryCoreBudgetBytes < 0 then MemoryCoreBudgetBytes := 0;
     BackgroundModel      := Trim(Root.GetStr('background_model', BackgroundModel));
+    Obj := Root.ChildObject('teams');
+    if Obj <> nil then
+    try
+      TeamsClaimLeaseMinutes := Integer(Obj.GetInt('claim_lease_minutes',
+                                                   TeamsClaimLeaseMinutes));
+      if TeamsClaimLeaseMinutes < 1 then TeamsClaimLeaseMinutes := 1;
+    finally
+      Obj.Free;
+    end;
     Obj := Root.ChildObject('verification');
     if Obj <> nil then
     try

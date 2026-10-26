@@ -300,6 +300,47 @@ begin
   Result := Trim(Obj.GetStr('criteria', ''));
 end;
 
+(* "waits_on" as task ids: a list, or one string of ids separated by
+   commas or spaces -- the same two shapes a model sends for criteria. *)
+function WaitsOnArg(Obj: TJsonObject; out Present: Boolean): TStringArray;
+var
+  Arr: TJsonArray;
+  I: Integer;
+  S, Tok: string;
+
+  procedure Add(const Id: string);
+  begin
+    if Trim(Id) = '' then Exit;
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := UpperCase(Trim(Id));
+  end;
+
+begin
+  SetLength(Result, 0);
+  Present := Obj.Has('waits_on');
+  if not Present then Exit;
+  Arr := Obj.ChildArray('waits_on');
+  if Arr <> nil then
+  begin
+    try
+      for I := 0 to Arr.Count - 1 do Add(Arr.ItemStr(I));
+    finally
+      Arr.Free;
+    end;
+    Exit;
+  end;
+  S := Obj.GetStr('waits_on', '') + ' ';
+  Tok := '';
+  for I := 1 to Length(S) do
+    if (S[I] = ',') or (S[I] = ' ') then
+    begin
+      Add(Tok);
+      Tok := '';
+    end
+    else
+      Tok := Tok + S[I];
+end;
+
 { Each non-blank line of Text, prefixed. }
 function PrefixLines(const Text, Prefix: string): string;
 var
@@ -352,6 +393,7 @@ end;
 function TaskList(const Project: string; out Err: string): string;
 var
   Rows: TTaskInfoArray;
+  Waiting: TStringArray;
   I: Integer;
   S: string;
 begin
@@ -387,6 +429,16 @@ begin
     if Rows[I].Status = tsReview then
       S := S + '      submitted by ' + Rows[I].SubmittedBy + ': ' +
            FirstLine(Rows[I].Evidence) + #10;
+    { Readiness is computed, so it is said here rather than stored: a
+      task waiting on unfinished work is not one to start. }
+    if Length(Rows[I].WaitsOn) > 0 then
+    begin
+      Waiting := TaskWaitingOn(Rows[I], Rows);
+      if Length(Waiting) > 0 then
+        S := S + '      waits on ' + JoinList(Waiting) + ' (not done yet)'#10
+      else
+        S := S + '      waited on ' + JoinList(Rows[I].WaitsOn) + ' -- all done, ready'#10;
+    end;
   end;
   Result := S;
 end;
@@ -431,15 +483,87 @@ begin
   TellReviewers(Project, T, Revs);
 end;
 
+function IsAgentCaller(const Actor: string): Boolean;
+begin
+  Result := (Actor <> ActorOperator) and (Actor <> ActorModel);
+end;
+
+function InList(const Name: string; const Names: TStringArray): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to High(Names) do
+    if Names[I] = Name then Exit(True);
+end;
+
+(* "Nothing ready" with the reasons, because the model's next move
+   depends on them: wait for a prerequisite, finish what it holds, or
+   ask its lead for work. *)
+function NothingReadyText(const Project, Agent: string): string;
+var
+  Board: TTaskInfoArray;
+  I: Integer;
+  Lines: string;
+begin
+  Result := 'Nothing is ready for you on ' + Project + '.';
+  Board := ListTasks(Project);
+  Lines := '';
+  for I := 0 to High(Board) do
+    if Board[I].Assignee = Agent then
+      case Board[I].Status of
+        tsActive: Lines := Lines + #10'  ' + Board[I].Id + ' is already yours and active -- carry on with it.';
+        tsReview: Lines := Lines + #10'  ' + Board[I].Id + ' waits for a verdict.';
+        tsBlocked: Lines := Lines + #10'  ' + Board[I].Id + ' is blocked: ' + FirstLine(Board[I].Notes);
+        tsTodo:
+          if not TaskReady(Board[I], Board) then
+            Lines := Lines + #10'  ' + Board[I].Id + ' waits on ' +
+                     JoinList(TaskWaitingOn(Board[I], Board)) + '.';
+      end;
+  Result := Result + Lines;
+  if not InList(Agent, ProjectTakers(Project)) then
+    Result := Result + #10'You take work routed to you; unassigned tasks ' +
+              'are your lead''s to hand out.';
+end;
+
+(* OnTaskClosed: a task reached done, so tasks that waited on it may be
+   ready now. Their owners are told -- which is also what makes their
+   team due on the next tick instead of at the next cadence. Unassigned
+   ones are left to the wake loop, which offers them to the board's
+   takers. *)
+procedure NotifyDependents(const Project, TaskId: string);
+var
+  Board: TTaskInfoArray;
+  I, K: Integer;
+  Waited: Boolean;
+  Delivered, Err: string;
+begin
+  Board := ListTasks(Project);
+  for I := 0 to High(Board) do
+  begin
+    if (Board[I].Status <> tsTodo) or (Board[I].Assignee = '') then Continue;
+    Waited := False;
+    for K := 0 to High(Board[I].WaitsOn) do
+      if Board[I].WaitsOn[K] = UpperCase(TaskId) then Waited := True;
+    if not Waited or not TaskReady(Board[I], Board) then Continue;
+    AgentSend(Board[I].Assignee, 'board',
+              Format('%s ("%s") on %s is ready: %s, the last thing it waited ' +
+                     'on, is done. Claim it with task action="next" ' +
+                     'project="%s".',
+                     [Board[I].Id, Board[I].Title, Project, UpperCase(TaskId),
+                      Project]), Delivered, Err);
+  end;
+end;
+
 function Tool_Task(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Obj: TJsonObject;
   Action, Project, Id, Title, Notes, Status, Summary, JobId, Assignee, Err,
     Criteria, Actor, Verdict, Reason, SubmitErr, Delivered, Owner: string;
-  HasCriteria, Accept: Boolean;
+  HasCriteria, HasWaits, Accept: Boolean;
   Jobs: TJobInfoArray;
   T: TTaskInfo;
-  Revs: TStringArray;
+  Revs, WaitsOn: TStringArray;
 begin
   ErrMsg := '';
   Result := '';
@@ -468,6 +592,7 @@ begin
     begin
       Notes := Obj.GetStr('notes', '');
       Criteria := CriteriaArg(Obj, HasCriteria);
+      WaitsOn := WaitsOnArg(Obj, HasWaits);
       Id := CreateTask(Project, Title, Notes, Err, Criteria, Actor);
       if Id = '' then
       begin
@@ -475,6 +600,47 @@ begin
         Exit;
       end;
       Result := 'Created task ' + Id + ' in ' + Project + ': ' + Title;
+      if HasWaits and (Length(WaitsOn) > 0) then
+      begin
+        if SetTaskWaitsOn(Project, Id, WaitsOn, Actor, Err) then
+          Result := Result + ' (waits on ' + JoinList(WaitsOn) + ')'
+        else
+          { The task exists either way; say the edge did not take, and why,
+            rather than failing a create that succeeded. }
+          Result := Result + '. Its waits_on was NOT set: ' + Err;
+      end;
+      Exit;
+    end;
+
+    (* next: the board hands the caller its next piece of work. *)
+    if Action = 'next' then
+    begin
+      if not IsAgentCaller(Actor) then
+      begin
+        ErrMsg := 'task action="next" claims work for a named agent, and ' +
+                  'this call is not running as one. Pick a task with ' +
+                  'action="list" and work it with action="update".';
+        Exit;
+      end;
+      if ClaimNextTask(Project, Actor, InList(Actor, ProjectTakers(Project)),
+                       Id, Err) then
+      begin
+        GetTask(Project, Id, T);
+        Result := 'Claimed ' + Id + ': ' + T.Title + ' -- it is yours and ' +
+                  'active. Your claim lasts ' + IntToStr(ClaimLeaseMinutes) +
+                  ' minutes and renews whenever you update the task.';
+        if T.Notes <> '' then Result := Result + #10'notes: ' + T.Notes;
+        if T.Criteria <> '' then
+          Result := Result + #10'criteria (what the verdict checks):'#10 +
+                    PrefixLines(T.Criteria, '  - ');
+        Exit;
+      end;
+      if Err <> '' then
+      begin
+        ErrMsg := Err;
+        Exit;
+      end;
+      Result := NothingReadyText(Project, Actor);
       Exit;
     end;
 
@@ -491,6 +657,14 @@ begin
                               else Assignee := '-';
       Criteria := CriteriaArg(Obj, HasCriteria);
       if not HasCriteria then Criteria := '-';
+      WaitsOn := WaitsOnArg(Obj, HasWaits);
+      { The edge first: a refused cycle should leave the rest of the call
+        unapplied, not half of it. }
+      if HasWaits and not SetTaskWaitsOn(Project, Id, WaitsOn, Actor, Err) then
+      begin
+        ErrMsg := Err;
+        Exit;
+      end;
       if not UpdateTask(Project, Id, Title, Notes, Status, Err, Assignee,
                         Criteria, Actor) then
       begin
@@ -500,6 +674,11 @@ begin
       Result := 'Updated task ' + UpperCase(Id) + ' in ' + Project;
       if Status <> '' then
         Result := Result + ' (status: ' + LowerCase(Status) + ')';
+      if HasWaits then
+      begin
+        if Length(WaitsOn) = 0 then Result := Result + ' (waits on nothing)'
+        else Result := Result + ' (waits on ' + JoinList(WaitsOn) + ')';
+      end;
       Exit;
     end;
 
@@ -644,7 +823,7 @@ begin
     end;
 
     ErrMsg := 'unknown action "' + Action +
-              '" (use list, create, update, job, submit or verdict)';
+              '" (use list, create, update, next, job, submit or verdict)';
   finally
     Obj.Free;
   end;
@@ -999,8 +1178,10 @@ begin
     'Manage tasks inside a project, and report on the job you are running. ' +
     'action="list" shows the board; action="create" needs "project" and ' +
     '"title"; action="update" needs "id" and can set status ' +
-    '(todo/active/done/blocked), assignee and "criteria" (acceptance ' +
-    'checks, one per line -- frozen once work starts); action="job" ' +
+    '(todo/active/done/blocked), assignee, "criteria" (acceptance ' +
+    'checks, one per line -- frozen once work starts) and "waits_on" ' +
+    '(task ids this one needs done first); action="next" claims your ' +
+    'next ready task -- use it to take work; action="job" ' +
     'reports the current run (status done/failed + "summary") and closes ' +
     'the task when done. On a board that requires review you never mark ' +
     'your own work done: action="submit" with "evidence" (what you ran ' +
@@ -1009,13 +1190,14 @@ begin
     '"reason". Keep this current as you work -- the user watches this board.';
   T.Schema      :=
     '{"type":"object","properties":{' +
-    '"action":{"type":"string","enum":["list","create","update","job","submit","verdict"]},' +
+    '"action":{"type":"string","enum":["list","create","update","next","job","submit","verdict"]},' +
     '"project":{"type":"string","description":"Project slug (always required)."},' +
     '"id":{"type":"string","description":"Task id, e.g. T0001 (update/job/submit/verdict)."},' +
     '"assignee":{"type":"string","description":"Agent slug that owns the task (update)."},' +
     '"title":{"type":"string","description":"Task title (create/update)."},' +
     '"notes":{"type":"string","description":"Free-text notes on the task."},' +
     '"criteria":{"type":"string","description":"Acceptance checks, one per line (create/update; frozen once the task starts)."},' +
+    '"waits_on":{"type":"array","items":{"type":"string"},"description":"Task ids that must be done before this one is ready (create/update; [] clears)."},' +
     '"status":{"type":"string","description":"todo|active|done|blocked for a task; done|failed for a job."},' +
     '"job":{"type":"string","description":"Job id (defaults to the latest job on the task)."},' +
     '"summary":{"type":"string","description":"What the job accomplished (action=job)."},' +
@@ -1089,5 +1271,6 @@ initialization
     that can run an agent links this unit, and the store must not link
     the shell backend to get it. }
   OnSubmitGate := ProjectScenarioGate;
+  OnTaskClosed := NotifyDependents;
 
 end.

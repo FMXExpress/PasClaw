@@ -118,7 +118,7 @@ default**:
 | Tool | Actions |
 |---|---|
 | `project` | `list`, `create`, `get`, `update` |
-| `task` | `list`, `create`, `update`, `job`, `submit`, `verdict` |
+| `task` | `list`, `create`, `update`, `next`, `job`, `submit`, `verdict` |
 
 The desktop does not need them — both clients drive the board over HTTP, and
 everything in this document works with the flag off. They exist for when you
@@ -919,8 +919,8 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | POST | `/v1/projects/import` | import |
 | POST | `/v1/projects/<n>/review` | `{"review":true,"reviewers":["qa"]}` -- require a verdict on this board |
 | GET | `/v1/projects/<n>/activity` | the receipts, oldest first (`?task=T0004&limit=50`) |
-| GET/POST | `/v1/projects/<n>/tasks` | list / create (`criteria` optional) |
-| GET/PATCH | `/v1/projects/<n>/tasks/<t>` | inspect / edit, as the operator (`criteria` too; `status: review` is refused -- submit is how a task gets there) |
+| GET/POST | `/v1/projects/<n>/tasks` | list / create (`criteria`, `waits_on` optional) |
+| GET/PATCH | `/v1/projects/<n>/tasks/<t>` | inspect / edit, as the operator (`criteria`, `waits_on` too -- a cycle is a 400; `status: review` is refused -- submit is how a task gets there). A task carries `waits_on`, the computed `waiting_on` and `ready`, and its lease (`lease_by`, `lease_until`) |
 | POST | `/v1/projects/<n>/tasks/<t>/verdict` | the operator's verdict on a task in review: `{"verdict":"accept"}` or `{"verdict":"reject","reason":"..."}` (400 malformed, 409 not in review) |
 | POST | `/v1/projects/<n>/tasks/<t>/run` | start an agent turn (503 without an agent) |
 | GET/POST | `/v1/projects/<n>/tasks/<t>/jobs` | list / open |

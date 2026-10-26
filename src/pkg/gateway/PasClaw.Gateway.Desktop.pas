@@ -478,6 +478,9 @@ begin
   Result.PutInt ('review_tasks', P.ReviewTasks);
   Result.PutBool('review',       P.Review);
   Arr := TJsonArray.Create;
+  for I := 0 to High(P.Takers) do Arr.AddStr(P.Takers[I]);
+  Result.PutArray('takers', Arr);
+  Arr := TJsonArray.Create;
   for I := 0 to High(P.Reviewers) do Arr.AddStr(P.Reviewers[I]);
   Result.PutArray('reviewers', Arr);
   (* "Everything on this board is finished."
@@ -508,9 +511,26 @@ begin
   end;
 end;
 
-function TaskJSON(const T: TTaskInfo): TJsonObject;
+(* Board is the project's tasks, for what is computed rather than stored:
+   whether the task is READY and what it still waits on. Callers listing a
+   board pass the list they already have; TaskJSON reads it for one. *)
+function TaskJSONOn(const T: TTaskInfo; const Board: TTaskInfoArray): TJsonObject;
+var
+  Arr: TJsonArray;
+  Waiting: TStringArray;
+  I: Integer;
 begin
   Result := TJsonObject.Create;
+  Arr := TJsonArray.Create;
+  for I := 0 to High(T.WaitsOn) do Arr.AddStr(T.WaitsOn[I]);
+  Result.PutArray('waits_on', Arr);
+  Waiting := TaskWaitingOn(T, Board);
+  Arr := TJsonArray.Create;
+  for I := 0 to High(Waiting) do Arr.AddStr(Waiting[I]);
+  Result.PutArray('waiting_on', Arr);
+  Result.PutBool('ready', Length(Waiting) = 0);
+  Result.PutStr('lease_by', T.LeaseBy);
+  Result.PutStr('lease_until', T.LeaseUntil);
   Result.PutStr('id',      T.Id);
   Result.PutStr('project', T.Project);
   Result.PutStr('title',   T.Title);
@@ -530,6 +550,11 @@ begin
   Result.PutStr('created', T.Created);
   Result.PutStr('updated', T.Updated);
   Result.PutInt('jobs',    T.JobCount);
+end;
+
+function TaskJSON(const T: TTaskInfo): TJsonObject;
+begin
+  Result := TaskJSONOn(T, ListTasks(T.Project));
 end;
 
 function JobJSON(const J: TJobInfo): TJsonObject;
@@ -941,7 +966,12 @@ begin
           GAgentRunner(Verdicts[J].Name, '', Err);
       end;
 
-    { 2. Stalls go to the lead, not back to the stuck worker. }
+    { 2. Stalls go to the lead, not back to the stuck worker -- and a
+        claim a dead run was holding is handed back first, so the lead
+        hears "it is free" rather than "it is stuck". }
+    Stalls := TeamExpireLeases(T, S);
+    for J := 0 to High(Stalls) do
+      LogInfo('team %s: lease expired %s', [S.Name, Stalls[J]]);
     Stalls := TeamStallMessages(T, S);
     for J := 0 to High(Stalls) do
       LogDebug('team %s: stall %s', [S.Name, Stalls[J]]);
@@ -1733,6 +1763,23 @@ begin
   Result := False;
 end;
 
+{ A JSON array of strings under Key, as an array; empty when absent. }
+function BodyIds(Obj: TJsonObject; const Key: string): TStringArray;
+var
+  Arr: TJsonArray;
+  I: Integer;
+begin
+  SetLength(Result, 0);
+  Arr := Obj.ChildArray(Key);
+  if Arr = nil then Exit;
+  try
+    SetLength(Result, Arr.Count);
+    for I := 0 to Arr.Count - 1 do Result[I] := Arr.ItemStr(I);
+  finally
+    Arr.Free;
+  end;
+end;
+
 function RouteTasks(const Method, Project: string; Segs: TStringList;
   const Body: string; out Resp: TDesktopResponse): Boolean;
 var
@@ -1760,7 +1807,7 @@ begin
         List := ListTasks(Project);
         for I := 0 to High(List) do
         begin
-          Item := TaskJSON(List[I]);
+          Item := TaskJSONOn(List[I], List);
           Arr.AddObject(Item);
         end;
         Root.PutArray('tasks', Arr);
@@ -1785,6 +1832,15 @@ begin
         if TaskId = '' then
         begin
           ReplyErr(Resp, 400, Err);
+          Exit;
+        end;
+        if Obj.Has('waits_on') and
+           not SetTaskWaitsOn(Project, TaskId, BodyIds(Obj, 'waits_on'),
+                              ActorOperator, Err) then
+        begin
+          { The task exists; the edge did not take. Say both. }
+          ReplyErr(Resp, 400, 'created ' + TaskId + ', but its waits_on was ' +
+                   'refused: ' + Err);
           Exit;
         end;
         Root := TJsonObject.Create;
@@ -1932,6 +1988,15 @@ begin
             "" = explicitly unassign. }
           if Obj.Has('assignee') then Assignee := Obj.GetStr('assignee', '');
           if Obj.Has('criteria') then Criteria := Obj.GetStr('criteria', '');
+        end;
+        { The dependency edge first, so a refused cycle leaves the rest of
+          the edit unapplied. }
+        if (Obj <> nil) and Obj.Has('waits_on') and
+           not SetTaskWaitsOn(Project, TaskId, BodyIds(Obj, 'waits_on'),
+                              ActorOperator, Err) then
+        begin
+          ReplyErr(Resp, 400, Err);
+          Exit;
         end;
         (* As the OPERATOR. This route is a person at the desktop (or a
            script of theirs): the authority review exists for, so a task
@@ -2468,7 +2533,7 @@ begin
       Tasks_ := ListTasks(Project);
       for I := 0 to High(Tasks_) do
       begin
-        Item := TaskJSON(Tasks_[I]);
+        Item := TaskJSONOn(Tasks_[I], Tasks_);
         Arr.AddObject(Item);
       end;
     end

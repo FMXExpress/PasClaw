@@ -64,6 +64,7 @@ uses
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.Cron,             { cron tool -- gated on cron_tool_enabled }
   PasClaw.Projects.Tools,         { project / task -- the desktop board }
+  PasClaw.Projects.Store,         { SetClaimLeaseMinutes }
   PasClaw.Agents.Tools,           { agent -- standing agents and their mailbox }
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
@@ -291,6 +292,7 @@ begin
         different powers to hand a model. }
       if Cfg.AgentToolsEnabled then RegisterAgentTools(Reg);
       SetTeamActionsAllowed(Cfg.AgentToolsEnabled);
+      SetClaimLeaseMinutes(Cfg.TeamsClaimLeaseMinutes);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }

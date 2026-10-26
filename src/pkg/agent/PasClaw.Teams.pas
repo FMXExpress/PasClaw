@@ -40,6 +40,9 @@ type
        a template outlives any model id it could have pinned. *)
     Model:  string;
     Parent: string;   { must name another agent in the SAME template }
+    (* 'routed' (or '') takes only tasks assigned to it; 'any' may also
+       claim unassigned ready work with `task action=next`. *)
+    Takes:  string;
   end;
   TTeamAgentArray = array of TTeamAgent;
 
@@ -192,6 +195,13 @@ function TeamWakeDecisions(const S: TTeamState): TWakeReasonArray;
    texts it sent (for the tick's log) and sends them via AgentSend. *)
 function TeamStallMessages(const T: TTeamTemplate; const S: TTeamState): TStringArray;
 
+(* Hand back what dead runs were holding: active tasks on the team's board
+   whose lease ran out while the holder runs no turn go back to todo
+   (ExpireLeases), and each lead is told which and whose. Today's stall
+   report waits two cadences and then needs the lead to act; this frees
+   the task on the tick that finds it. Returns "T0003 dev -> foreman". *)
+function TeamExpireLeases(const T: TTeamTemplate; const S: TTeamState): TStringArray;
+
 (* True when every task on the team's board is done (and there is at
    least one task -- an empty board is "not started", not "finished"). *)
 function TeamBoardDone(const Project: string): Boolean;
@@ -297,12 +307,12 @@ const
     'or sends it back. When a task waits for your verdict, give it. ' +
     'When the whole board is done, tell the operator plainly and stop ' +
     '-- do not invent work to stay busy.'#10 +
-    'Mark a task BLOCKED when it waits on another task, and say in its ' +
-    'notes what it waits on. This is not bookkeeping: only todo and ' +
-    'active tasks wake their owner, so a follow-up task left as todo ' +
-    'before there is anything to follow up wakes its owner to look at ' +
-    'an empty project. Unblock it the moment the thing it waited for ' +
-    'closes, and tell its owner.'#10 +
+    'When a task needs another one finished first, say so on the board: ' +
+    'task action=update waits_on=["T0002"]. The board then wakes its ' +
+    'owner only once everything it waits on is done, and tells the owner ' +
+    'when that happens -- you do not have to remember to unblock it. ' +
+    'Keep BLOCKED for waits outside the board (an API key from the ' +
+    'operator), with a note saying what it waits on.'#10 +
     'Autonomy: small things within the team -- assignments, task ' +
     'edits, follow-ups -- do them and report after. Anything that ' +
     'commits money, deletes things outside the project, or touches ' +
@@ -359,10 +369,12 @@ const
     'made before claiming anything. Report failure as plainly as ' +
     'success: "it does not work yet because X" is a good report and ' +
     '"done" that was never run is the one prohibited move.'#10 +
-    'Take only tasks assigned to you; mark them active when you ' +
-    'start, and describe what changed in the task notes when you ' +
-    'stop, so the next turn -- yours or anyone''s -- can pick the ' +
-    'work up cold. Build to the task''s criteria, and when it meets ' +
+    'Take work with task action=next: it claims the oldest ready task ' +
+    'assigned to you and marks it active (a task still waiting on ' +
+    'unfinished work is not offered). Describe what changed in the task ' +
+    'notes when you stop, so the next turn -- yours or anyone''s -- can ' +
+    'pick the work up cold; touching the task also keeps your claim on ' +
+    'it alive. Build to the task''s criteria, and when it meets ' +
     'them, submit it with the evidence; your reviewer (the Test ' +
     'Engineer, or the Foreman on a team without one) gives the ' +
     'verdict.'#10 +
@@ -476,10 +488,9 @@ const
     'break the ask into tasks with the task tool, assign each to the ' +
     'RIGHT officer -- and only the officers the ask actually needs; ' +
     'two is a normal number, eight means you did not think. Message ' +
-    'each assignee ONCE naming their task ids. Mark any task that ' +
-    'depends on another BLOCKED with a note saying what it waits on, ' +
-    'and unblock it the moment that closes -- only todo and active ' +
-    'tasks wake their owner.'#10 +
+    'each assignee ONCE naming their task ids. A task that depends on ' +
+    'another gets waits_on=["T0002"]: the board wakes its owner only ' +
+    'when what it waits on is done, and tells them.'#10 +
     'Officers submit their documents for YOUR verdict: read each ' +
     'against its task''s criteria and accept it, or reject it with what ' +
     'is missing. When the officers'' pieces are in: read their docs, ' +
@@ -832,6 +843,7 @@ begin
           T.Agents[I].Role   := AObj.GetStr('role', '');
           T.Agents[I].Model  := LowerCase(Trim(AObj.GetStr('model', '')));
           T.Agents[I].Parent := AgentSlug(AObj.GetStr('parent', ''));
+          T.Agents[I].Takes  := LowerCase(Trim(AObj.GetStr('takes', '')));
         finally
           AObj.Free;
         end;
@@ -971,6 +983,13 @@ begin
       Err := 'template "' + T.Name + '": agent "' + T.Agents[I].Name +
              '" names model tier "' + T.Agents[I].Model +
              '" -- use "", "primary" or "fast" (never a model id)';
+      Exit;
+    end;
+    if (T.Agents[I].Takes <> '') and (T.Agents[I].Takes <> 'routed') and
+       (T.Agents[I].Takes <> 'any') then
+    begin
+      Err := 'template "' + T.Name + '": agent "' + T.Agents[I].Name +
+             '" takes "' + T.Agents[I].Takes + '" -- use "routed" or "any"';
       Exit;
     end;
     for J := 0 to I - 1 do
@@ -1149,8 +1168,21 @@ end;
 
 function BindTeamBoard(const T: TTeamTemplate; const Project: string;
                        out Err: string): Boolean;
+var
+  Takers: TStringArray;
+  I: Integer;
 begin
   Err := '';
+  SetLength(Takers, 0);
+  for I := 0 to High(T.Agents) do
+    if T.Agents[I].Takes = 'any' then
+    begin
+      SetLength(Takers, Length(Takers) + 1);
+      Takers[High(Takers)] := T.Agents[I].Name;
+    end;
+  { Written even when empty: a board re-bound to a template that no
+    longer opens the pool must stop offering it. }
+  if not SetProjectTakers(Project, Takers, Err) then Exit(False);
   if T.SkipReview then Exit(True);
   Result := SetProjectReview(Project, True, T.ReviewBy, Err);
 end;
@@ -1357,6 +1389,10 @@ begin
       Exit(True);
 end;
 
+(* Does Agent have work it can do now? An active task, or a todo one that
+   is READY. A todo task still waiting on unfinished work is not a reason
+   to wake its owner -- that is what used to need a `blocked` marking and
+   somebody remembering to lift it. *)
 function AgentHasOpenAssignedTask(const Project, Agent: string): Boolean;
 var
   Tasks: TTaskInfoArray;
@@ -1367,8 +1403,31 @@ begin
   Tasks := ListTasks(Project);
   for I := 0 to High(Tasks) do
     if (Tasks[I].Assignee = Agent) and
-       (Tasks[I].Status in [tsTodo, tsActive]) then
+       ((Tasks[I].Status = tsActive) or
+        ((Tasks[I].Status = tsTodo) and TaskReady(Tasks[I], Tasks))) then
       Exit(True);
+end;
+
+{ Ready unassigned work, for an agent that takes from the pool. }
+function ReadyPoolTasks(const Project, Agent: string): Integer;
+var
+  Tasks: TTaskInfoArray;
+  Takers: TStringArray;
+  I: Integer;
+  IsTaker: Boolean;
+begin
+  Result := 0;
+  if Project = '' then Exit;
+  Takers := ProjectTakers(Project);
+  IsTaker := False;
+  for I := 0 to High(Takers) do
+    if Takers[I] = Agent then IsTaker := True;
+  if not IsTaker then Exit;
+  Tasks := ListTasks(Project);
+  for I := 0 to High(Tasks) do
+    if (Tasks[I].Status = tsTodo) and (Tasks[I].Assignee = '') and
+       TaskReady(Tasks[I], Tasks) then
+      Inc(Result);
 end;
 
 (* How many tasks on the board wait for THIS agent's verdict. A task in
@@ -1432,6 +1491,12 @@ begin
         R.Wake := True;
         R.Why := Format('%d task(s) on %s waiting for its verdict',
                         [Reviews, S.Project]);
+      end
+      else if ReadyPoolTasks(S.Project, R.Agent) > 0 then
+      begin
+        R.Wake := True;
+        R.Why := Format('%d ready unassigned task(s) on %s it can claim',
+                        [ReadyPoolTasks(S.Project, R.Agent), S.Project]);
       end
       else
         R.Why := 'nothing to do -- left alone';
@@ -1517,6 +1582,38 @@ begin
       begin
         SetLength(Result, N + 1);
         Result[N] := Tasks[I].Id + ' -> ' + Leads[L];
+        Inc(N);
+      end;
+  end;
+end;
+
+function TeamExpireLeases(const T: TTeamTemplate; const S: TTeamState): TStringArray;
+var
+  Expired, Leads: TStringArray;
+  I, L, N, Sp: Integer;
+  Id, Holder, Text, Delivered, Err: string;
+begin
+  SetLength(Result, 0);
+  N := 0;
+  if S.Project = '' then Exit;
+  Expired := ExpireLeases(S.Project, AgentIsBusy);
+  if Length(Expired) = 0 then Exit;
+  Leads := TeamLeads(T);
+  for I := 0 to High(Expired) do
+  begin
+    Sp := Pos(' ', Expired[I]);
+    Id := Copy(Expired[I], 1, Sp - 1);
+    Holder := Copy(Expired[I], Sp + 1, MaxInt);
+    Text := Format('Task %s on %s was claimed by %s, whose claim ran out ' +
+                   'while %s was not running -- the run holding it is gone. ' +
+                   'It is back to todo. Reassign it, or let its owner claim ' +
+                   'it again with task action="next".',
+                   [Id, S.Project, Holder, Holder]);
+    for L := 0 to High(Leads) do
+      if AgentSend(Leads[L], 'team-tick', Text, Delivered, Err) then
+      begin
+        SetLength(Result, N + 1);
+        Result[N] := Id + ' ' + Holder + ' -> ' + Leads[L];
         Inc(N);
       end;
   end;

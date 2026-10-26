@@ -202,8 +202,10 @@ is due (`wake_minutes`, default 15):
   two cadences, whose owner is idle, produces a message to the
   *Foreman*, not another poke at the stuck worker. Waking a stuck worker
   repeats the stall; telling its manager is what unsticks it;
-- **wakes agents that have a reason to run** — pending messages, open
-  tasks assigned to them, or tasks **waiting for their verdict**. A task
+- **hands back expired claims** — see *Leases* below;
+- **wakes agents that have a reason to run** — pending messages, *ready*
+  tasks assigned to them, ready unassigned work for an agent that takes
+  from the pool, or tasks **waiting for their verdict**. A task
   in review wakes its reviewer, not its owner: it is not the owner's to
   move. An agent with nothing to do is left alone: a loop that burns a
   provider call per agent per tick to be told "no news" is a bill, not
@@ -224,10 +226,34 @@ meant a lead delegated and the whole team sat still for fifteen minutes,
 with the handoff — the entire point of having a team — the slowest thing
 in the system. So a team with mail waiting is due immediately.
 
-**Block work that waits on other work.** Only `todo` and `active` tasks
-wake their owner, so the Foreman marks a downstream task `blocked` and
-says what it waits on. Without that, a review task created up front
-wakes the reviewer to look at a project with nothing in it yet.
+**Work that waits on other work says so.** A task's `waits_on` lists the
+tasks it needs (`task action=update waits_on=["T0002"]`). It is
+**ready** when every one of them is done — computed, not stored, so it
+cannot go stale — and only a ready task wakes its owner. When the last
+prerequisite closes, the board messages the dependent's owner, which
+makes the team due on the next tick. An edge to a task not on the board,
+to itself, or one that would close a cycle is refused when it is set.
+`blocked` stays for waits outside the board ("needs the operator's API
+key"). The Foreman stops being the scheduler: nobody has to remember to
+unblock anything.
+
+**`task action=next`** is how a worker takes work: it claims the oldest
+ready `todo` task assigned to the caller, or — for an agent whose
+template says `"takes": "any"` — the oldest ready *unassigned* one. The
+scan and the claim happen under one lock, so two agents asking at once
+get two different tasks, or one of them hears *nothing is ready* with the
+reasons (what its own tasks wait on, what it already holds). The claim
+makes the task active and the caller's, with a **lease**.
+
+**Leases.** An agent that starts or claims a task holds it for
+`teams.claim_lease_minutes` (default 120); the owner touching the task —
+any update, a note — renews it, and the task leaving `active` drops it.
+On each tick, an active task whose lease ran out **while its holder runs
+no turn** — the same turn-lock test supervision uses to spot a dead run,
+so a long legitimate turn is never cut — goes back to `todo` with an
+`expire` receipt, back to the pool if it was claimed from there, and the
+lead is told. Before, a task held by a dead run waited for the stall
+report two cadences later and for the lead to do something.
 
 ```sh
 pasclaw team status        # who is up, their board, last tick
@@ -321,7 +347,7 @@ software team.
   "agents": [
     { "name": "boss", "title": "Boss", "role": "…", "model": "" },
     { "name": "hand", "title": "Hand", "role": "…", "model": "fast",
-      "parent": "boss" }
+      "parent": "boss", "takes": "any" }
   ],
   "kickoff": "Goal: {{goal}}  Project: {{project}}",
   "wake": { "minutes": 15 },
@@ -329,6 +355,8 @@ software team.
 }
 ```
 
+`takes` is `"routed"` (the default: only what is assigned to it) or
+`"any"` (it may also claim unassigned ready work with `next`).
 `review.by` must name agents in the template; leave it out and each
 submitter's parent reviews. `"review": false` (or `{"required": false}`)
 leaves the board without review.

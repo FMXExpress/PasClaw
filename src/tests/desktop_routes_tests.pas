@@ -276,6 +276,27 @@ begin
                      'attributed');
   ExpectStatus('GET', '/v1/projects/nope/activity', '', 404, 'activity of a missing project');
 
+  { waits_on over HTTP: set on create, computed readiness in the JSON, a
+    cycle refused on PATCH. }
+  ExpectBodyContains('POST', '/v1/projects/review-routes/tasks',
+                     '{"title":"Later","waits_on":["T0001"]}', 'T0002',
+                     'a task created waiting on another');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0002', '',
+                     '"waits_on":["T0001"]', 'its waits_on is in the JSON');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0002', '',
+                     '"ready":true', 'ready, since T0001 is done');
+  ExpectBodyContains('POST', '/v1/projects/review-routes/tasks', '{"title":"Third"}',
+                     'T0003', 'a third task');
+  ExpectStatus('PATCH', '/v1/projects/review-routes/tasks/T0002',
+               '{"waits_on":["T0003"]}', 200, 'a new edge');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0002', '',
+                     '"ready":false', 'and now it waits');
+  ExpectStatus('PATCH', '/v1/projects/review-routes/tasks/T0003',
+               '{"waits_on":["T0002"]}', 400, 'a cycle is a 400');
+  ExpectStatus('POST', '/v1/projects/review-routes/tasks',
+               '{"title":"Orphan","waits_on":["T0099"]}', 400,
+               'an unknown prerequisite is a 400');
+
   { `team up` turns review on for the board it works -- here one it made
     from a goal, parked so nothing tries to run. }
   ExpectBodyContains('POST', '/v1/teams/up',

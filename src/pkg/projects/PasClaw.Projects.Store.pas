@@ -113,6 +113,10 @@ type
        review.by). Empty = the submitter's parent. Either way a submitter
        never reviews its own work. *)
     Reviewers:    TStringArray;
+    (* Agents that may claim UNASSIGNED ready work with `task action=next`
+       (template `takes: "any"`). Everyone else takes only what was routed
+       to them. *)
+    Takers:       TStringArray;
   end;
   TProjectInfoArray = array of TProjectInfo;
 
@@ -147,6 +151,20 @@ type
     VerdictBy:    string;
     VerdictAt:    string;
     VerdictNote:  string;
+    (* Tasks this one needs first ('T0002'). It is READY when every one of
+       them is done -- computed (TaskReady), never stored, so it cannot go
+       stale. `blocked` stays for waits outside the board. *)
+    WaitsOn:      TStringArray;
+    (* The claim on active work: who holds it and until when (a stamp of
+       IsoUtcInMinutes's shape). Written when an agent starts or claims
+       the task, renewed whenever its owner touches it, cleared when it
+       leaves active. A lease that runs out while its holder runs no turn
+       is a claim held by a run that died (ExpireLeases). *)
+    LeaseBy:      string;
+    LeaseUntil:   string;
+    { 'pool' when `next` took it unassigned -- an expired lease hands such
+      a task back to the pool rather than to whoever had it. }
+    ClaimedFrom:  string;
     Created: string;
     Updated: string;
     JobCount: Integer;
@@ -244,6 +262,11 @@ function ProjectRequiresReview(const Project: string): Boolean;
   which GetProject does to count it. The wake loop asks this per task. }
 function ProjectReviewers(const Project: string): TStringArray;
 
+{ Who may claim unassigned work here (see TProjectInfo.Takers). }
+function SetProjectTakers(const Project: string; const Takers: TStringArray;
+  out Err: string): Boolean;
+function ProjectTakers(const Project: string): TStringArray;
+
 (* Where the operator keeps this project's held-out checks:
    $PASCLAW_HOME/scenarios/<workspace>/<project>/ -- OUTSIDE the
    workspace, for the reason PasClaw.Agent.Verify gives: a check the
@@ -310,6 +333,56 @@ function VerdictTask(const Project, TaskId, Actor: string; Accept: Boolean;
    TaskId '' = the whole board; Limit > 0 keeps the newest Limit lines. *)
 function ReadActivity(const Project, TaskId: string;
   Limit: Integer = 0): TStringArray;
+
+(* What this task waits on. Every id must name another task on the same
+   board, and an edge that would close a cycle is refused -- a cycle is a
+   board where nothing can ever become ready, and the moment it is set is
+   the only moment the fix is obvious. An empty list clears it. *)
+function SetTaskWaitsOn(const Project, TaskId: string;
+  const WaitsOn: TStringArray; const Actor: string; out Err: string): Boolean;
+
+{ Every task this one waits on is done. Board is the project's tasks
+  (ListTasks), passed in so a caller walking the board reads it once. }
+function TaskReady(const T: TTaskInfo; const Board: TTaskInfoArray): Boolean;
+{ The ids it still waits on -- not done, or not on the board at all. }
+function TaskWaitingOn(const T: TTaskInfo; const Board: TTaskInfoArray): TStringArray;
+
+(* `task action=next`: give Agent its next piece of work, atomically.
+
+   The oldest ready todo task assigned to Agent; else, when AllowPool
+   (Agent is one of the project's takers), the oldest ready UNASSIGNED
+   one. Scanned and claimed under one lock, so two agents asking at once
+   get two different tasks or one hears "nothing ready" -- never the
+   same task twice. The claim sets the owner, `active`, and a lease.
+   False with Err '' means nothing was ready (Err says why otherwise). *)
+function ClaimNextTask(const Project, Agent: string; AllowPool: Boolean;
+  out TaskId, Err: string): Boolean;
+
+{ How long a claim lasts without its owner touching the task. Set from
+  teams.claim_lease_minutes at startup; 120 by default. }
+procedure SetClaimLeaseMinutes(Minutes: Integer);
+function ClaimLeaseMinutes: Integer;
+
+type
+  TBusyProbe = function(const Agent: string): Boolean;
+
+(* Hand back active tasks whose lease ran out while their holder runs no
+   turn -- the same turn-lock test supervision uses to find a dead run, so
+   a long legitimate turn is never cut. Each goes back to `todo` with an
+   `expire` receipt; a task claimed from the pool goes back unassigned.
+   Returns "T0003 dev" per task handed back, for the caller to report. *)
+function ExpireLeases(const Project: string; Busy: TBusyProbe): TStringArray;
+
+type
+  { Called after a task reaches done, however it got there. }
+  TTaskClosedHook = procedure(const Project, TaskId: string);
+
+var
+  (* PasClaw.Projects.Tools installs one that tells the owners of tasks
+     that were waiting on this one -- and are now ready -- that they can
+     start. A message is what makes their team due now rather than at
+     the next cadence. *)
+  OnTaskClosed: TTaskClosedHook = nil;
 
 type
   (* Run before a submission is accepted. True = green (or nothing to
@@ -394,6 +467,8 @@ var
   GTaskLock: TCriticalSection = nil;
   { Appends to activity.jsonl from concurrent threads must not interleave. }
   GActivityLock: TCriticalSection = nil;
+  { teams.claim_lease_minutes; written once at startup. }
+  GLeaseMinutes: Integer = 120;
 
 { ------------------------------------------------------------------ names -- }
 
@@ -752,8 +827,10 @@ begin
   Result := (Dir <> '') and DirectoryExists(Dir);
 end;
 
-{ The reviewers array of a project manifest, slugged; empty when absent. }
-function ManifestReviewers(Obj: TJsonObject): TStringArray;
+{ A names array of a manifest ("reviewers", "takers", "waits_on"),
+  canonicalised by Canon; empty when absent. }
+function ManifestNames(Obj: TJsonObject; const Key: string;
+  TaskIds: Boolean = False): TStringArray;
 var
   Arr: TJsonArray;
   I, N: Integer;
@@ -761,14 +838,15 @@ var
 begin
   SetLength(Result, 0);
   if Obj = nil then Exit;
-  Arr := Obj.ChildArray('reviewers');
+  Arr := Obj.ChildArray(Key);
   if Arr = nil then Exit;
   try
     SetLength(Result, Arr.Count);
     N := 0;
     for I := 0 to Arr.Count - 1 do
     begin
-      S := SanitizeName(Arr.ItemStr(I));
+      if TaskIds then S := UpperCase(Trim(Arr.ItemStr(I)))
+                 else S := SanitizeName(Arr.ItemStr(I));
       if S = '' then Continue;
       Result[N] := S;
       Inc(N);
@@ -806,7 +884,8 @@ begin
       Info.Suite       := Obj.GetBool('suite', False);
       Info.Archived    := Obj.GetBool('archived', False);
       Info.Review      := Obj.GetBool('review', False);
-      Info.Reviewers   := ManifestReviewers(Obj);
+      Info.Reviewers   := ManifestNames(Obj, 'reviewers');
+      Info.Takers      := ManifestNames(Obj, 'takers');
     finally
       Obj.Free;
     end;
@@ -1050,7 +1129,63 @@ begin
   Obj := ReadManifest(JoinPath(Dir, 'project.json'));
   if Obj = nil then Exit;
   try
-    Result := ManifestReviewers(Obj);
+    Result := ManifestNames(Obj, 'reviewers');
+  finally
+    Obj.Free;
+  end;
+end;
+
+function SetProjectTakers(const Project: string; const Takers: TStringArray;
+  out Err: string): Boolean;
+var
+  Dir, Path, S: string;
+  Obj: TJsonObject;
+  Arr: TJsonArray;
+  I: Integer;
+begin
+  Err := '';
+  Result := False;
+  Dir := ProjectDir(Project);
+  if (Dir = '') or not DirectoryExists(Dir) then
+  begin
+    Err := 'no such project: ' + Project;
+    Exit;
+  end;
+  Path := JoinPath(Dir, 'project.json');
+  Obj := ReadManifest(Path);
+  if Obj = nil then
+  begin
+    Obj := TJsonObject.Create;
+    Obj.PutStr('name', Project);
+    Obj.PutStr('created', NowIsoUtc);
+  end;
+  try
+    Arr := TJsonArray.Create;
+    for I := 0 to High(Takers) do
+    begin
+      S := SanitizeName(Takers[I]);
+      if S <> '' then Arr.AddStr(S);
+    end;
+    Obj.PutArray('takers', Arr);
+    WriteManifest(Path, Obj);
+  finally
+    Obj.Free;
+  end;
+  Result := True;
+end;
+
+function ProjectTakers(const Project: string): TStringArray;
+var
+  Dir: string;
+  Obj: TJsonObject;
+begin
+  SetLength(Result, 0);
+  Dir := ProjectDir(Project);
+  if Dir = '' then Exit;
+  Obj := ReadManifest(JoinPath(Dir, 'project.json'));
+  if Obj = nil then Exit;
+  try
+    Result := ManifestNames(Obj, 'takers');
   finally
     Obj.Free;
   end;
@@ -1300,6 +1435,10 @@ begin
       Info.VerdictBy    := Obj.GetStr('verdict_by', '');
       Info.VerdictAt    := Obj.GetStr('verdict_at', '');
       Info.VerdictNote  := Obj.GetStr('verdict_note', '');
+      Info.WaitsOn      := ManifestNames(Obj, 'waits_on', True);
+      Info.LeaseBy      := Obj.GetStr('lease_by', '');
+      Info.LeaseUntil   := Obj.GetStr('lease_until', '');
+      Info.ClaimedFrom  := Obj.GetStr('claimed_from', '');
       Info.Created := Obj.GetStr('created', '');
       Info.Updated := Obj.GetStr('updated', '');
     finally
@@ -1521,6 +1660,25 @@ begin
       if ANotes <> '-' then Obj.PutStr('notes', ANotes);
       if AAssignee <> '-' then Obj.PutStr('assignee', NewAssignee);
       if ACriteria <> '-' then Obj.PutStr('criteria', ACriteria);
+      (* The lease. An AGENT starting work takes one (for the owner, or for
+         itself when the task has none); the owner touching an active task
+         renews it; leaving active drops it. The operator and the job
+         runner never take one -- a lease answers "is the agent that
+         claimed this still alive", and they are not agents. *)
+      if (St <> '') and (St <> 'active') then
+      begin
+        Obj.PutStr('lease_by', '');
+        Obj.PutStr('lease_until', '');
+        Obj.PutStr('claimed_from', '');
+      end
+      else if IsAgentActor(Actor) and
+              ((St = 'active') or (OldSt = 'active')) and
+              (StatusChange or (Actor = NewAssignee)) then
+      begin
+        if NewAssignee <> '' then Obj.PutStr('lease_by', NewAssignee)
+                             else Obj.PutStr('lease_by', Actor);
+        Obj.PutStr('lease_until', IsoUtcInMinutes(GLeaseMinutes));
+      end;
       Obj.PutStr('updated', NowIsoUtc);
       WriteManifest(Path, Obj);
     finally
@@ -1546,6 +1704,8 @@ begin
   if CriteriaChange then
     AppendActivity(Project, Id, 'criteria', Actor, ['criteria', ACriteria]);
   PublishTask(Project, Id, St);
+  if StatusChange and (St = 'done') and Assigned(OnTaskClosed) then
+    OnTaskClosed(Project, Id);
   Result := True;
 end;
 
@@ -1655,6 +1815,10 @@ begin
       Obj.PutStr('verdict_by', '');
       Obj.PutStr('verdict_at', '');
       Obj.PutStr('verdict_note', '');
+      { Out of active, so out of the lease: a task waiting on a reviewer
+        is not a claim a dead run could be holding. }
+      Obj.PutStr('lease_by', '');
+      Obj.PutStr('lease_until', '');
       Obj.PutStr('updated', NowIsoUtc);
       WriteManifest(Path, Obj);
     finally
@@ -1753,13 +1917,20 @@ begin
       begin
         Obj.PutStr('status', 'done');
         Obj.PutStr('verdict', 'accept');
+        Obj.PutStr('claimed_from', '');
       end
       else
       begin
         { Same owner, back to work, and the reason where the builder
-          reads first: the notes. }
+          reads first: the notes. Active again, so leased again -- to
+          the owner, who is the one expected to pick it up. }
         Obj.PutStr('status', 'active');
         Obj.PutStr('verdict', 'reject');
+        if Trim(Obj.GetStr('assignee', '')) <> '' then
+        begin
+          Obj.PutStr('lease_by', Trim(Obj.GetStr('assignee', '')));
+          Obj.PutStr('lease_until', IsoUtcInMinutes(GLeaseMinutes));
+        end;
         Notes := TrimRight(Obj.GetStr('notes', ''));
         if Notes <> '' then Notes := Notes + #10;
         Obj.PutStr('notes', Notes + '[rejected by ' + ActorLabel(Actor) +
@@ -1786,7 +1957,315 @@ begin
                     'reason', Trim(Note)]);
   if Accept then PublishTask(Project, Id, 'done')
             else PublishTask(Project, Id, 'active');
+  if Accept and Assigned(OnTaskClosed) then OnTaskClosed(Project, Id);
   Result := True;
+end;
+
+{ ------------------------------------------------------- waits_on, next -- }
+
+function FindOnBoard(const Board: TTaskInfoArray; const Id: string): Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  for I := 0 to High(Board) do
+    if Board[I].Id = UpperCase(Id) then Exit(I);
+end;
+
+function TaskWaitingOn(const T: TTaskInfo; const Board: TTaskInfoArray): TStringArray;
+var
+  I, K, N: Integer;
+begin
+  SetLength(Result, Length(T.WaitsOn));
+  N := 0;
+  for I := 0 to High(T.WaitsOn) do
+  begin
+    K := FindOnBoard(Board, T.WaitsOn[I]);
+    if (K < 0) or (Board[K].Status <> tsDone) then
+    begin
+      Result[N] := T.WaitsOn[I];
+      Inc(N);
+    end;
+  end;
+  SetLength(Result, N);
+end;
+
+function TaskReady(const T: TTaskInfo; const Board: TTaskInfoArray): Boolean;
+begin
+  Result := Length(TaskWaitingOn(T, Board)) = 0;
+end;
+
+function SetTaskWaitsOn(const Project, TaskId: string;
+  const WaitsOn: TStringArray; const Actor: string; out Err: string): Boolean;
+var
+  Board: TTaskInfoArray;
+  Ids: TStringArray;
+  Id, Path, Joined: string;
+  Obj: TJsonObject;
+  Arr: TJsonArray;
+  I, K: Integer;
+
+  (* Is From reachable from Start by following waits_on, given the new
+     edges for Id? A depth-first walk with a visited set -- the board is
+     tens of tasks, not thousands. *)
+  function Reaches(const Start, Target: string): Boolean;
+  var
+    Stack, Seen: TStringList;
+    Cur: string;
+    J, P: Integer;
+    Next: TStringArray;
+  begin
+    Result := False;
+    Stack := TStringList.Create;
+    Seen := TStringList.Create;
+    try
+      Stack.Add(Start);
+      while Stack.Count > 0 do
+      begin
+        Cur := Stack[Stack.Count - 1];
+        Stack.Delete(Stack.Count - 1);
+        if Cur = Target then Exit(True);
+        if Seen.IndexOf(Cur) >= 0 then Continue;
+        Seen.Add(Cur);
+        if Cur = Id then Next := Ids
+        else
+        begin
+          P := FindOnBoard(Board, Cur);
+          if P < 0 then Continue;
+          Next := Board[P].WaitsOn;
+        end;
+        for J := 0 to High(Next) do Stack.Add(Next[J]);
+      end;
+    finally
+      Seen.Free;
+      Stack.Free;
+    end;
+  end;
+
+begin
+  Err := '';
+  Result := False;
+  Id := UpperCase(TaskId);
+  Board := ListTasks(Project);
+  if FindOnBoard(Board, Id) < 0 then
+  begin
+    Err := 'no such task: ' + Project + '/' + TaskId;
+    Exit;
+  end;
+  SetLength(Ids, 0);
+  for I := 0 to High(WaitsOn) do
+  begin
+    if Trim(WaitsOn[I]) = '' then Continue;
+    if UpperCase(Trim(WaitsOn[I])) = Id then
+    begin
+      Err := Id + ' cannot wait on itself.';
+      Exit;
+    end;
+    if FindOnBoard(Board, Trim(WaitsOn[I])) < 0 then
+    begin
+      Err := Id + ' cannot wait on ' + UpperCase(Trim(WaitsOn[I])) +
+             ': there is no such task on ' + Project + '.';
+      Exit;
+    end;
+    K := 0;
+    while (K <= High(Ids)) and (Ids[K] <> UpperCase(Trim(WaitsOn[I]))) do Inc(K);
+    if K > High(Ids) then
+    begin
+      SetLength(Ids, Length(Ids) + 1);
+      Ids[High(Ids)] := UpperCase(Trim(WaitsOn[I]));
+    end;
+  end;
+  { A cycle: one of the new prerequisites already (transitively) waits on
+    this task. }
+  for I := 0 to High(Ids) do
+    if Reaches(Ids[I], Id) then
+    begin
+      Err := Id + ' cannot wait on ' + Ids[I] + ': ' + Ids[I] +
+             ' already waits on ' + Id + ' (directly or through other ' +
+             'tasks), and a cycle is a board where neither can ever start.';
+      Exit;
+    end;
+
+  Path := JoinPath(TaskDir(Project, TaskId), 'task.json');
+  Joined := '';
+  GTaskLock.Enter;
+  try
+    Obj := ReadManifest(Path);
+    if Obj = nil then
+    begin
+      Err := 'no such task: ' + Project + '/' + TaskId;
+      Exit;
+    end;
+    try
+      Arr := TJsonArray.Create;
+      for I := 0 to High(Ids) do
+      begin
+        Arr.AddStr(Ids[I]);
+        if Joined <> '' then Joined := Joined + ',';
+        Joined := Joined + Ids[I];
+      end;
+      Obj.PutArray('waits_on', Arr);
+      Obj.PutStr('updated', NowIsoUtc);
+      WriteManifest(Path, Obj);
+    finally
+      Obj.Free;
+    end;
+  finally
+    GTaskLock.Leave;
+  end;
+  AppendActivity(Project, Id, 'waits', Actor, ['on', Joined]);
+  PublishTask(Project, Id, '');
+  Result := True;
+end;
+
+procedure SetClaimLeaseMinutes(Minutes: Integer);
+begin
+  if Minutes < 1 then Minutes := 1;
+  GLeaseMinutes := Minutes;
+end;
+
+function ClaimLeaseMinutes: Integer;
+begin
+  Result := GLeaseMinutes;
+end;
+
+function ClaimNextTask(const Project, Agent: string; AllowPool: Boolean;
+  out TaskId, Err: string): Boolean;
+var
+  Board: TTaskInfoArray;
+  I, Pick: Integer;
+  FromPool: Boolean;
+  Path, Who: string;
+  Obj: TJsonObject;
+begin
+  TaskId := '';
+  Err := '';
+  Result := False;
+  Who := SanitizeName(Agent);
+  if Who = '' then
+  begin
+    Err := 'next claims work for a named agent';
+    Exit;
+  end;
+  if not ProjectExists(Project) then
+  begin
+    Err := 'no such project: ' + Project;
+    Exit;
+  end;
+  FromPool := False;
+  GTaskLock.Enter;
+  try
+    { Scanned under the lock that every task write takes: nothing can be
+      claimed or moved between the choice and the claim. }
+    Board := ListTasks(Project);
+    Pick := -1;
+    for I := 0 to High(Board) do
+      if (Board[I].Status = tsTodo) and (Board[I].Assignee = Who) and
+         TaskReady(Board[I], Board) then
+      begin
+        Pick := I;
+        Break;
+      end;
+    if (Pick < 0) and AllowPool then
+      for I := 0 to High(Board) do
+        if (Board[I].Status = tsTodo) and (Board[I].Assignee = '') and
+           TaskReady(Board[I], Board) then
+        begin
+          Pick := I;
+          FromPool := True;
+          Break;
+        end;
+    if Pick < 0 then Exit;   { nothing ready: Err stays '' }
+
+    Path := JoinPath(TaskDir(Project, Board[Pick].Id), 'task.json');
+    Obj := ReadManifest(Path);
+    if Obj = nil then
+    begin
+      Err := 'could not read ' + Board[Pick].Id;
+      Exit;
+    end;
+    try
+      Obj.PutStr('status', 'active');
+      Obj.PutStr('assignee', Who);
+      if Obj.GetStr('started', '') = '' then Obj.PutStr('started', NowIsoUtc);
+      Obj.PutStr('lease_by', Who);
+      Obj.PutStr('lease_until', IsoUtcInMinutes(GLeaseMinutes));
+      if FromPool then Obj.PutStr('claimed_from', 'pool')
+                  else Obj.PutStr('claimed_from', '');
+      Obj.PutStr('updated', NowIsoUtc);
+      WriteManifest(Path, Obj);
+    finally
+      Obj.Free;
+    end;
+    TaskId := Board[Pick].Id;
+  finally
+    GTaskLock.Leave;
+  end;
+  if FromPool then
+    AppendActivity(Project, TaskId, 'claim', Who, ['from', 'pool'])
+  else
+    AppendActivity(Project, TaskId, 'claim', Who, []);
+  PublishTask(Project, TaskId, 'active');
+  Result := True;
+end;
+
+function ExpireLeases(const Project: string; Busy: TBusyProbe): TStringArray;
+var
+  Board: TTaskInfoArray;
+  I, N: Integer;
+  Now_, Path, Holder: string;
+  Obj: TJsonObject;
+  Pool: Boolean;
+begin
+  SetLength(Result, 0);
+  N := 0;
+  Now_ := NowIsoUtc;
+  Board := ListTasks(Project);
+  for I := 0 to High(Board) do
+  begin
+    if Board[I].Status <> tsActive then Continue;
+    if (Board[I].LeaseUntil = '') or (Board[I].LeaseUntil >= Now_) then Continue;
+    Holder := Board[I].LeaseBy;
+    { A turn in progress is working, whatever the clock says. }
+    if Assigned(Busy) and (Holder <> '') and Busy(Holder) then Continue;
+
+    Path := JoinPath(TaskDir(Project, Board[I].Id), 'task.json');
+    Pool := False;
+    GTaskLock.Enter;
+    try
+      Obj := ReadManifest(Path);
+      if Obj = nil then Continue;
+      try
+        { Re-checked: renewed or moved since the scan means not expired. }
+        if (LowerCase(Obj.GetStr('status', '')) <> 'active') or
+           (Obj.GetStr('lease_until', '') = '') or
+           (Obj.GetStr('lease_until', '') >= Now_) then Continue;
+        Pool := Obj.GetStr('claimed_from', '') = 'pool';
+        Obj.PutStr('status', 'todo');
+        Obj.PutStr('started', '');
+        Obj.PutStr('lease_by', '');
+        Obj.PutStr('lease_until', '');
+        Obj.PutStr('claimed_from', '');
+        if Pool then Obj.PutStr('assignee', '');
+        Obj.PutStr('updated', Now_);
+        WriteManifest(Path, Obj);
+      finally
+        Obj.Free;
+      end;
+    finally
+      GTaskLock.Leave;
+    end;
+    if Pool then
+      AppendActivity(Project, Board[I].Id, 'expire', ActorOperator,
+                     ['holder', Holder, 'to', 'pool'])
+    else
+      AppendActivity(Project, Board[I].Id, 'expire', ActorOperator,
+                     ['holder', Holder]);
+    PublishTask(Project, Board[I].Id, 'todo');
+    SetLength(Result, N + 1);
+    Result[N] := Board[I].Id + ' ' + Holder;
+    Inc(N);
+  end;
 end;
 
 { ------------------------------------------------------------------- jobs -- }
