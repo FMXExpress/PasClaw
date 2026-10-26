@@ -39,7 +39,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 
 ## Operations
 
-- [Security and sandbox](./security.md) — workspace boundary, shell denylist, SSRF guard, hashline race-safety.
+- [Security and sandbox](./security.md) — workspace boundary, shell denylist, ordered allow/deny/ask permissions + policies file, SSRF guard, hashline race-safety.
 - [Observability](./observability.md) — OpenTelemetry tracing, `/v1/stats`, TUI `/stats` overlay.
 - [Troubleshooting](./troubleshooting.md) — common errors and what to check.
 

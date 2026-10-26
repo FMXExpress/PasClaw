@@ -47,6 +47,35 @@ pasclaw mcp install <slug>           # install from hub OR bundled catalog
 
 Every tool a configured (and enabled) MCP server exports becomes available to the model on every turn, prefixed by the server name so collisions don't shadow each other. For an MCP server named `filesystem` that exports a `read_file` tool, the model sees `filesystem.read_file`.
 
+### Built-in long tail
+
+The same lazy reveal applies to PasClaw's own tools (`builtin_progressive_disclosure`, default on). Tool schemas are re-sent on every request and dominate its size, so the families a turn rarely reaches for are withheld behind `tool_search` and listed by name in a "Deferred Tools" prompt section: `db_*`, `workflow_*`, `spawn*`, `session_*`, plus `desktop` (see below). The set is one predicate (`ToolIsLongTail` in `PasClaw.Tools.Types`) read both by the registration sweep and by the registry latch, so a tool registered later is deferred the same way. `memory_write`, `shell_background` and `memory_fetch` were tried in the set and stay visible. A hidden tool is one the model stops choosing, not one it searches for: without `shell_background` it runs a build in `shell_exec` and blocks on it, and nothing ever says the background path existed. Rule 5 of the prompt also recommends `memory_write`. Measured on a six-turn build task with identical model decisions (`bench/ragbench/README.md`): 18 of 36 schemas visible, 150,160 request bytes against 156,142 with `desktop` visible and 228,634 under the old `--no-mcp`. A deferred tool costs one extra `tool_search` turn the first time it is needed; calling one directly without searching still works.
+
+`desktop` is the one exception that tracks what is running. It does nothing without a desktop, so it is deferred for API callers, channels and plain chats. A desktop (the browser `/desktop` or the native app) needs it from its first turn, because the shell routes every screen request ("tile the windows") through it. Both desktops subscribe to `/v1/desktop/events`, and the gateway reveals `desktop` the moment one connects, so the model never spends a search turn finding it. Like any reveal, it is registry-wide and lasts until the gateway stops.
+
+`--no-mcp` keeps this: `pasclaw agent`, the gateway, serve and the TUI register `tool_search` and the deferral even when MCP is off (the last three used to skip both, so every request carried all 36 schemas). With MCP off, the built-in long tail is the only reason for `tool_search`, so it is registered only when `builtin_progressive_disclosure` is on, whatever `mcp_progressive_disclosure` says. It also never mentions MCP servers: one listed in config does not start under `--no-mcp`, so a search that finds nothing says MCP is off rather than that the server is still connecting.
+
+## Code Mode
+
+By default an MCP server's tools are **not sent to the model as tool schemas at all** (`mcp_servers[].codemode`, default from `mcp_codemode_default: true`). The model calls them from an `execute_code` script, where a one-line `tool` function wraps the tool RPC:
+
+```sh
+tool --catalog github                                     # names, descriptions, argument schemas
+tool github__list_issues '{"repo":"FMXExpress/PasClaw","state":"open"}' \
+  | jq -r '.[] | select(.title | test("crash")) | .number' \
+  | while read n; do tool github__get_issue "{\"number\":$n}" | jq .body; done
+```
+
+Why: a chain of MCP calls becomes one tool round, and the intermediate results never enter the conversation. That is the cost win OpenCode 2.0 ships under the same name, without a second runtime: the script is still bash or PowerShell. The system prompt lists each code-mode server with its tool count and the recipe above; `code_catalog(server?)` returns the same catalog without a script; `tool_search` tells the model when it asks for a code-mode tool the classic way.
+
+A script's calls go through the same dispatch gates as direct tool calls (plan mode refuses mutating MCP tools from a script too, hooks see them, output is capped).
+
+With the Docker shell backend, `tool` needs two things to reach back out of the container: the `pasclaw` binary (bind-mounted read-only at the same path) and a route to the parent's RPC listener. A container on a bridge network has its own loopback, so the listener moves to the host's docker-bridge gateway and the container gets `host.docker.internal` mapped to the host (`--add-host`, which needs Docker >= 20.10); the discovery file in the mounted `run/` directory names the address to dial, and the per-call random token still authorises every request. With `"network": "host"` nothing moves — the namespace is shared. With `"network": "none"` there is no route at all, so `tool` cannot work and a code-mode server is unreachable from a script; PasClaw logs that at container start.
+
+A subagent inherits a code-mode tool **as code mode**: its registry can dispatch the tool from a script, and the schema stays out of the child's prompt exactly as it is out of the parent's.
+
+`"codemode": false` on a server exposes its tools the classic way: deferred behind `tool_search` when progressive disclosure is on, in the provider's tool list otherwise. `"mcp_codemode_default": false` makes classic the default for every server that does not say otherwise.
+
 ## `pasclaw mcp catalog` (built-in + hub)
 
 `pasclaw mcp catalog` queries the pasclaw.dev MCP registry (`GET /api/public/v1/mcp`) with a 5-second timeout and falls back to the bundled 5-entry list when the hub is unreachable. Source attribution (`hub` / `built-in`) is shown in the output.

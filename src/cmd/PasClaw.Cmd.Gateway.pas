@@ -27,6 +27,8 @@ uses
   PasClaw.Workspaces,
   SysUtils,
   PasClaw.Config, PasClaw.CliUI, PasClaw.Logger,
+  PasClaw.MCP.Disclosure,   { RegisterBuiltinDisclosureTools on the --no-mcp path }
+  PasClaw.Gateway.RunFile,  { run/gateway.json -- how --attach finds us }
   PasClaw.Providers.Intf,
   PasClaw.Providers.Factory,
   PasClaw.Tools.Registry,
@@ -365,7 +367,15 @@ begin
 
     SetLength(MCPClients, 0);
     if (not Args.NoMCP) and (Reg <> nil) then
-      MCPClients := ConnectMCPServers(Cfg, Reg);
+      MCPClients := ConnectMCPServers(Cfg, Reg)
+    else if Reg <> nil then
+      { --no-mcp skipped the only call that registers tool_search and
+        defers the built-in long tail, so every request carried all 36
+        tool schemas (28.5 KB) instead of 19 (15.7 KB). Same fix the
+        CLI's ConnectMCP already had. The --no-mcp entry registers it
+        only for built-in deferral and without MCP-server state (Codex
+        P2 on #615). }
+      RegisterBuiltinDisclosureTools(Reg, Cfg);
 
     { Subagents (on by default): register spawn + background spawn tools so the
       gateway chat loop (web UI / /v1/chat / OpenAI-compat) can fan out to the
@@ -481,6 +491,12 @@ begin
       end;
 
       Server.Start(Args.Addr, Args.Port);
+      { Announce ourselves to clients on this machine: `pasclaw status`,
+        `pasclaw agent --attach`, `pasclaw tui --attach` read this file.
+        Removed in the finally below; a crash leaves it, and readers
+        treat a dead pid as absent. }
+      WriteGatewayRunFile(GetHome, Args.Addr, Args.Port, Cfg.Gateway.Token, FormatVersion);
+      InstallStopSignalHandler;   { Ctrl-C / SIGTERM -> WaitForStop returns -> the finally runs }
       if MCPServer <> nil then
         MCPServer.Start(Args.Addr, Args.MCPPort);
       if AppsServer <> nil then
@@ -536,6 +552,11 @@ begin
           Exit(1);
         end;
         Telegram := TTelegramChannel.Create(Args.Token, Cfg, Provider, Reg);
+        { This command blocks in Telegram.Run, not in Server.WaitForStop, so
+          the Ctrl-C / SIGTERM flag has to reach the channel itself. }
+        Telegram.StopCheck := StopRequested;
+        LogInfo('telegram: Ctrl-C stops the gateway once the current long-poll ' +
+                'returns (up to 25 s); a second Ctrl-C kills it at once');
         { Long-poll runs on the current thread and blocks; for Phase 5 we
           accept that the HTTP listener and Telegram coexist (Indy listens on
           its own threads), so we just call Telegram.Run last. }
@@ -550,6 +571,7 @@ begin
       if Matrix   <> nil then begin Matrix.RequestStop; Matrix.WaitForStop; Matrix.Free; end;
       if IRC      <> nil then IRC.Free;
       if Email    <> nil then begin Email.Stop; Email.Free; end;
+      RemoveGatewayRunFile(GetHome);
       Server.Stop;
       if MCPServer <> nil then MCPServer.Stop;
       Server.Free;

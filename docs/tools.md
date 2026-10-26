@@ -27,6 +27,7 @@ PasClaw exposes a fixed set of tools to the model on every turn (plus MCP-bridge
 | `spawn` | Run a focused subagent (filtered tool registry + specialist system prompt). Returns when the subagent's loop returns. |
 | `spawn_background` | Same, asynchronous. Returns a handle; parent loop keeps working. |
 | `spawn_status` / `spawn_wait` / `spawn_cancel` | Manage background-subagent handles. |
+| `worktree_create` / `worktree_list` / `worktree_remove` | Git worktrees: a separate checkout per parallel task. `spawn*` take `worktree: "<branch>"` to run a subagent inside one. |
 | `skill_<name>` | Pascal-side tools registered from `kind: shell` / `kind: prompt` skills. |
 | MCP-bridged | Every tool a configured MCP server exports — see [MCP servers](./mcp.md). |
 
@@ -70,23 +71,27 @@ Six tiers of optimisation layered on the recursive scan:
 
 Runs `/bin/sh -c <cmd>` on POSIX or `cmd.exe /C <cmd>` on Windows. Output capped at 1 MiB. Denylist-gated via `PasClaw.Tools.Sandbox.ShellAllowed`. Per-command condensers run on successful output (tee-on-failure: full output passes through on non-zero exit). Filter coverage: `git status/diff/log`, `pytest`/`cargo test`/`npm test`/`go test`, `grep`/`Select-String`/`findstr`, recursive `ls`/`find`/`Get-ChildItem`, tabular CLIs (`docker ps`, `kubectl get`, `gh`), `docker build`, log tails, compiler walls, linters, package managers, build systems, IaC, `aws` JSON. PowerShell-alias normalisation included. See [`src/pkg/tools/PasClaw.Tools.Shell.Filters.pas`](../src/pkg/tools/PasClaw.Tools.Shell.Filters.pas).
 
+`shell_background` is a shell tool, not a subagent one: it registers whatever `subagents_enabled` says, together with `spawn_status` / `spawn_wait` / `spawn_cancel`, which take handles of either kind. It runs the same kind of command as a job and returns an `sh-<hex>` handle immediately: the output (exit code on line 1) is delivered to the model at the top of its next turn as a `[background shell results]` block, `spawn_status` / `spawn_wait` / `spawn_cancel` take the handle, and cancel kills the process tree (on the local backend; on Docker it is advisory). Same denylist, cwd rules and default timeout as `shell_exec`. The TUI flashes a completion in its footer and the gateway publishes a `background_done` desktop event. Subagent and shell jobs share one cap, `background_jobs_max` (default 6).
+
+`timeout_sec` bounds one call in wall-clock seconds (default: `shell_timeout_sec` in config, 600). On expiry the process **and its descendants** are killed and line 1 reads `exit=124` with a "timed out after N s" note. Before 0.1.6 there was no bound at all.
+
 ### `execute_code`
 
 Model writes a multi-line bash or PowerShell script body via `execute_code({lang, code})`. PasClaw materialises it to `$PASCLAW_HOME/tmp/exec-*.{sh,ps1}`, spawns the right shell (`bash <file>` on unix, `pwsh -NoProfile -ExecutionPolicy Bypass -File <file>` on Windows), captures combined stdout+stderr, cleans up. Same `ShellAllowed` denylist runs against the script body — a buried `rm -rf /` in a heredoc gets refused identically to the inline form. Cwd pinned to the workspace when `sandbox.restrict_to_workspace`.
 
 The big win: fan-out patterns (list every `*.pas`, grep each for a symbol, summarise hits) that would take `1 + N + 1` inference rounds under `shell_exec` collapse to one tool call.
 
-### Tool-RPC callback (`pasclaw __tool`)
+### Tool-RPC callback (`tool` / `pasclaw __tool`)
 
-When `execute_code` spawns a script, PasClaw starts a loopback TCP server on a kernel-allocated port and writes the port + a fresh 32-hex token to `$PASCLAW_HOME/run/tool-rpc.json`. Inside the script the model can call back into the same tool registry:
+When `execute_code` spawns a script, PasClaw starts a loopback TCP server on a kernel-allocated port and writes the port + a fresh 32-hex token to a per-call file under `$PASCLAW_HOME/run/` (the path reaches the script as `$PASCLAW_TOOL_RPC_INFO`). Every script starts with a one-line `tool` function wrapping `pasclaw __tool` (the binary path arrives as `$PASCLAW_BIN`). Inside the script the model can call back into the same tool registry, including [code-mode MCP tools](./mcp.md#code-mode) that are not callable any other way; `tool --catalog [server]` prints their schemas:
 
 ```bash
-for f in $(pasclaw __tool fs_list '{"path":"src/"}' | jq -r .files[]); do
-  pasclaw __tool memory_search "{\"q\":\"$f\"}"
+for f in $(tool fs_list '{"path":"src/"}' | jq -r .files[]); do
+  tool memory_search "{\"q\":\"$f\"}"
 done
 ```
 
-Bad tokens get rejected at the wire level. Same registry the model is using; same sandbox + denylist + output-cap path. `pasclaw __tool` is the internal subcommand — not in `--help`.
+Bad tokens get rejected at the wire level. A call from a script goes through the **same dispatch gates as a direct tool call**: plan-mode and space-mode refusal of mutating tools, `BeforeToolCall` / `AfterToolResult` hooks, the promptware scan and the output cap. (Before 0.1.6 the RPC reached the registry directly, so a plan-mode turn could mutate through a script and no hook saw it.) A subagent's script dispatches into the subagent's own filtered registry, never the parent's. `pasclaw __tool` is the internal subcommand — not in `--help`.
 
 ## Search tools
 
@@ -146,9 +151,25 @@ Runs a focused subagent loop and returns the result as the parent's `tool_result
 
 The subagent inherits the parent's provider + fallback chain; the tool registry is filtered to the named tools; the system prompt is the specialist one. Implementation: `src/pkg/agent/PasClaw.Agent.Subagent.pas`.
 
+Optional `worktree: "<branch>"` runs the child inside a git worktree for that branch (created beside the repository if needed, see [Git worktrees](#git-worktrees)). The child's relative paths, write boundary and shell cwd all point at the worktree, so two subagents on two branches never edit the same file; the result is prefixed with the worktree path so the parent knows where the work is.
+
 ### `spawn_background(agent, prompt)` (asynchronous)
 
-Returns a handle and the parent loop keeps working. When the job finishes its result is pushed into the next loop iteration as a `[background subagent results]` block in the system prompt (same channel `pasclaw steer` uses). Companion tools: `spawn_status(handle)`, `spawn_wait(handle, timeout_sec)`, `spawn_cancel(handle)`. Up to 4 concurrent jobs per session. Jobs die with the session — coordinator teardown abandons still-running workers and they self-free.
+Returns a handle and the parent loop keeps working. When the job finishes its result is pushed into the next loop iteration as a `[background subagent results]` block in the system prompt (same channel `pasclaw steer` uses). Companion tools: `spawn_status(handle)`, `spawn_wait(handle, timeout_sec)`, `spawn_cancel(handle)`. Up to `background_jobs_max` (6) concurrent jobs per session. Jobs die with the session — coordinator teardown abandons still-running workers and they self-free. Takes the same `worktree` argument as `spawn`.
+
+## Git worktrees
+
+Parallel work wants parallel checkouts. Three tools wrap `git worktree` (source: `src/pkg/tools/PasClaw.Tools.Worktree.pas`); every git call goes through the active shell backend, so Docker and the denylist apply as they do to `shell_exec`. Under Docker the container mounts the worktree directory at the same path so its checkout and the host's are one; see [Security → Worktrees move the boundary](./security.md#worktrees-move-the-boundary). The image needs `git` — the default `debian:bookworm-slim` does not ship it, and the tools say so rather than reporting "not a repository".
+
+| Tool | Category | What |
+|---|---|---|
+| `worktree_create(branch, base?)` | mutating | Create or find the worktree for `branch` under `worktree.directory` (default: beside the repo in `<repo>-worktrees/<branch>`). A new branch starts from `base` (default HEAD). Idempotent: an existing worktree for the branch is returned. Returns the directory. |
+| `worktree_list` | read-only | One line per worktree: path, branch, head. |
+| `worktree_remove(path, force?)` | mutating | Remove a worktree directory. Refuses one with uncommitted changes unless `force` is true. The branch is kept; the main checkout is never removed. |
+
+Typical flow: `worktree_create("feature/x")`, then either pass the path as `cwd` to `shell_exec`, or `spawn` / `spawn_background` a subagent with `worktree: "feature/x"` and let it commit on that branch. A `permissions` rule can gate the destructive half, e.g. `{"tool":"worktree_remove","effect":"ask"}`.
+
+Registered when `worktree.enabled` is true (the default). `false` takes the whole feature away, not just these three tools: `spawn` and `spawn_background` stop offering the `worktree` argument and refuse it if it is passed anyway. A spawn that is refused for any reason — an unknown agent, no prompt, the background-job cap — creates no branch and no worktree; the checks run first. Sessions remember the directory they worked in (`session list` shows it, `pasclaw resume` returns to it).
 
 ## Parallel dispatch
 

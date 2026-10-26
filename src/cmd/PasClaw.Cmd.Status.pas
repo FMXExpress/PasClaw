@@ -12,6 +12,7 @@ implementation
 uses
   SysUtils,
   PasClaw.Config, PasClaw.Utils, PasClaw.CliUI,
+  PasClaw.Gateway.RunFile,   { is a gateway running right now? }
   PasClaw.Shell.Backend;     { TShellBackendKind for the new
                                shell-backend status line }
 
@@ -37,6 +38,8 @@ function Cmd_Status_Run(const Argv: array of string): Integer;
 var
   Cfg: TConfig;
   HomeOk, CfgOk: Boolean;
+  RunInfo: TGatewayRunInfo;
+  RunAlive: Boolean;
 begin
   HomeOk := DirectoryExists(GetHome);
   CfgOk  := FileExists(GetConfigPath);
@@ -52,6 +55,20 @@ begin
     PrintLn(Format('  cron entries    : %d', [Length(Cfg.Crons)]));
     PrintLn(Format('  skills          : %d', [Length(Cfg.Skills)]));
     PrintLn(Format('  gateway bind    : %s:%d', [Cfg.Gateway.BindAddr, Cfg.Gateway.Port]));
+    { Is one running right now? run/gateway.json, written by `pasclaw
+      gateway` / `pasclaw serve`; a dead pid means it crashed. }
+    if ReadGatewayRunFileRaw(GetHome, RunInfo, RunAlive) then
+    begin
+      if RunAlive then
+        PrintLn(Format('  gateway running : yes -- %s (pid %d, since %s, v%s)',
+                [GatewayBaseURL(RunInfo), RunInfo.Pid, RunInfo.StartedAt, RunInfo.Version]))
+      else
+        PrintLn(Format('  gateway running : no (stale run file from pid %d, started %s)',
+                [RunInfo.Pid, RunInfo.StartedAt]));
+    end
+    else
+      PrintLn('  gateway running : no');
+    PrintLn('  cli.attach      : ' + Cfg.Cli.Attach);
     PrintLn('  log level       : ' + Cfg.Gateway.LogLevel);
     PrintLn('  shell backend   : ' + FormatShellBackend(Cfg));
     Result := 0;

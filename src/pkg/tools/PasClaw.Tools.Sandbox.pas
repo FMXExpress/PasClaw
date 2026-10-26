@@ -102,6 +102,14 @@ function CanReadPathHTTP(const Path: string; out Reason: string): Boolean;
   ConfigureSandbox has not been called yet. }
 function CurrentWorkspace: string;
 
+{ Override the workspace for THIS THREAD -- the directory a subagent given
+  a git worktree works in. CurrentWorkspace, ResolveWorkspacePath, the
+  read/write boundary and the shell cwd all follow it; other threads are
+  untouched. '' clears. The tool loop sets it around each dispatch from
+  TToolLoopConfig.Workspace, so parallel read-only workers see it too. }
+procedure SetThreadSandboxWorkspace(const Dir: string);
+function ThreadSandboxWorkspace: string;
+
 { Resolve a possibly-relative file path to an absolute one. Absolute paths
   pass through (canonicalised). A RELATIVE path resolves against the
   configured workspace (CurrentWorkspace) rather than the process's current
@@ -167,9 +175,35 @@ begin
     LogDebug('sandbox: restrict_to_workspace=true workspace=%s', [GWorkspace]);
 end;
 
+threadvar
+  { Per-thread workspace override. A subagent that was given a worktree
+    runs its tool dispatches with this set to the worktree directory
+    (TToolLoopConfig.Workspace, bracketed around each dispatch by the
+    tool loop), so relative paths, the write boundary and the shell cwd
+    all land there while the parent's threads still see GWorkspace. A
+    threadvar cannot leak to another thread; callers restore it in a
+    finally. }
+  GThreadWorkspace: string;
+
+procedure SetThreadSandboxWorkspace(const Dir: string);
+begin
+  if Trim(Dir) = '' then
+    GThreadWorkspace := ''
+  else
+    GThreadWorkspace := ExcludeTrailingPathDelimiter(ExpandFileName(Dir));
+end;
+
+function ThreadSandboxWorkspace: string;
+begin
+  Result := GThreadWorkspace;
+end;
+
 function CurrentWorkspace: string;
 begin
-  Result := GWorkspace;
+  if GThreadWorkspace <> '' then
+    Result := GThreadWorkspace
+  else
+    Result := GWorkspace;
 end;
 
 function IsAbsolutePath(const P: string): Boolean;
@@ -192,7 +226,7 @@ begin
     Result := ExpandFileName(Path)
   else
   begin
-    Base := GWorkspace;
+    Base := CurrentWorkspace;
     if Trim(Base) = '' then Base := GetCurrentDir;
     Result := ExpandFileName(IncludeTrailingPathDelimiter(Base) + Path);
   end;
@@ -277,10 +311,10 @@ begin
   if not GPolicy.RestrictToWorkspace then Exit(True);
   if GPolicy.AllowReadOutsideWorkspace then Exit(True);
   Canon := Canonicalize(Path);
-  if PathInsideDirectory(Canon, GWorkspace) then Exit(True);
+  if PathInsideDirectory(Canon, CurrentWorkspace) then Exit(True);
   if AnyRegexMatches(Canon, GPolicy.AllowReadPaths) then Exit(True);
   Reason := 'refused: path "' + Canon + '" is outside the workspace ' +
-            '"' + GWorkspace + '" and does not match any allow_read_paths ' +
+            '"' + CurrentWorkspace + '" and does not match any allow_read_paths ' +
             'pattern (sandbox.restrict_to_workspace=true)';
   Result := False;
 end;
@@ -307,10 +341,10 @@ begin
     Exit(False);
   end;
   Canon := Canonicalize(Path);
-  if PathInsideDirectory(Canon, GWorkspace) then Exit(True);
+  if PathInsideDirectory(Canon, CurrentWorkspace) then Exit(True);
   { Also allow the agent's own home workspace ($PASCLAW_HOME/workspace) so the
     operator Files browser can reach memory / skills / sessions / generated
-    files even when the launch directory (GWorkspace) is elsewhere. Operator
+    files even when the launch directory (CurrentWorkspace) is elsewhere. Operator
     endpoint only -- the model's CanReadPath is unchanged. Secrets live at the
     home ROOT (config.json / .env), outside this subtree, and are additionally
     hidden by IsRestrictedFsPath. }
@@ -318,7 +352,7 @@ begin
     Exit(True);
   if AnyRegexMatches(Canon, GPolicy.AllowReadPaths) then Exit(True);
   Reason := 'refused: path "' + Canon + '" is outside the workspace "' +
-            GWorkspace + '" and the agent home workspace "' +
+            CurrentWorkspace + '" and the agent home workspace "' +
             GOperatorBrowseRoot + '" -- gateway file access is confined to ' +
             'those (independent of sandbox.restrict_to_workspace)';
   Result := False;
@@ -331,10 +365,10 @@ begin
   Reason := '';
   if not GPolicy.RestrictToWorkspace then Exit(True);
   Canon := Canonicalize(Path);
-  if PathInsideDirectory(Canon, GWorkspace) then Exit(True);
+  if PathInsideDirectory(Canon, CurrentWorkspace) then Exit(True);
   if AnyRegexMatches(Canon, GPolicy.AllowWritePaths) then Exit(True);
   Reason := 'refused: path "' + Canon + '" is outside the workspace ' +
-            '"' + GWorkspace + '" and does not match any allow_write_paths ' +
+            '"' + CurrentWorkspace + '" and does not match any allow_write_paths ' +
             'pattern (sandbox.restrict_to_workspace=true)';
   Result := False;
 end;
@@ -409,7 +443,7 @@ const
   );
 
   (*  Tokens that would let the model escape the workspace cwd pin --
-      the workspace restriction binds the shell's cwd to GWorkspace
+      the workspace restriction binds the shell's cwd to CurrentWorkspace
       and runs the abs-path scanner on the rest of the command;
       letting the model chdir would defeat both. Only enforced when
       sandbox.restrict_to_workspace is True. In unrestricted mode
@@ -902,7 +936,7 @@ end;
 
 function HasTraversalToken(const Cmd: string; out OffendingToken: string): Boolean;
 { Catches relative path-traversal references that the absolute-path
-  scanner below would miss. When the shell starts in GWorkspace
+  scanner below would miss. When the shell starts in CurrentWorkspace
   (we now pin cwd to it on every Tool_Shell call), a command like
   `cat ../secret` would otherwise read outside the workspace even
   though no '/' token shows up.
@@ -958,7 +992,7 @@ begin
                    SameText(Token, '/dev/random')  or SameText(Token, '/dev/urandom') or
                    SameText(Token, '/dev/stdin')   or SameText(Token, '/dev/stdout') or
                    SameText(Token, '/dev/stderr');
-      if (not IsSafeDev) and (not PathInsideDirectory(Token, GWorkspace)) and
+      if (not IsSafeDev) and (not PathInsideDirectory(Token, CurrentWorkspace)) and
          (not AnyRegexMatches(Token, GPolicy.AllowReadPaths)) and
          (not AnyRegexMatches(Token, GPolicy.AllowWritePaths)) then
       begin
@@ -1067,14 +1101,14 @@ begin
     begin
       Reason := 'refused: command contains workspace-escape token "' + Hit +
                 '" (sandbox.restrict_to_workspace=true pins shell cwd to "' +
-                GWorkspace + '"; cd would defeat that). Use absolute paths ' +
+                CurrentWorkspace + '"; cd would defeat that). Use absolute paths ' +
                 'inside the workspace instead.';
       Exit(False);
     end;
     if HasOutsideAbsolutePath(Cmd, Path) then
     begin
       Reason := 'refused: command references absolute path "' + Path +
-                '" which is outside the workspace "' + GWorkspace +
+                '" which is outside the workspace "' + CurrentWorkspace +
                 '" and does not match any allow_*_paths pattern ' +
                 '(sandbox.restrict_to_workspace=true)';
       Exit(False);
@@ -1084,7 +1118,7 @@ begin
       Reason := 'refused: command contains path-traversal token "' + Path +
                 '". Tool_Shell pins the working directory to the workspace, ' +
                 'so .. would escape it. Rewrite with absolute paths that ' +
-                'stay inside "' + GWorkspace + '" or list the target under ' +
+                'stay inside "' + CurrentWorkspace + '" or list the target under ' +
                 'sandbox.allow_read_paths / allow_write_paths.';
       Exit(False);
     end;

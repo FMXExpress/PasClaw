@@ -227,10 +227,25 @@ type
   TLogLineProc = procedure(const Level, Text_: string;
     var Stop: Boolean) of object;
 
+  (* What a turn asks the gateway for beyond its messages -- the request
+     fields /v1/chat/completions reads. Empty / zero / False leaves each to
+     the gateway's own default, which is the shape every existing caller
+     gets. *)
+  TChatTurnOptions = record
+    Mode:      string;    { 'plan' | 'build' | 'space'; '' = the gateway's (build) }
+    Model:     string;    { '' = the gateway's default model }
+    System:    string;    { composed INTO the gateway's prompt, like --system locally }
+    MaxTokens: Integer;   { 0 = the gateway's default }
+    NoTools:   Boolean;   { True = a plain chat turn, no tool registry }
+  end;
+
   TPasClawClient = class
   private
     FBaseURL: string;
     FToken: string;
+    FSessionId: string;
+    FSessionContext: Boolean;
+    FTurn: TChatTurnOptions;
     FTimeoutMs: Integer;
     FModelTimeoutMs: Integer;
     FLastError: string;
@@ -290,6 +305,24 @@ type
     { Base URL without a trailing slash; setting it normalises. }
     property BaseURL: string read FBaseURL write FBaseURL;
     property Token: string read FToken write FToken;
+    (* The gateway session a Chat belongs to. Sent as X-PasClaw-Session so
+       the server files the turn, its stats and its checkpoints under that
+       session instead of a bucket. With SessionContext the server also
+       merges its stored transcript under the session's turn lock, so the
+       client can send just the new message and still get a conversation
+       -- which is what makes attaching a second surface to a running
+       session possible. Both empty/false keep the old stateless shape. *)
+    property SessionId: string read FSessionId write FSessionId;
+    property SessionContext: Boolean read FSessionContext write FSessionContext;
+    (* Sent with every Chat. The terminal's `--attach` sets it from the
+       flags it was given, so a turn sent to a gateway means what the same
+       flags mean locally -- before this, `pasclaw agent --attach --plan`
+       went out with no mode at all and the gateway ran it in BUILD mode,
+       mutating tools and all. *)
+    property TurnOptions: TChatTurnOptions read FTurn write FTurn;
+    (* The JSON body Chat posts. Separate so what a turn asks for can be
+       read without a gateway on the other end. *)
+    function ChatRequestBody(const HistoryJSON, System_: string): string;
     (* Two clocks, because there are two kinds of call.
 
        A board read is a database hit: if it has not answered in seconds,
@@ -442,6 +475,13 @@ type
        difference from a workspace switch. *)
     function Desktops(out Current, Count: Integer): Boolean;
     function SwitchDesktop(N: Integer; out Current, Count: Integer): Boolean;
+
+    (* Create / delete beside Sessions (declared with the Library calls
+       below). An attached terminal (`pasclaw agent --attach`) goes through
+       these so the gateway stays the one owner of the session files. *)
+    { POST /v1/sessions. Returns the new id, '' on failure. }
+    function CreateSession(const Title: string = ''): string;
+    function DeleteSession(const Id: string): Boolean;
 
     { ---- chat ---- }
     (* Stream one turn through /v1/chat/completions. History is a JSON array
@@ -2450,6 +2490,36 @@ begin
   Result := Id <> '';
 end;
 
+{ ---- sessions: create / delete ---- }
+
+function TPasClawClient.CreateSession(const Title: string): string;
+var
+  Req: TJsonObject;
+begin
+  Result := '';
+  Req := TJsonObject.Create;
+  try
+    if Title <> '' then Req.PutStr('title', Title);
+    try
+      Result := JsonReadStr(Request('POST', '/v1/sessions', Req.ToJSON), 'id', '');
+    except
+      Result := '';
+    end;
+  finally
+    Req.Free;
+  end;
+end;
+
+function TPasClawClient.DeleteSession(const Id: string): Boolean;
+begin
+  Result := True;
+  try
+    Request('DELETE', '/v1/sessions/' + Id, '');
+  except
+    Result := False;
+  end;
+end;
+
 { ---- chat ---- }
 
 function TPasClawClient.Chat(const HistoryJSON, System_: string;
@@ -2466,16 +2536,10 @@ var
   Http: TIdHTTP;
   Req: TStringStream;
   Sink: TSSEStream;
-  Root: TJsonObject;
-  Msgs, Hist: TJsonArray;
-  Sys: TJsonObject;
-  I: Integer;
-  Item: TJsonObject;
 begin
   Result := '';
   FLastError := '';
 
-  Root := TJsonObject.Create;
   Sink := TSSEStream.Create(OnChunk, OnTool);
   Req  := nil;
   Started := Now;
@@ -2488,6 +2552,45 @@ begin
     to reach the socket. }
   Http := NewHttp(FToken, 0);
   TrackHttp(Http);
+  try
+    Http.Request.Accept := 'text/event-stream';
+    if FSessionId <> '' then
+      Http.Request.CustomHeaders.Values['X-PasClaw-Session'] := FSessionId;
+    Req := TStringStream.Create(ChatRequestBody(HistoryJSON, System_));
+    try
+      Http.Post(FBaseURL + '/v1/chat/completions', Req, Sink);
+    except
+      on E: EAbort do
+        { caller stopped the stream -- keep what arrived }
+        ;
+      on E: EIdHTTPProtocolException do
+        FLastError := JsonReadStr(E.ErrorMessage, 'error', E.Message);
+      on E: Exception do
+        FLastError := E.Message;
+    end;
+    Result := Sink.Text;
+    { One line for the whole turn. Chunks are the interesting part while it
+      runs and the chat window already shows them; the trace records what
+      the call was and how long it took. }
+    if FLastError = '' then Code := 200 else Code := 0;
+    Trace('POST', '/v1/chat/completions', Code,
+          MilliSecondsBetween(Now, Started), FLastError);
+  finally
+    UntrackHttp(Http);
+    Http.Free;
+    Req.Free;
+    Sink.Free;
+  end;
+end;
+
+function TPasClawClient.ChatRequestBody(const HistoryJSON, System_: string): string;
+var
+  Root: TJsonObject;
+  Msgs, Hist: TJsonArray;
+  Sys, Item: TJsonObject;
+  I: Integer;
+begin
+  Root := TJsonObject.Create;
   try
     Msgs := TJsonArray.Create;
     { A system message leads the array -- the gateway lets a client system
@@ -2514,7 +2617,11 @@ begin
           begin
             Item := Hist.ItemObject(I);
             if Item = nil then Continue;
-            Msgs.AddRaw(Item.ToJSON);
+            try
+              Msgs.AddRaw(Item.ToJSON);
+            finally
+              Item.Free;
+            end;
           end;
         finally
           Hist.Free;
@@ -2522,32 +2629,20 @@ begin
     end;
     Root.PutArray('messages', Msgs);
     Root.PutBool('stream', True);
-
-    Http.Request.Accept := 'text/event-stream';
-    Req := TStringStream.Create(Root.ToJSON);
-    try
-      Http.Post(FBaseURL + '/v1/chat/completions', Req, Sink);
-    except
-      on E: EAbort do
-        { caller stopped the stream -- keep what arrived }
-        ;
-      on E: EIdHTTPProtocolException do
-        FLastError := JsonReadStr(E.ErrorMessage, 'error', E.Message);
-      on E: Exception do
-        FLastError := E.Message;
-    end;
-    Result := Sink.Text;
-    { One line for the whole turn. Chunks are the interesting part while it
-      runs and the chat window already shows them; the trace records what
-      the call was and how long it took. }
-    if FLastError = '' then Code := 200 else Code := 0;
-    Trace('POST', '/v1/chat/completions', Code,
-          MilliSecondsBetween(Now, Started), FLastError);
+    if FSessionContext and (FSessionId <> '') then
+      Root.PutBool('session_context', True);
+    { The turn's own asks. Each is written only when set, so a caller that
+      never touches TurnOptions sends exactly the body it always did. The
+      `system` FIELD, not a system message: the gateway composes the field
+      into its own prompt (workspace, memory, the plan-mode section),
+      where a system message would replace all of it. }
+    if FTurn.Mode <> '' then Root.PutStr('mode', FTurn.Mode);
+    if FTurn.Model <> '' then Root.PutStr('model', FTurn.Model);
+    if FTurn.System <> '' then Root.PutStr('system', FTurn.System);
+    if FTurn.MaxTokens > 0 then Root.PutInt('max_tokens', FTurn.MaxTokens);
+    if FTurn.NoTools then Root.PutBool('no_tools', True);
+    Result := Root.ToJSON;
   finally
-    UntrackHttp(Http);
-    Http.Free;
-    Req.Free;
-    Sink.Free;
     Root.Free;
   end;
 end;
