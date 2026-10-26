@@ -176,7 +176,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test test-verify test-memory-tiers test-backup test-maintain openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape lint-version lint-utf8-file-io test-workspaces test-projects test-tool-schema test-teams test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test test-verify test-steering-fastpath test-workspace-listing test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-memory-tiers test-backup test-maintain openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape lint-version lint-utf8-file-io test-workspaces test-projects test-tool-schema test-teams test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -847,6 +847,20 @@ test-verify: | $(BUILDDIR)
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/verify_tests
 
+test-steering-fastpath: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/steering_fastpath_tests.pas -o$(BUILDDIR)/steering_fastpath_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; \
+	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
+	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/steering_fastpath_tests
+
+test-workspace-listing: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/workspace_listing_tests.pas -o$(BUILDDIR)/workspace_listing_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; \
+	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
+	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/workspace_listing_tests
+
 test-maintain: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/maintain_tests.pas -o$(BUILDDIR)/maintain_tests
@@ -883,6 +897,13 @@ test-relay-queue: | $(BUILDDIR)
 # PasClaw.MCP.Disclosure -- Hermes-style progressive disclosure + Claude
 # Code-style tool_search for MCP tools. Hermetic: synthetic TTool records
 # only, no actual MCP server started.
+# $(BIN) because it starts the real gateway: a desktop subscribing to
+# /v1/desktop/events must reveal the deferred `desktop` tool.
+test-desktop-reveal: $(BIN) | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/desktop_reveal_tests.pas -o$(BUILDDIR)/desktop_reveal_tests
+	@$(BUILDDIR)/desktop_reveal_tests
+
 test-mcp-disclosure: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/mcp_disclosure_tests.pas -o$(BUILDDIR)/mcp_disclosure_tests
@@ -893,7 +914,67 @@ test-mcp-disclosure: | $(BUILDDIR)
 # Tool-RPC server: the in-process callback the execute_code script uses
 # to reach back into the parent's tool registry. PASCLAW_HOME isolated so
 # the info file lands in a scratch dir.
-test-tool-rpc: | $(BUILDDIR)
+test-skill-args: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/skill_args_tests.pas -o$(BUILDDIR)/skill_args_tests
+	@$(BUILDDIR)/skill_args_tests
+
+test-instructions: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/instructions_tests.pas -o$(BUILDDIR)/instructions_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; \
+	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
+	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/instructions_tests
+
+# $(BIN) because one case runs `pasclaw agent --attach` for real against a
+# fake gateway -- the bug it guards was in what that command sent.
+test-runfile: $(BIN) | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/runfile_tests.pas -o$(BUILDDIR)/runfile_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; \
+	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
+	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/runfile_tests
+
+test-worktree: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/worktree_tests.pas -o$(BUILDDIR)/worktree_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; \
+	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
+	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/worktree_tests
+
+test-permissions: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/permissions_tests.pas -o$(BUILDDIR)/permissions_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; \
+	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
+	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/permissions_tests
+
+# $(BIN) because one case runs `pasclaw mcp add` for real -- the bug it
+# guards was in what that command wrote to config.json.
+test-codemode: $(BIN) | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/codemode_tests.pas -o$(BUILDDIR)/codemode_tests
+	@PASCLAW_HOME=$(BUILDDIR)/tool-rpc-test-home $(BUILDDIR)/codemode_tests
+
+test-rpc-gate: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/rpc_gate_tests.pas -o$(BUILDDIR)/rpc_gate_tests
+	@PASCLAW_HOME=$(BUILDDIR)/tool-rpc-test-home $(BUILDDIR)/rpc_gate_tests
+
+test-skills-shell-gate: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/skills_shell_gate_tests.pas -o$(BUILDDIR)/skills_shell_gate_tests
+	@$(BUILDDIR)/skills_shell_gate_tests
+
+test-shell-timeout: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/shell_timeout_tests.pas -o$(BUILDDIR)/shell_timeout_tests
+	@$(BUILDDIR)/shell_timeout_tests
+
+# $(BIN) because one case runs the real `pasclaw __tool` as a child
+# process -- the only way to exercise the client's env-var discovery,
+# since FPC snapshots envp at process start.
+test-tool-rpc: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/tool_rpc_tests.pas -o$(BUILDDIR)/tool_rpc_tests
 	@PASCLAW_HOME=$(BUILDDIR)/tool-rpc-test-home $(BUILDDIR)/tool_rpc_tests
@@ -1108,7 +1189,7 @@ test-heartbeat: | $(BUILDDIR)
 test-shell-backend: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/shell_backend_tests.pas -o$(BUILDDIR)/shell_backend_tests
-	@$(BUILDDIR)/shell_backend_tests
+	@PASCLAW_HOME=$(BUILDDIR)/shell-backend-test-home $(BUILDDIR)/shell_backend_tests
 
 # Env-var injection into spawned children (RunOneShotWithEnv / Spawn ExtraEnv).
 test-env-inject: | $(BUILDDIR)
@@ -1337,7 +1418,7 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-verify test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version
+test: smoke test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version
 
 # Benchmark harness for the /v1/stats aggregation path. Prints timings,
 # not pass/fail -- cited by docs/stats-collection-plan.md. Not in `test`.

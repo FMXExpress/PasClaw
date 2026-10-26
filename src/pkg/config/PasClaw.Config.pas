@@ -14,6 +14,7 @@ uses
   SysUtils, Classes,
   PasClaw.Providers.Types,
   PasClaw.Stream.Reliability,
+  PasClaw.Permissions,     { TPermRuleArray -- the ordered allow/deny/ask list }
   PasClaw.Shell.Backend;   { TShellBackendKind -- typed enum the
                              ShellBackend field uses. Defining it
                              in the leaf shell unit means
@@ -33,7 +34,7 @@ const
   {$ELSE}
   VersionRaw = '';
   {$ENDIF}
-  VersionFallback = '0.1.4';
+  VersionFallback = '0.1.5';
 
   EnvHome   = 'PASCLAW_HOME';
   EnvConfig = 'PASCLAW_CONFIG';
@@ -202,6 +203,25 @@ type
     MinIterations:      Integer;
   end;
 
+  (* Git worktrees (PasClaw.Tools.Worktree). Enabled registers the
+     worktree_* tools and lets spawn / spawn_background take a
+     `worktree` argument. Directory is where new worktrees go; '' means
+     beside the repository in <repo>-worktrees/. *)
+  TWorktreeConfig = record
+    Enabled:   Boolean;
+    Directory: string;
+  end;
+
+  (* Terminal behaviour. Attach: should `pasclaw agent` / `pasclaw tui`
+     become a client of a running gateway instead of running their own
+     loop? 'off' (default) never; 'auto' when <home>/run/gateway.json
+     names a live gateway, else local; 'on' always, and an error when
+     none is running. --attach on the command line is 'on' for one run.
+     See PasClaw.Gateway.RunFile and PasClaw.Cmd.Attach. *)
+  TCliConfig = record
+    Attach: string;
+  end;
+
   TSandboxPolicy = record
     RestrictToWorkspace:       Boolean;
     AllowReadOutsideWorkspace: Boolean;
@@ -227,6 +247,14 @@ type
     Args:    string;
     Env:     string;
     Enabled: Boolean;
+    (* Code mode: this server's tools are not sent to the model as tool
+       schemas at all. The model calls them from an execute_code script
+       -- `tool <server>__<name> '<json>'` -- chaining calls and
+       filtering results inside the script, so only what matters comes
+       back into context. Default from mcp_codemode_default (true). Set
+       false to expose the tools the classic way (deferred behind
+       tool_search when progressive disclosure is on). *)
+    CodeMode: Boolean;
   end;
 
   THeartbeatConfig = record
@@ -513,6 +541,13 @@ type
   TPromptCacheConfig = record
     Enabled: Boolean;
     TTL:     string;
+    (* Keep-alive (PasClaw.Gateway.Warm): after four idle minutes the
+       gateway sends one minimal request every four minutes, same system
+       block and tools, until thirty minutes after the last real turn,
+       so a short TTL does not throw the cached prefix away between
+       turns. Each ping is a billed request; counted in /v1/stats. Off
+       by default -- worth little with the default 1h TTL. *)
+    Warm:    Boolean;
   end;
 
   (* TStreamReliabilityConfig is declared in PasClaw.Stream.Reliability
@@ -935,6 +970,41 @@ type
     Maintenance:           TMaintenanceConfig;
     Backup:                TBackupConfig;
     Verification:          TVerificationConfig;
+    (* Wall-clock bound, in seconds, on every shell_exec / execute_code /
+       shell-skill command. Before this there was none: a command that
+       never returned hung the turn for good. On expiry the child is
+       killed and the tool reports exit=124 with a "timed out" note, which
+       the model can act on. shell_exec's `timeout_sec` argument overrides
+       it per call. 0 = no bound. *)
+    ShellTimeoutSec:       Integer;
+    (* The default for mcp_servers[].codemode. On: an MCP server's tools
+       live behind execute_code scripts (see TMCPServer.CodeMode) -- the
+       OpenCode 2.0 shape, and the one that keeps fat catalogs (GitHub,
+       Replicate) out of the prompt entirely rather than one tool_search
+       away. Off: every server is classic unless it says codemode: true. *)
+    MCPCodeModeDefault:    Boolean;
+    (* How many background jobs -- spawn_background subagents and
+       shell_background commands together -- may run at once per
+       coordinator. Beyond it the tool refuses until one finishes. *)
+    BackgroundJobsMax:     Integer;
+    (* Ordered permission rules, evaluated at tool dispatch after the
+       mode gates: [{tool, resource?, effect: allow|deny|ask}], last
+       match wins, no match = no opinion (the older gates still apply).
+       See PasClaw.Permissions. A second list of the same shape lives in
+       <home>/policies.json, outside this file, so the gateway's config
+       endpoint cannot loosen it; ApplyConfigGlobals installs both. *)
+    Permissions:           TPermRuleArray;
+    (* How long an "ask" waits for a human before it counts as deny, in
+       seconds. The TUI and CLI askers wait for a key; the gateway asker
+       waits for POST /v1/permissions/<id>. *)
+    PermissionsAskTimeoutSec: Integer;
+    Worktree:              TWorktreeConfig;
+    Cli:                   TCliConfig;
+    (* Instruction sources appended to the Project Rules section after
+       AGENTS.md: files and globs relative to the workspace
+       ("docs/style.md", "rules/*.md") and http(s) URLs (fetched through
+       the SSRF guard, cached 24 h). See BuildInstructionsSection. *)
+    Instructions:          array of string;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -1254,6 +1324,7 @@ uses
   PasClaw.JSON,
   PasClaw.Config.Profile,     { ResolveProfileBodies / ExtractProfileField -- PR #291 }
   PasClaw.Logger,             { LogWarn / LogInfo on the profile-apply path }
+  PasClaw.Platform,           { SetShellToolTimeoutMs -- the tool shells' default }
   PasClaw.Promptware,         { LoadConfig propagates promptware_enabled --
                                 see the comment inside LoadConfig }
   PasClaw.Tools.OutputCache,  { LoadConfig propagates condense_reversible
@@ -1407,6 +1478,16 @@ begin
   Backup.IncludeSecrets := True;   { see the field comment: a backup should restore the integrations too }
   Verification.ScenariosDir := '';  { off until the operator points at a scenarios dir }
   Verification.MaxRounds    := 2;
+  ShellTimeoutSec        := 600;   { ten minutes; long enough for a build, short enough to notice }
+  MCPCodeModeDefault     := True;  { MCP tools are script-callable by default; see TMCPServer.CodeMode }
+  BackgroundJobsMax      := 6;     { subagents + background shells, per coordinator }
+  SetLength(Permissions, 0);       { no rules: the older gates alone, as before }
+  PermissionsAskTimeoutSec := 300; { five minutes to answer an ask; then deny }
+  Worktree.Enabled   := True;      { worktree_* tools + spawn worktree:"<branch>" }
+  Worktree.Directory := '';        { beside the repo: <repo>-worktrees/ }
+  Cli.Attach         := 'off';     { the terminal runs its own loop unless asked }
+  PromptCache.Warm   := False;     { keep-alive pings cost requests; opt in }
+  SetLength(Instructions, 0);
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1493,7 +1574,17 @@ begin
   Result.PutStr('model',    P.Model);
 end;
 
-function MCPToJSON(const M: TMCPServer): TJsonObject;
+(* Default is the value of mcp_codemode_default at save time, so a
+   server that simply follows the default writes no `codemode` key at
+   all and keeps following it. Emitting it unconditionally FROZE the
+   value: a record created by `mcp add` / `mcp install` / onboarding is
+   zero-initialised, so every supported setup flow persisted
+   "codemode": false and pinned that server to classic exposure no
+   matter what mcp_codemode_default said afterwards. (Codex P1 on #609.)
+
+   This also matches how the rest of this file serialises -- a setting
+   left at its default is omitted rather than written out. *)
+function MCPToJSON(const M: TMCPServer; CodeModeDefault: Boolean): TJsonObject;
 begin
   Result := TJsonObject.Create;
   Result.PutStr ('name',    M.Name);
@@ -1501,6 +1592,8 @@ begin
   Result.PutStr ('args',    M.Args);
   Result.PutStr ('env',     M.Env);
   Result.PutBool('enabled', M.Enabled);
+  if M.CodeMode <> CodeModeDefault then
+    Result.PutBool('codemode', M.CodeMode);
 end;
 
 function CronToJSON(const C: TCronEntry): TJsonObject;
@@ -1666,11 +1759,13 @@ begin
       operator setting TTL back to "5m" or any other non-default needs
       the value to round-trip; same for the explicit-off path. Reading
       back: missing object => defaults (enabled, 1h). }
-    if (not PromptCache.Enabled) or ((PromptCache.TTL <> '') and (PromptCache.TTL <> '1h')) then
+    if (not PromptCache.Enabled) or ((PromptCache.TTL <> '') and (PromptCache.TTL <> '1h'))
+       or PromptCache.Warm then
     begin
       Tmp := TJsonObject.Create;
       Tmp.PutBool('enabled', PromptCache.Enabled);
       Tmp.PutStr ('ttl',     PromptCache.TTL);
+      if PromptCache.Warm then Tmp.PutBool('warm', True);
       Root.PutObject('prompt_cache', Tmp);
     end;
 
@@ -1766,6 +1861,46 @@ begin
       Root.PutInt('memory_core_budget_bytes', MemoryCoreBudgetBytes);
     if BackgroundModel <> '' then
       Root.PutStr('background_model', BackgroundModel);
+    if ShellTimeoutSec <> 600 then
+      Root.PutInt('shell_timeout_sec', ShellTimeoutSec);
+    if not MCPCodeModeDefault then
+      Root.PutBool('mcp_codemode_default', False);
+    if BackgroundJobsMax <> 6 then
+      Root.PutInt('background_jobs_max', BackgroundJobsMax);
+    if Length(Permissions) > 0 then
+    begin
+      Arr := TJsonArray.Parse(PermissionRulesToJSON(Permissions));
+      Root.PutArray('permissions', Arr);
+    end;
+    if PermissionsAskTimeoutSec <> 300 then
+      Root.PutInt('permissions_ask_timeout_sec', PermissionsAskTimeoutSec);
+    if (not Worktree.Enabled) or (Worktree.Directory <> '') then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutBool('enabled', Worktree.Enabled);
+        if Worktree.Directory <> '' then Tmp.PutStr('directory', Worktree.Directory);
+        Root.PutObject('worktree', Tmp);
+      finally
+        Tmp.Free;   { nil after PutObject took ownership }
+      end;
+    end;
+    if Cli.Attach <> 'off' then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutStr('attach', Cli.Attach);
+        Root.PutObject('cli', Tmp);
+      finally
+        Tmp.Free;
+      end;
+    end;
+    if Length(Instructions) > 0 then
+    begin
+      Arr := TJsonArray.Create;
+      for i := 0 to High(Instructions) do Arr.AddStr(Instructions[i]);
+      Root.PutArray('instructions', Arr);
+    end;
     if (Maintenance.KeepSupersededDays <> 30) or (Maintenance.UnusedSkillDays <> 30)
        or Maintenance.Review or Maintenance.Backup then
     begin
@@ -2007,7 +2142,7 @@ begin
     Arr := TJsonArray.Create;
     for i := 0 to High(MCPServers) do
     begin
-      Tmp := MCPToJSON(MCPServers[i]);
+      Tmp := MCPToJSON(MCPServers[i], MCPCodeModeDefault);
       Arr.AddObject(Tmp);
     end;
     Root.PutArray('mcp_servers', Arr);
@@ -2291,6 +2426,7 @@ begin
     try
       PromptCache.Enabled := Obj.GetBool('enabled', PromptCache.Enabled);
       PromptCache.TTL     := Obj.GetStr ('ttl',     PromptCache.TTL);
+      PromptCache.Warm    := Obj.GetBool('warm',    PromptCache.Warm);
     finally
       Obj.Free;
     end;
@@ -2371,6 +2507,43 @@ begin
       if Verification.MaxRounds < 1 then Verification.MaxRounds := 1;
     finally
       Obj.Free;
+    end;
+    ShellTimeoutSec      := Integer(Root.GetInt('shell_timeout_sec', ShellTimeoutSec));
+    if ShellTimeoutSec < 0 then ShellTimeoutSec := 0;
+    BackgroundJobsMax    := Integer(Root.GetInt('background_jobs_max', BackgroundJobsMax));
+    if BackgroundJobsMax < 1 then BackgroundJobsMax := 1;
+    Arr := Root.ChildArray('permissions');
+    if Arr <> nil then
+    try
+      Permissions := ParsePermissionRules(Arr.ToJSON, 'config');
+    finally
+      Arr.Free;
+    end;
+    PermissionsAskTimeoutSec := Integer(Root.GetInt('permissions_ask_timeout_sec', PermissionsAskTimeoutSec));
+    if PermissionsAskTimeoutSec < 1 then PermissionsAskTimeoutSec := 1;
+    Obj := Root.ChildObject('worktree');
+    if Obj <> nil then
+    try
+      Worktree.Enabled   := Obj.GetBool('enabled', Worktree.Enabled);
+      Worktree.Directory := Trim(Obj.GetStr('directory', Worktree.Directory));
+    finally
+      Obj.Free;
+    end;
+    Obj := Root.ChildObject('cli');
+    if Obj <> nil then
+    try
+      Cli.Attach := LowerCase(Trim(Obj.GetStr('attach', Cli.Attach)));
+      if (Cli.Attach <> 'on') and (Cli.Attach <> 'auto') then Cli.Attach := 'off';
+    finally
+      Obj.Free;
+    end;
+    Arr := Root.ChildArray('instructions');
+    if Arr <> nil then
+    try
+      SetLength(Instructions, Arr.Count);
+      for i := 0 to Arr.Count - 1 do Instructions[i] := Trim(Arr.ItemStr(i, ''));
+    finally
+      Arr.Free;
     end;
     Obj := Root.ChildObject('maintenance');
     if Obj <> nil then
@@ -2568,6 +2741,9 @@ begin
       Arr.Free;
     end;
 
+    { Read the default before the servers so each entry's absent
+      `codemode` resolves against the value THIS config sets. }
+    MCPCodeModeDefault := Root.GetBool('mcp_codemode_default', MCPCodeModeDefault);
     Arr := Root.ChildArray('mcp_servers');
     if Arr <> nil then
     try
@@ -2582,6 +2758,7 @@ begin
           MCPServers[i].Args    := Item.GetStr ('args',    '');
           MCPServers[i].Env     := Item.GetStr ('env',     '');
           MCPServers[i].Enabled := Item.GetBool('enabled', True);
+          MCPServers[i].CodeMode := Item.GetBool('codemode', MCPCodeModeDefault);
         finally
           Item.Free;
         end;
@@ -2906,6 +3083,20 @@ begin
   { Symmetric propagation of the reversible-condensation flag -- OutputCache
     holds the same process-global mirror. }
   SetCondenseReversible(C.CondenseReversible);
+  (* The TOOL shells' wall-clock bound: shell_exec, execute_code and
+     shell skills. Stored here, applied by the *ViaBackend wrappers in
+     PasClaw.Shell.Backend that those three run through -- deliberately
+     not by RunOneShot itself, which is also how an app build and a
+     benchmark agent are spawned and which must not inherit a shell
+     command's bound. *)
+  SetShellToolTimeoutMs(C.ShellTimeoutSec * 1000);
+  { The permission rule list is read at every tool dispatch, on whichever
+    thread dispatches, so it is a locked process-global in
+    PasClaw.Permissions rather than a field threaded through every loop
+    config. The policies file beside config.json is loaded here too and
+    re-read on its own when its mtime moves. }
+  SetPermissionRules(C.Permissions);
+  LoadPolicyFile(GetHome);
   { Reranker: which cross-encoder to load + whether retrieval reranks. The
     /v1/rerank endpoint and the memory_search rerank stage both read these
     process-globals, so this chokepoint keeps them in sync with config.json. }

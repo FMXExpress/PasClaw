@@ -74,6 +74,7 @@ uses
   PasClaw.Cmd.Backup,       (* `pasclaw backup` / `pasclaw restore` *)
   PasClaw.Cmd.Maintain,     (* `pasclaw maintain` -- the nightly pass *)
   PasClaw.Cmd.Route,        (* `pasclaw route report` -- model usage split *)
+  PasClaw.Cmd.Permissions,  (* `pasclaw permissions list|test` -- the ordered rule list *)
   PasClaw.Cmd.TUI;
 
 type
@@ -146,7 +147,8 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 40);
+  SetLength(Sub, 41);
+  Sub[40] := 'permissions  List the allow/deny/ask rules, or test what one tool call would get';
   Sub[36] := 'backup       Zip the workspace + redacted config + restore notes; rotate old backups';
   Sub[37] := 'restore      Put a backup''s workspace back under PASCLAW_HOME';
   Sub[38] := 'maintain     Nightly pass: sweep facts, audit skills, size the core memory, review the day';
@@ -258,6 +260,7 @@ begin
   else if Cmd = 'restore'  then Result := Cmd_Restore_Run(Argv)
   else if Cmd = 'maintain' then Result := Cmd_Maintain_Run(Argv)
   else if Cmd = 'route'    then Result := Cmd_Route_Run(Argv)
+  else if Cmd = 'permissions' then Result := Cmd_Permissions_Run(Argv)
   else if Cmd = 'update'   then Result := Cmd_Update_Run(Argv)
   else if Cmd = 'version'  then Result := Cmd_Version_Run(Argv)
   else

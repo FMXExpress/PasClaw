@@ -52,6 +52,8 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/chat` | POST | PasClaw JSON chat endpoint accepting `{"message":"..."}`. With `verification.scenarios` configured the response carries `verification: {ok, rounds, passed, failed, summary}`, the result of the held-out checks PasClaw ran after the model's final answer. |
 | `/v1/chat/completions` | POST | OpenAI Chat Completions-compatible. Streams with `stream: true`. |
 | `/v1/responses` | POST | OpenAI Responses-compatible. String or message-array `input`. Non-streaming only. |
+| `/v1/permissions` | GET | Permission requests waiting for an answer (`{"pending":[{id, session, tool, resource, args, reason}]}`). A request appears when a `permissions` rule says `ask` during a turn; the same object is published as a `permission_request` desktop event. |
+| `/v1/permissions/<id>` | POST | Answer one: `{"answer":"allow"}` (once), `"session"` (remember for that session), or `"deny"`. 404 once it has been answered or has timed out (`permissions_ask_timeout_sec`, then deny). With no desktop-events subscriber connected an `ask` denies immediately. See [Security → Permissions](./security.md#permissions-ordered-rules). |
 | `/mcp`, `/v1/mcp/rpc` | POST | MCP JSON-RPC endpoint when PasClaw is acting as an MCP server. |
 
 ## Embedded web UI
@@ -240,6 +242,7 @@ Returns a 5-second-cached aggregate of per-session counters when `stats_collecti
   "turns":                  1234,
   "tool_calls":             5678,
   "truncation_bytes_saved": 12345678,
+  "prompt_cache_warm_pings": 0,
   "by_provider": [
     { "provider": "anthropic", "input_tokens": 800000, "output_tokens": 150000 },
     { "provider": "openai",    "input_tokens": 434567, "output_tokens":  84567 }
@@ -366,7 +369,19 @@ When OpenTelemetry is enabled (`diagnostics.otel.enabled` or `OTEL_EXPORTER_OTLP
 curl http://127.0.0.1:8088/v1/health         # 200 OK + JSON
 ```
 
-Press Ctrl-C to stop. The server tears down all active SSE streams cleanly before exiting.
+Press Ctrl-C (or send SIGTERM) to stop. The server tears down all active SSE streams cleanly, removes its run file and stops its channels before exiting. With `--telegram` the stop takes effect once the bot's current long-poll returns (up to about 25 s); a second Ctrl-C kills the process at once, on Windows as on Unix.
+
+## Run file and attached terminals
+
+On start the gateway writes `$PASCLAW_HOME/run/gateway.json`:
+
+```json
+{"port": 8088, "bind": "127.0.0.1", "pid": 4242,
+ "token_hash": "<sha256 hex of gateway.token, or empty>",
+ "started_at": "2026-10-17T12:00:00Z", "version": "0.1.6"}
+```
+
+and removes it on stop. Readers ignore a file whose pid is no longer alive, so a crash cannot strand them. `pasclaw status` reports it, and `pasclaw agent --attach` / `pasclaw tui --attach` (or `cli.attach: auto|on`) use it to become clients of this gateway instead of running their own loop: one turn per line through `/v1/chat/completions` with `X-PasClaw-Session` and `session_context`, session management through `/v1/sessions`. The token itself is never written; a client uses its own config's `gateway.token` and is warned when the hash differs. See [Commands → `--attach`](./commands.md#--attach-the-terminal-as-a-gateway-client).
 
 ## Embedded use
 

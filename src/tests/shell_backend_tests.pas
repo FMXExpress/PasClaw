@@ -20,6 +20,10 @@ program shell_backend_tests;
     - A recording mock backend (TRecordingBackend) used by the
       shell+execute_code tests proves the dispatch path actually
       goes through the active backend instead of the host shell
+    - IShellHostRPC: the docker backend maps host.docker.internal into
+      the container and names it as the tool-RPC callback's host, while
+      --network host and host-namespace backends leave the server on
+      loopback (Codex P1 on #609)
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -31,7 +35,10 @@ uses
   PasClaw.Platform,
   PasClaw.Shell.Backend,
   PasClaw.Shell.Backend.Local,
-  PasClaw.Shell.Backend.Docker;
+  PasClaw.Shell.Backend.Docker,
+  PasClaw.Utils,         { JoinPath, WriteFileText }
+  PasClaw.Config,        { GetHome }
+  PasClaw.Workspaces;    { ActiveWorkspaceName }
 
 procedure Fail_(const Msg: string);
 begin
@@ -271,6 +278,191 @@ begin
   end;
 end;
 
+function ArgvHas(Args: TStringList; const Flag, Value: string): Boolean;
+{ A `--flag value` pair, in that order, anywhere in the argv. }
+var
+  i: Integer;
+begin
+  for i := 0 to Args.Count - 2 do
+    if (Args[i] = Flag) and (Args[i + 1] = Value) then Exit(True);
+  Result := False;
+end;
+
+procedure TestDockerHostCallbackWiring;
+(* The execute_code tool-RPC callback has to cross the container's
+   network namespace. It did not: the server bound the host's loopback
+   and `pasclaw __tool` dialled 127.0.0.1, which inside the container is
+   the container. Every `tool ...` call failed to connect -- and with
+   code mode on, that is the only route to an MCP server's tools.
+   (Codex P1 on #609.)
+
+   Three things make it work, all asserted here without a daemon: the
+   container gets a name for the host, the backend says to listen
+   somewhere reachable, and it says what to dial. *)
+var
+  Opts: TDockerBackendOptions;
+  Backend: TDockerShellBackend;
+  Ifc: IShellBackend;
+  Host: IShellHostRPC;
+  Args: TStringList;
+begin
+  { Default (bridge): the container gets host.docker.internal and the
+    script is told to dial it. }
+  Opts := DefaultDockerBackendOptions;
+  AssertEqStr(Opts.Network, 'bridge', 'bridge is still the default network');
+  Backend := TDockerShellBackend.Create(Opts);
+  Ifc := Backend;
+  try
+    AssertTrue(Supports(Ifc, IShellHostRPC, Host),
+               'the docker backend advertises the host-RPC capability');
+    AssertEqStr(Host.RpcConnectHost, 'host.docker.internal',
+                'a bridged container dials the host by name');
+    Args := TStringList.Create;
+    try
+      Backend.BuildRunArgv('sess', Args);
+      AssertTrue(ArgvHas(Args, '--add-host', 'host.docker.internal:host-gateway'),
+                 'and `docker run` maps that name to the host');
+      AssertTrue(ArgvHas(Args, '--network', 'bridge'), 'network flag unchanged');
+    finally
+      Args.Free;
+    end;
+  finally
+    Ifc := nil;
+    Host := nil;
+  end;
+
+  { --network host: the container shares our namespace, so loopback is
+    already right and there is nothing to map. }
+  Opts := DefaultDockerBackendOptions;
+  Opts.Network := 'host';
+  Backend := TDockerShellBackend.Create(Opts);
+  Ifc := Backend;
+  try
+    AssertTrue(Supports(Ifc, IShellHostRPC, Host), 'still capable');
+    AssertEqStr(Host.RpcConnectHost, '',
+                'host networking keeps the discovery file on loopback');
+    AssertEqStr(Host.RpcBindIP, '',
+                'and asks for no extra binding (no daemon call either)');
+    Args := TStringList.Create;
+    try
+      Backend.BuildRunArgv('sess', Args);
+      AssertTrue(not ArgvHas(Args, '--add-host', 'host.docker.internal:host-gateway'),
+                 'no --add-host when the namespace is shared');
+    finally
+      Args.Free;
+    end;
+  finally
+    Ifc := nil;
+    Host := nil;
+  end;
+
+  { The capability is opt-in: a backend that runs on the host must not
+    move the listener anywhere. }
+  SetActiveShellBackend(nil);
+  AssertEqStr(ShellBackendRpcBindIP, '', 'no backend -> no bind override');
+  AssertEqStr(ShellBackendRpcConnectHost, '', 'no backend -> loopback');
+  SetActiveShellBackend(TLocalShellBackend.Create);
+  try
+    AssertEqStr(ShellBackendRpcBindIP, '', 'local backend -> no bind override');
+    AssertEqStr(ShellBackendRpcConnectHost, '', 'local backend -> loopback');
+  finally
+    SetActiveShellBackend(nil);
+  end;
+
+  { The gateway the listener binds comes out of `docker network inspect`
+    through this. Its template emits one gateway per IPAM config, in
+    either family, and a v6 address would only fail the bind (Indy needs
+    IPVersion set, which nothing here does), so IPv4 or nothing. }
+  AssertEqStr(FirstIPv4Token('172.17.0.1 '), '172.17.0.1', 'the plain case');
+  AssertEqStr(FirstIPv4Token('fd00::1 172.18.0.1 '), '172.18.0.1',
+              'skips a v6 gateway listed first');
+  AssertEqStr(FirstIPv4Token('fd00::1 '), '', 'v6-only yields nothing to bind');
+  AssertEqStr(FirstIPv4Token(''), '', 'empty output (no IPAM config)');
+  AssertEqStr(FirstIPv4Token(#10'  172.17.0.1'#10), '172.17.0.1',
+              'tolerates the newlines the CLI adds');
+  AssertEqStr(FirstIPv4Token('172.17.0.1/16 '), '172.17.0.1',
+              'a prefix length is not part of the address');
+
+  AssertTrue(DockerNetworkIsolatesHost('bridge'), 'bridge isolates');
+  AssertTrue(DockerNetworkIsolatesHost('my-custom-net'), 'a user network isolates');
+  AssertTrue(not DockerNetworkIsolatesHost('host'), 'host does not');
+  AssertTrue(not DockerNetworkIsolatesHost(' HOST '), 'nor does it when sloppily spelled');
+  AssertTrue(not DockerNetworkIsolatesHost('none'),
+             'none has no networking to reach us with at all');
+end;
+
+procedure TestDockerMountsTheWorktreeDirectory;
+(* The container has to see the worktree directory, at the same path.
+
+   The worktree tools run git through the backend, and the default
+   worktree directory is beside the repository (<repo>-worktrees), outside
+   the workspace mount -- so under Docker the checkout was built in the
+   container's own filesystem while the host got a path with nothing in
+   it. (Codex P1 on #612.) Read off the `docker run` argv, so no daemon is
+   needed. *)
+{$IFDEF UNIX}
+var
+  Backend: TDockerShellBackend;
+  Ifc: IShellBackend;
+  Args: TStringList;
+  Ws, Wt, CfgPath: string;
+
+  function Mounted(const Path: string): Boolean;
+  begin
+    Args.Clear;
+    Backend.BuildRunArgv('wt-mount', Args);
+    Result := ArgvHas(Args, '-v', Path + ':' + Path);
+  end;
+
+begin
+  Ws := JoinPath(GetHome, ActiveWorkspaceName);
+  { Absolute: the mount is computed from the repository root on disk, and
+    this harness runs with a relative PASCLAW_HOME. }
+  Wt := ExpandFileName(Ws) + '-worktrees';
+  CfgPath := JoinPath(GetHome, 'config.json');
+  { Start clean. Fail_ is a Halt, which skips the finally below, so a
+    previous failed run can leave its config.json behind -- and that
+    file changes what this test sees. }
+  if FileExists(CfgPath) then DeleteFile(CfgPath);
+  ForceDirectories(Ws);
+  Backend := TDockerShellBackend.Create(DefaultDockerBackendOptions);
+  Ifc := Backend;
+  Args := TStringList.Create;
+  try
+    { Not a repository: nothing to mount. }
+    if DirectoryExists(JoinPath(Ws, '.git')) then RemoveDir(JoinPath(Ws, '.git'));
+    AssertTrue(not Mounted(Wt), 'no worktree mount when the workspace is not a repo');
+
+    { A repository: <repo>-worktrees is mounted at the same path. }
+    ForceDirectories(JoinPath(Ws, '.git'));
+    AssertTrue(Mounted(Wt),
+               'the worktree directory beside the repo is bind-mounted at ' +
+               'the same path -- without it git builds the checkout inside ' +
+               'the container');
+
+    { worktree.directory inside the workspace: already covered, not twice. }
+    WriteFileText(CfgPath, '{"worktree":{"directory":"' + JoinPath(Ws, 'wts') + '"}}');
+    Args.Clear;
+    Backend.BuildRunArgv('wt-mount', Args);
+    AssertTrue(not ArgvHas(Args, '-v', ExpandFileName(JoinPath(Ws, 'wts')) + ':' +
+                                       ExpandFileName(JoinPath(Ws, 'wts'))),
+               'a worktree directory inside the workspace is not mounted again');
+
+    { The feature off: no mount. }
+    WriteFileText(CfgPath, '{"worktree":{"enabled":false}}');
+    AssertTrue(not Mounted(Wt), 'worktree.enabled:false mounts nothing');
+  finally
+    Args.Free;
+    if FileExists(CfgPath) then DeleteFile(CfgPath);
+    RemoveDir(JoinPath(Ws, '.git'));
+    Ifc := nil;
+  end;
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
 procedure TestRunArgvCaptureNoShell;
 { RunArgvCapture must hand argv straight to the program with NO shell in
   between -- this is what makes the docker backend correct on Windows,
@@ -337,5 +529,9 @@ begin
   WriteLn('  ok: with-env wrapper dispatches through active backend');
   TestDockerRefusesEmptySessionId;
   WriteLn('  ok: docker backend refuses empty SessionId (no host fallback)');
+  TestDockerHostCallbackWiring;
+  WriteLn('  ok: docker backend wires the tool-RPC callback to the host');
+  TestDockerMountsTheWorktreeDirectory;
+  WriteLn('  ok: docker backend mounts the worktree directory at the same path');
   WriteLn('PASS');
 end.

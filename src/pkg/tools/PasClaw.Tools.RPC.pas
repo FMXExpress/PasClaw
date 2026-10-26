@@ -46,10 +46,11 @@
 
   Wire shape (unchanged from v1):
     Request:  {"token":"...", "name":"...", "args":{...}}\n
+              {"token":"...", "catalog":"<server or empty>"}\n
     Response: {"result":"...", "err":"..."}\n
-    One request per connection. Tools that return huge outputs
-    route through the existing OutputCache same as the model-
-    facing path.
+    One request per connection. With a dispatcher bound (the
+    production path) a request goes through the loop's dispatch
+    gates and the OutputCache cap, same as the model-facing path.
 
   Auth: every request must carry the per-server random token.
   Bad token -> {"err":"invalid token"} and close.
@@ -76,9 +77,12 @@ type
   private
     FServer:   TIdTCPServer;
     FRegistry: TToolRegistry;
+    FDispatcher: IToolDispatcher;   { when set, every request goes through it }
     FToken:    string;
     FPort:     Integer;
     FInfoPath: string;
+    FBindIP:   string;
+    FAdvertiseHost: string;
     FLock:     TCriticalSection;
     procedure OnExecute(Ctx: TIdContext);
     procedure WriteInfoFile;
@@ -95,13 +99,31 @@ type
        command can find this server. Callers building a per-call
        server should pick a unique path so two concurrent
        Tool_ExecuteCode invocations don't trample each other. *)
-    constructor Create(Registry: TToolRegistry; const InfoPath: string);
+    constructor Create(Registry: TToolRegistry; const InfoPath: string;
+                       Dispatcher: IToolDispatcher = nil);
     destructor Destroy; override;
     procedure Start;
     procedure Stop;
     property Token: string read FToken;
     property Port:  Integer read FPort;
     property InfoPath: string read FInfoPath;
+
+    (* Set these BEFORE Start when the script will run somewhere that
+       cannot reach the host's loopback -- the Docker shell backend reads
+       them off its IShellHostRPC implementation.
+
+       BindIP replaces 127.0.0.1 as the listening address. An address that
+       cannot be bound is NOT fatal: Start logs it and falls back to
+       loopback, which is what makes the Docker Desktop case work by
+       itself (the bridge gateway it names lives in the daemon's VM, not
+       on this host, and host.docker.internal there already forwards to
+       the host's loopback).
+
+       AdvertiseHost is what goes in the discovery file as the host to
+       dial. Empty means 127.0.0.1, so a local-backend server writes the
+       same file it always did. *)
+    property BindIP: string read FBindIP write FBindIP;
+    property AdvertiseHost: string read FAdvertiseHost write FAdvertiseHost;
   end;
 
 (* Compose a per-call info-file path under $PASCLAW_HOME/run/
@@ -119,8 +141,11 @@ function MakePerCallInfoPath: string;
        Tool_ExecuteCode, or env didn't propagate)
      - the file doesn't exist (parent crashed mid-call?)
      - the file is malformed
-   Used by Cmd.ToolRPC (`pasclaw __tool`). *)
-function DiscoverRunningRPC(out Port: Integer; out Token, ErrMsg: string): Boolean;
+   Used by Cmd.ToolRPC (`pasclaw __tool`). Host is the address to
+   dial: the file's "host" field when the parent advertised one (the
+   Docker backend does), 127.0.0.1 otherwise. *)
+function DiscoverRunningRPC(out Port: Integer;
+                            out Token, Host, ErrMsg: string): Boolean;
 
 implementation
 
@@ -134,7 +159,8 @@ uses
                 {$IFDEF POSIX}, Posix.Unistd{$ENDIF}{$ENDIF};
 
 const
-  EnvInfoVar = 'PASCLAW_TOOL_RPC_INFO';
+  EnvInfoVar   = 'PASCLAW_TOOL_RPC_INFO';
+  LoopbackHost = '127.0.0.1';
 
 function CurrentProcessID: Int64;
 { Cross-compiler PID lookup. FPC ships SysUtils.GetProcessID;
@@ -179,11 +205,17 @@ begin
                             [CurrentProcessID, RandomHexToken(4)]));
 end;
 
-constructor TToolRPCServer.Create(Registry: TToolRegistry; const InfoPath: string);
+constructor TToolRPCServer.Create(Registry: TToolRegistry; const InfoPath: string;
+                                  Dispatcher: IToolDispatcher);
 begin
   inherited Create;
   FLock     := TCriticalSection.Create;
   FRegistry := Registry;
+  { The gated path. Tool_ExecuteCode captures it from the loop on the
+    dispatching thread and hands it here, so a script's call is refused in
+    plan mode, seen by hooks, scanned and capped exactly like a direct
+    call. nil keeps the registry-only path for harnesses without a loop. }
+  FDispatcher := Dispatcher;
   FInfoPath := InfoPath;
   FServer   := TIdTCPServer.Create(nil);
   FServer.OnExecute := OnExecute;
@@ -197,6 +229,29 @@ begin
   inherited Destroy;
 end;
 
+function IsPlainHostToken(const S: string): Boolean;
+{ A hostname or IP literal and nothing else. The advertised host is
+  interpolated into the JSON discovery file by hand (Format, not a
+  TJsonObject), so a quote or backslash in it would corrupt the file the
+  callback has to parse. Nothing in-tree can produce one -- the Docker
+  backend passes a constant or an address it read from `docker network
+  inspect` -- but the file is the contract between two processes, so the
+  check belongs on the writing side. }
+var
+  i: Integer;
+  C: Char;
+begin
+  Result := S <> '';
+  for i := 1 to Length(S) do
+  begin
+    C := S[i];
+    if not (((C >= 'a') and (C <= 'z')) or ((C >= 'A') and (C <= 'Z')) or
+            ((C >= '0') and (C <= '9')) or (C = '.') or (C = ':') or
+            (C = '-') or (C = '_')) then
+      Exit(False);
+  end;
+end;
+
 procedure TToolRPCServer.WriteInfoFile;
 var
   Sl: TStringList;
@@ -205,8 +260,20 @@ begin
     ForceDirectories(ExtractFilePath(FInfoPath));
   Sl := TStringList.Create;
   try
-    Sl.Add(Format('{"port":%d,"token":"%s","pid":%d}',
-                  [FPort, FToken, CurrentProcessID]));
+    { "host" only when it isn't loopback -- an unchanged file on every
+      local-backend run, and the field the container-side `pasclaw
+      __tool` dials instead of its own 127.0.0.1. }
+    if (FAdvertiseHost <> LoopbackHost) and IsPlainHostToken(FAdvertiseHost) then
+      Sl.Add(Format('{"port":%d,"token":"%s","pid":%d,"host":"%s"}',
+                    [FPort, FToken, CurrentProcessID, FAdvertiseHost]))
+    else
+    begin
+      if (FAdvertiseHost <> '') and (FAdvertiseHost <> LoopbackHost) then
+        LogWarn('tool-rpc: ignoring unusable callback host "%s" -- ' +
+                'scripts will dial %s', [FAdvertiseHost, LoopbackHost]);
+      Sl.Add(Format('{"port":%d,"token":"%s","pid":%d}',
+                    [FPort, FToken, CurrentProcessID]));
+    end;
     WriteFileText(FInfoPath, Sl.Text);   { UTF-8 on both arms -- see docs/utf8-file-io }
   finally
     Sl.Free;
@@ -227,29 +294,53 @@ end;
 
 procedure TToolRPCServer.Start;
 var
-  Bind: TIdSocketHandle;
+  IP: string;
+
+  procedure BindOn(const Addr: string);
+  var
+    Bind: TIdSocketHandle;
+  begin
+    FServer.Bindings.Clear;
+    Bind := FServer.Bindings.Add;
+    Bind.IP   := Addr;
+    Bind.Port := 0;   { kernel-allocated: one port per call, no collisions }
+    FServer.Active := True;
+  end;
+
 begin
   FLock.Enter;
   try
     if FServer.Active then Exit;
     FToken := RandomHexToken(16);
-    FServer.Bindings.Clear;
-    Bind := FServer.Bindings.Add;
-    Bind.IP   := '127.0.0.1';
-    Bind.Port := 0;
+    IP := FBindIP;
+    if IP = '' then IP := LoopbackHost;
     try
-      FServer.Active := True;
+      BindOn(IP);
     except
       on E: Exception do
       begin
-        LogWarn('tool-rpc: bind failed: %s', [E.Message]);
-        raise;
+        { A caller-supplied address that this host doesn't own is the
+          expected Docker Desktop shape: the backend names the daemon's
+          bridge gateway, which lives in Desktop's VM, and loopback is
+          what host.docker.internal forwards to there. Fall back instead
+          of failing the whole execute_code call. A loopback bind that
+          fails is a real problem -- re-raise. }
+        if IP = LoopbackHost then
+        begin
+          LogWarn('tool-rpc: bind failed: %s', [E.Message]);
+          raise;
+        end;
+        LogDebug('tool-rpc: cannot listen on %s (%s) -- falling back to %s',
+                 [IP, E.Message, LoopbackHost]);
+        try FServer.Active := False; except end;   { roll back a half-open listener }
+        IP := LoopbackHost;
+        BindOn(IP);
       end;
     end;
     FPort := FServer.Bindings[0].Port;
     WriteInfoFile;
-    LogDebug('tool-rpc: listening on 127.0.0.1:%d (info=%s)',
-             [FPort, FInfoPath]);
+    LogDebug('tool-rpc: listening on %s:%d (info=%s)',
+             [IP, FPort, FInfoPath]);
   finally
     FLock.Leave;
   end;
@@ -277,10 +368,13 @@ end;
 procedure TToolRPCServer.OnExecute(Ctx: TIdContext);
 { One request / one response. Connection closes after. }
 var
-  Line, Name, ArgsJSON, ResultText, ErrMsg, ReqToken: string;
+  Line, Name, ArgsJSON, ResultText, ErrMsg, ReqToken, CatalogServer: string;
   ReqObj, ArgsObj, RespObj: TJsonObject;
   Reg: TToolRegistry;
+  CatalogReq: Boolean;
 begin
+  CatalogReq := False;
+  CatalogServer := '';
   try
     Line := Ctx.Connection.IOHandler.ReadLn;
   except
@@ -308,6 +402,8 @@ begin
   try
     ReqToken := ReqObj.GetStr('token', '');
     Name     := ReqObj.GetStr('name',  '');
+    CatalogReq := ReqObj.Has('catalog');
+    CatalogServer := ReqObj.GetStr('catalog', '');
     ArgsObj  := ReqObj.ChildObject('args');
     if ArgsObj <> nil then
     try
@@ -322,6 +418,31 @@ begin
   if ReqToken <> FToken then
   begin
     Ctx.Connection.IOHandler.WriteLn('{"err":"invalid token"}');
+    Exit;
+  end;
+  (* Catalog verb -- a request carrying "catalog" (a server name, or
+     empty for all) instead of "name": the code-mode tools as JSON, read
+     straight from the bound registry. Nothing runs. *)
+  if CatalogReq then
+  begin
+    FLock.Enter;
+    try
+      Reg := FRegistry;
+    finally
+      FLock.Leave;
+    end;
+    RespObj := TJsonObject.Create;
+    try
+      if Reg = nil then RespObj.PutStr('err', 'no registry bound')
+      else
+      begin
+        RespObj.PutStr('result', Reg.CodeModeCatalog(CatalogServer));
+        RespObj.PutStr('err', '');
+      end;
+      Ctx.Connection.IOHandler.WriteLn(RespObj.ToJSON);
+    finally
+      RespObj.Free;
+    end;
     Exit;
   end;
   if Name = '' then
@@ -342,7 +463,10 @@ begin
     Exit;
   end;
 
-  ResultText := Reg.RunTool(Name, ArgsJSON, ErrMsg);
+  if FDispatcher <> nil then
+    ResultText := FDispatcher.Dispatch(Name, ArgsJSON, ErrMsg)
+  else
+    ResultText := Reg.RunTool(Name, ArgsJSON, ErrMsg);
   RespObj := TJsonObject.Create;
   try
     RespObj.PutStr('result', ResultText);
@@ -353,7 +477,8 @@ begin
   end;
 end;
 
-function DiscoverRunningRPC(out Port: Integer; out Token, ErrMsg: string): Boolean;
+function DiscoverRunningRPC(out Port: Integer;
+                            out Token, Host, ErrMsg: string): Boolean;
 var
   Sl: TStringList;
   Obj: TJsonObject;
@@ -362,6 +487,7 @@ begin
   Result := False;
   Port   := 0;
   Token  := '';
+  Host   := LoopbackHost;
   ErrMsg := '';
   Path := GetEnvironmentVariable(EnvInfoVar);
   if Path = '' then
@@ -401,6 +527,10 @@ begin
     try
       Port  := Obj.GetInt('port',  0);
       Token := Obj.GetStr('token', '');
+      { Absent on a local-backend server, which only ever listens on
+        loopback -- and on an info file written by an older build. }
+      Host  := Trim(Obj.GetStr('host', ''));
+      if Host = '' then Host := LoopbackHost;
     finally
       Obj.Free;
     end;

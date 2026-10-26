@@ -10,6 +10,15 @@ reader might not:
   A method implemented but never declared -- the usual result of moving code
   between sections, and invisible until a compiler sees it.
 
+  A statement stranded at the top level of the implementation section --
+  what is left behind when a routine header is deleted or a block is moved
+  and its `end;` is not. Inside a {$IFNDEF FPC} block (and this repo has a
+  large one in PasClaw.TUI.pas) FPC never parses it, so `make test` is
+  green and only dcc64 ever sees the error. That has shipped to main
+  before. The rule is narrow on purpose: after a line that is exactly
+  `end;` in column 0 -- the close of a routine -- the next line of code
+  must start a new declaration in column 0, not an indented statement.
+
 Two other checks were tried here and removed, because a checker that cries
 wolf is worse than no checker:
 
@@ -113,6 +122,30 @@ def check(path):
     missing = sorted(implemented - declared)
     for name in missing:
         problems.append(f'{path}: {name} is implemented but never declared')
+
+    # 2. A statement stranded at the top level of the implementation
+    #    section. Comments and directives are already blanked by
+    #    strip_comments_and_strings, so they neither trip the rule nor
+    #    hide a line that should.
+    lines = code.split('\n')
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(r'^implementation\b', line, re.I):
+            start = i + 1
+            break
+    # No implementation section: a program's main block legitimately has
+    # statements at the top level, so the rule does not apply there.
+    after_end = 0
+    for i in range(len(lines) if start is None else start, len(lines)):
+        line = lines[i].rstrip()
+        if not line.strip():
+            continue
+        if after_end and (line[0] in ' \t'):
+            problems.append(
+                f'{path}:{i + 1}: statement stranded at the top level '
+                f'(indented code after a column-0 "end;") -- '
+                f'{line.strip()[:60]}')
+        after_end = line == 'end;'
 
     return problems
 

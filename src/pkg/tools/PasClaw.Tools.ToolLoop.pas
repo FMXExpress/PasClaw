@@ -28,6 +28,7 @@ uses
   PasClaw.Agent.Steering,
   PasClaw.Identity,
   PasClaw.Stream.Reliability,
+  PasClaw.Permissions,   { the ordered allow/deny/ask gate + TPermAskFn }
   PasClaw.Config;   { TConfig + SetActiveConfig for the per-dispatch override }
 
 type
@@ -35,6 +36,13 @@ type
     Provider:      ILLMProvider;
     Registry:      TToolRegistry;
     Model:         string;
+    (* Model was chosen for THIS turn on purpose -- a slash skill's
+       `model:` -- so the auto-router leaves the turn alone
+       (ApplyAutoRoute). Routing would replace it with the easy model,
+       and re-applying it afterwards would send a model name meant for
+       this provider to the cheap one. False (the Default) routes as
+       before. *)
+    ModelPinned:   Boolean;
     MaxIterations: Integer;
     Options:       TChatOptions;
     OnText:        procedure(const S: string) of object;   { streaming-ish stdout }
@@ -192,6 +200,20 @@ type
        records rounds, pass/fail counts and Verified. *)
     ScenariosDir:    string;
     VerifyMaxRounds: Integer;
+    (* Who answers when a permission rule says "ask". Called on the
+       dispatching thread and expected to block until a human answers
+       (TUI footer, CLI prompt, gateway permission_request event, the
+       component's OnAsk). nil means nobody is there, and an ask rule
+       then refuses: it must never quietly become allow. "Allow for
+       this session" is remembered under SteeringKey. *)
+    OnAsk:          TPermAskFn;
+    (* The directory this loop's tools work in, when it is not the
+       process-wide sandbox workspace: a subagent given a git worktree.
+       DispatchOneToolCall sets it as the thread's sandbox workspace
+       around every dispatch (loop thread and parallel workers alike)
+       and restores the previous value after, so relative paths, the
+       write boundary and the shell cwd all point here. '' = inherit. *)
+    Workspace:      string;
     { Bounded same-provider retry on a transient HTTP status. 0 disables.
       Populated from TConfig; see the field comments there for why this
       excludes status <= 0. }
@@ -298,6 +320,20 @@ type
        Cfg.DisableProgressLedger. *)
     LedgerSummary: string;
   end;
+
+type
+  PToolLoopConfig = ^TToolLoopConfig;
+
+{ The BackgroundDrainKey of the dispatch in flight on the calling thread,
+  '' outside one. spawn_background stamps each job with it so a gateway,
+  which runs many sessions through one registry, delivers each job's result
+  to the session that started it. }
+function CurrentDispatchDrainKey: string;
+
+{ An IToolDispatcher applying this loop's gates (see PasClaw.Tools.Registry.
+  IToolDispatcher). The RPC path obtains one via GCaptureDispatcher inside a
+  dispatch; this is the direct constructor for tests. }
+function MakeLoopDispatcher(const Cfg: TToolLoopConfig): IToolDispatcher;
 
 function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
@@ -410,7 +446,8 @@ uses
   PasClaw.Promptware,       { injection scan on tool results -- chokepoint 1 }
   PasClaw.Tools.PlanWrite,  { ResolvePlanPath -- the SPACE-mode gate key }
   PasClaw.Agent.Verify,     { held-out scenarios after the final answer }
-  PasClaw.Tools.Sandbox,    { CurrentWorkspace -- the scenarios' cwd }
+  PasClaw.Tools.Sandbox,    { SetThreadSandboxWorkspace -- Cfg.Workspace per dispatch;
+                              CurrentWorkspace -- the scenarios' cwd }
   PasClaw.Utils,            { NowStampWithZone -- the per-turn clock }
   PasClaw.Otel;             (* agent.turn / chat / execute_tool spans.
                                All helpers are no-ops when OTel is
@@ -739,6 +776,58 @@ end;
    SetThreadWorkspace. *)
 threadvar
   GSpacePlanDone: Boolean;
+  (* The config of the dispatch in flight on this thread, published for
+     the duration of the handler. Two readers: CaptureLoopDispatcher, so
+     execute_code can hand its RPC server a dispatcher that applies these
+     same gates; and CurrentDispatchDrainKey, so spawn_background can stamp
+     a job with the session it must report back to. Borrowed pointer into
+     RunToolLoop's frame; valid only while the handler runs, which is the
+     only time it is read. *)
+  GDispatchingCfg: PToolLoopConfig;
+
+function CurrentDispatchDrainKey: string;
+begin
+  if GDispatchingCfg = nil then Result := ''
+  else Result := GDispatchingCfg^.BackgroundDrainKey;
+end;
+
+{ True = proceed. False = refused; Refusal holds the tool result. }
+function PermissionGate(const Cfg: TToolLoopConfig; const ToolName, ArgsJSON: string;
+                        out Refusal: string): Boolean;
+var
+  Res: string;
+  Dec: TPermDecision;
+  Ans: TAskAnswer;
+begin
+  Result := True;
+  Refusal := '';
+  Res := ResourceOf(ToolName, ArgsJSON);
+  Dec := Decide(ToolName, Res);
+  case Dec.Effect of
+    peDeny:
+      begin
+        Refusal := PermissionRefusal(ToolName, Res, Dec);
+        Result := False;
+      end;
+    peAsk:
+      begin
+        if SessionAllowed(Cfg.SteeringKey, ToolName, Res) then Exit;
+        if not Assigned(Cfg.OnAsk) then
+        begin
+          Refusal := PermissionAskRefusal(ToolName, Res, True);
+          Exit(False);
+        end;
+        Ans := Cfg.OnAsk(ToolName, ArgsJSON, Res, PermissionAskReason(Dec));
+        case Ans of
+          aaAllowOnce: ;
+          aaAllowSession: RememberSessionAllow(Cfg.SteeringKey, ToolName, Res);
+        else
+          Refusal := PermissionAskRefusal(ToolName, Res, False);
+          Result := False;
+        end;
+      end;
+  end;
+end;
 
 procedure DispatchOneToolCall(const Cfg: TToolLoopConfig;
                                var D: TToolCallDispatch);
@@ -747,6 +836,8 @@ var
   ArgsObj: TJsonObject;
   HasUnsup: Boolean;
   PlanTool: TTool;
+  SavedCfg: PToolLoopConfig;
+  SavedWs: string;
 begin
   { Publish this run's config to the dispatching thread (loop thread for
     serial/mutating tools, worker thread for parallel read-only ones) so any
@@ -754,6 +845,10 @@ begin
     kb) honours it. nil => LoadEffectiveConfig falls back to disk LoadConfig.
     Cleared in the finally so it never lingers past this call. }
   SetActiveConfig(Cfg.ActiveConfig);
+  SavedCfg := GDispatchingCfg;
+  GDispatchingCfg := @Cfg;
+  SavedWs := ThreadSandboxWorkspace;
+  if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(Cfg.Workspace);
   try
   D.Err        := '';
   D.ResultText := '';
@@ -792,6 +887,14 @@ begin
     D.ResultText := SpaceModeRefusal(D.Call.Func.Name);
     Exit;
   end;
+  (* Ordered permissions (PasClaw.Permissions). After the mode gates,
+     before preflight: policies.json first, then config.json's rules,
+     last match wins. Deny and a declined ask land in ResultText with
+     Err empty, like the mode refusals, so the explanation reaches the
+     model verbatim. An allow here is only an opinion -- the sandbox
+     denylist and the family switches still run inside the tool. *)
+  if not PermissionGate(Cfg, D.Call.Func.Name, RetryArgs, D.ResultText) then
+    Exit;
   if not PreflightToolCall(D.Call.Func.Name, RetryArgs, D.Err) then
     D.ResultText := ''
   else if Cfg.Registry <> nil then
@@ -850,6 +953,8 @@ begin
       D.Err := 'format_error: unable to canonicalize patch for deterministic retry; regenerate patch intent or use safer apply-patch/unified-diff edit path. original=' + D.Err;
   end;
   finally
+    if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(SavedWs);
+    GDispatchingCfg := SavedCfg;
     SetActiveConfig(nil);
   end;
 end;
@@ -1605,6 +1710,74 @@ function CompactModelOf(const Cfg: TToolLoopConfig): string;
 begin
   if Trim(Cfg.CompactModel) <> '' then Result := Trim(Cfg.CompactModel)
   else Result := Cfg.Model;
+end;
+
+{ ----------------------- gated dispatch for the tool RPC ----------------- }
+
+type
+  (* IToolDispatcher over this loop's config: what an execute_code script's
+     `pasclaw __tool` goes through instead of a bare Registry.RunTool. Holds
+     a COPY of the config (interfaces and arrays are refcounted, so the copy
+     keeps the provider and hooks alive) because the RPC server runs it on
+     Indy threads after the capturing dispatch has moved on. Applies, in
+     the loop's order: BeforeToolCall hooks (a Cancel becomes the result),
+     DispatchOneToolCall (mode gates, preflight, the handler),
+     AfterToolResult hooks, the promptware scan, and the output cap. Not
+     applied: the per-turn read dedup and the JSON condenser -- those are
+     about what rides in the model's history, and a script's intermediate
+     result does not. *)
+  TLoopDispatcher = class(TInterfacedObject, IToolDispatcher)
+  private
+    FCfg: TToolLoopConfig;
+  public
+    constructor Create(const ACfg: TToolLoopConfig);
+    function Dispatch(const Name, ArgsJSON: string; out ErrMsg: string): string;
+  end;
+
+constructor TLoopDispatcher.Create(const ACfg: TToolLoopConfig);
+begin
+  inherited Create;
+  FCfg := ACfg;
+end;
+
+function TLoopDispatcher.Dispatch(const Name, ArgsJSON: string;
+                                  out ErrMsg: string): string;
+var
+  D: TToolCallDispatch;
+  Truncated: Boolean;
+begin
+  Result := '';
+  ErrMsg := '';
+  D := Default(TToolCallDispatch);
+  D.Call.Id := 'rpc';
+  D.Call.Func.Name := Name;
+  D.Call.Func.Arguments := ArgsJSON;
+  if Length(FCfg.Hooks) > 0 then
+    HooksBeforeToolCall(FCfg.Hooks, D.Call, D.Cancelled, D.ResultText);
+  if not D.Cancelled then
+    DispatchOneToolCall(FCfg, D);
+  if Length(FCfg.Hooks) > 0 then
+    HooksAfterToolResult(FCfg.Hooks, D.Call, D.ResultText, D.Err);
+  if D.Err <> '' then
+  begin
+    ErrMsg := D.Err;
+    Exit;
+  end;
+  Result := MaybeFlagPromptware(D.ResultText, 'tool output (' + Name + ', via script)');
+  if (FCfg.ToolOutputCap > 0) and (Length(Result) > FCfg.ToolOutputCap) then
+    Result := StashAndMaybeTruncate(Result, FCfg.ToolOutputCap, Truncated);
+end;
+
+function CaptureLoopDispatcher: IToolDispatcher;
+begin
+  if GDispatchingCfg = nil then Result := nil
+  else Result := TLoopDispatcher.Create(GDispatchingCfg^);
+end;
+
+{ Exposed for tests: the dispatcher a loop with this config would hand out. }
+function MakeLoopDispatcher(const Cfg: TToolLoopConfig): IToolDispatcher;
+begin
+  Result := TLoopDispatcher.Create(Cfg);
 end;
 
 function RunToolLoop(const Cfg: TToolLoopConfig;
@@ -2719,5 +2892,13 @@ begin
     GSpacePlanDone := SavedSpaceGate;
   end;
 end;
+
+initialization
+  { The tool RPC asks for a gated dispatcher through this hook rather than
+    using this unit directly -- PasClaw.Tools.RPC sits below the loop. }
+  GCaptureDispatcher := @CaptureLoopDispatcher;
+
+finalization
+  GCaptureDispatcher := nil;
 
 end.

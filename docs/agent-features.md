@@ -111,7 +111,7 @@ the outcome" [S], and 65% of enterprise AI failures trace to harness defects
 
 | Feature | Field | PasClaw |
 |---|---|---|
-| Per-call approval prompts | Cline, Codex [S] | ⚠️ profile-level [P] |
+| Per-call approval prompts | Cline, Codex [S] | ✅ ordered `permissions` rules (`allow` / `deny` / `ask`, tool + resource globs, last match wins) evaluated at dispatch; `ask` prompts in the TUI footer, on the CLI, as a gateway `permission_request` event answered by `POST /v1/permissions/<id>`, or through the component's `OnAsk`; a separate `policies.json` the config endpoint cannot write is evaluated first [P] |
 | Hooks at tool boundaries (Pre/PostToolUse) | 27-event pipeline [S] | ✅ hook framework [P] |
 | "Lethal trifecta" risk modelling | [S] | ⚠️ promptware scan + network block, not modelled as a triad [P] |
 | Prompt-injection scanning of tool output | rare [K] | ✅ **fired twice during this survey** [P] |
@@ -128,7 +128,7 @@ the outcome" [S], and 65% of enterprise AI failures trace to harness defects
 | Token/cost tracking and budgeting | Aider, Cline [S] | ✅ per-session stats [P] |
 | Drift detection, readiness scoring | Loop Engineering [S] | ❌ |
 | Mid-turn state inspection | [S] | ✅ `pasclaw steer` [P] |
-| Worktree isolation per run | Loop Engineering [S] | ❌ |
+| Worktree isolation per run | Loop Engineering [S] | ✅ `worktree_create` / `list` / `remove`; `spawn` / `spawn_background` take `worktree: "<branch>"` and the child's workspace, write boundary and shell cwd move to that checkout [P] |
 
 ## 9. Inter-agent protocols
 
@@ -256,8 +256,8 @@ edit → PR → human review* is now the same across every major tool [S].
 | Repo-scoped cloud task: assign issue, get a PR | Copilot coding agent (runs in GitHub Actions), Google Jules, Codex cloud [S] | ❌ |
 | Queueable task batches ("five tickets Friday, five PRs Monday") | [S] | ⚠️ cron runs skills, not repo tasks [P] |
 | Agent explores repo, edits, runs tests, opens PR unattended | Copilot [S] | ⚠️ `pasclaw build` does the middle, no VCS integration [P] |
-| **Per-agent git worktree isolation** | Intent — attribution "a property of the workspace itself" [S] | ❌ agents share one workspace |
-| Attribution without span propagation (structural, from the worktree boundary) | [S] | ❌ |
+| **Per-agent git worktree isolation** | Intent — attribution "a property of the workspace itself" [S] | ✅ a subagent spawned with `worktree: "<branch>"` runs in its own checkout (per-thread sandbox workspace, `TToolLoopConfig.Workspace`); sessions record their `location` [P] |
+| Attribution without span propagation (structural, from the worktree boundary) | [S] | ⚠️ the boundary exists (one branch per subagent, commits land there); nothing yet reads it back as attribution [P] |
 | Free-tier background quota as a product lever | Jules: 15 tasks/day [S] | n/a (self-hosted) |
 
 Worktree isolation is the standout: it solves attribution, conflict, and
@@ -485,7 +485,7 @@ field treats as the default.
 | **LSP-backed symbol tools for agents**: find_symbol, find_referencing_symbols, insert_after_symbol | Serena (MCP, 40+ languages) [S] | ❌ text grep only — and this is the concrete form of the "symbol/AST index" gap the survey has ranked #1 since pass 2 |
 | Semantic edit at symbol granularity, not text match | Serena [S] | ❌ `edit_file` is exact-text |
 | Language-server support **including Pascal** | Serena's language list [S] | — meaning the #1 gap has an off-the-shelf MCP answer PasClaw could consume today [P] |
-| tmux as the agent runtime: process isolation, output capture, detach/reattach survival | tmux-agents pattern, "tmux became the runtime for AI agent teams" [S] | ⚠️ shell sessions exist per-session; no detachable live terminal [P] |
+| tmux as the agent runtime: process isolation, output capture, detach/reattach survival | tmux-agents pattern, "tmux became the runtime for AI agent teams" [S] | ⚠️ shell sessions exist per-session; no detachable live terminal. `pasclaw agent --attach` / `tui --attach` make a terminal a client of the running gateway (discovered via `run/gateway.json`), so the gateway owns the session and a terminal can leave and come back; watching a turn another surface started is not in yet [P] |
 | Driving interactive TUIs/REPLs by keystroke + pane read | tmux skills [S] | ❌ |
 | Supervisor over parallel agent panes with test gating | Herdr-style [S] | ⚠️ `spawn_status` is polling, not a live view [P] |
 
@@ -554,6 +554,7 @@ dies at tool 7 of 9 re-runs from the user message.
 | Provider prompt caching (prefix KV reuse) | providers [S] | ✅ breakpoints, 1 h TTL [P] |
 | **Batch tier: −50%, results within 24 h** | OpenAI Batch [S] | ❌ never routed to |
 | **Flex tier: −50% per-request, variable latency** | OpenAI Flex [S] | ❌ |
+| Async shell: long commands run in the background and notify on completion | OpenCode 2.0 [S] | ✅ `shell_background` returns a handle; output lands in the next turn's `[background shell results]` block; `spawn_cancel` kills it and everything it started; TUI footer flash (a printed line in the FPC REPL) + `background_done` desktop event. No "move the running foreground turn to the background" key yet [P] |
 | Tier-aware routing (background work → cheap tier) | FinOps guidance [S] | ✅ `background_model` (falls back to `fast_model`) carries fact distillation, history compaction, the heartbeat, the goals judge and the maintenance review; `pasclaw route report` shows the resulting split. Subagents and cron skills are not yet routed [P] |
 
 The tier rows are the actionable ones. PasClaw already distinguishes

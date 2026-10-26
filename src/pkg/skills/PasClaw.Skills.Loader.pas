@@ -78,9 +78,31 @@ type
     Source:      string;   { absolute path to SKILL.md or the .json file --
                              used by the system prompt so the model can
                              fs_read for the full body }
+    (* Where a prompt skill runs when invoked as a slash command
+       (PasClaw.Skills.Slash). Agent names a configured subagent spec:
+       the rendered prompt is handed to it through the spawn tool.
+       Subagent without Agent runs it in a fresh child loop on the
+       parent's tools. Model overrides the model for that turn either
+       way. All empty/false: the rendered prompt is this turn's user
+       message, as before. *)
+    Agent:       string;
+    Model:       string;
+    Subagent:    Boolean;
   end;
 
   TSkillSpecArray = array of TSkillSpec;
+
+{ Command-style arguments for prompt skills. SplitSkillArgs tokenises
+  like a shell: whitespace separates, "double" and 'single' quotes group,
+  a backslash escapes the next character outside single quotes.
+  RenderSkillArguments substitutes $ARGUMENTS (the whole string), $1..$9
+  (tokens) and $0 (the raw string too); the highest $N the template uses
+  absorbs the rest of the tokens, so a template with $1 and $2 given
+  "staging now please" sees $2 = "now please". Unused $N render ''.
+  TemplateUsesArguments says whether a template has any of these. }
+function SplitSkillArgs(const S: string): TStringArray;
+function RenderSkillArguments(const Template, Arguments: string): string;
+function TemplateUsesArguments(const Template: string): Boolean;
 
 function LoadSkillManifests(const HomeDir: string): TSkillSpecArray;
 procedure RegisterSkills(Reg: TToolRegistry; const Skills: TSkillSpecArray);
@@ -116,6 +138,8 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Platform,
+  PasClaw.Tools.Sandbox,  { ShellAllowed -- a skill's shell is still a shell }
+  PasClaw.Shell.Backend,  { run through the active backend (docker, local) }
   PasClaw.Promptware;   { injection scan on skill descriptions -- chokepoint 3 }
 
 const
@@ -177,19 +201,185 @@ function H_15 (const A: string; out E: string): string; begin Result := RunShell
 var
   SkillHandlers: array[0..MaxSkills - 1] of TToolHandler;
 
+{ ---- command-style arguments ---- }
+
+function SplitSkillArgs(const S: string): TStringArray;
+var
+  i: Integer;
+  Cur: string;
+  InTok, InDq, InSq: Boolean;
+  procedure Flush;
+  begin
+    if not InTok then Exit;
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := Cur;
+    Cur := '';
+    InTok := False;
+  end;
+begin
+  SetLength(Result, 0);
+  Cur := '';
+  InTok := False; InDq := False; InSq := False;
+  i := 1;
+  while i <= Length(S) do
+  begin
+    if InSq then
+    begin
+      if S[i] = '''' then InSq := False else Cur := Cur + S[i];
+    end
+    else if InDq then
+    begin
+      if S[i] = '"' then InDq := False
+      else if (S[i] = '\') and (i < Length(S)) and (S[i + 1] in ['"', '\']) then
+      begin
+        Cur := Cur + S[i + 1];
+        Inc(i);
+      end
+      else Cur := Cur + S[i];
+    end
+    else
+    begin
+      case S[i] of
+        ' ', #9, #10, #13: Flush;
+        '"':  begin InDq := True; InTok := True; end;
+        '''': begin InSq := True; InTok := True; end;
+        '\':
+          begin
+            InTok := True;
+            if i < Length(S) then
+            begin
+              Cur := Cur + S[i + 1];
+              Inc(i);
+            end;
+          end;
+      else
+        InTok := True;
+        Cur := Cur + S[i];
+      end;
+    end;
+    Inc(i);
+  end;
+  Flush;
+end;
+
+function TemplateUsesArguments(const Template: string): Boolean;
+var
+  i: Integer;
+begin
+  Result := Pos('$ARGUMENTS', Template) > 0;
+  if Result then Exit;
+  for i := 1 to Length(Template) - 1 do
+    if (Template[i] = '$') and (Template[i + 1] in ['0'..'9']) then Exit(True);
+end;
+
+{ The highest $1..$9 the template uses: that one absorbs the rest. }
+function HighestArgIndex(const Template: string): Integer;
+var
+  i: Integer;
+begin
+  Result := 0;
+  for i := 1 to Length(Template) - 1 do
+    if (Template[i] = '$') and (Template[i + 1] in ['1'..'9']) then
+      if Ord(Template[i + 1]) - Ord('0') > Result then Result := Ord(Template[i + 1]) - Ord('0');
+end;
+
+(* A $ARGUMENTS / $0..$9 placeholder at Template[i]: True with what it
+   renders to and how many characters it spans. Toks and MaxN come from
+   the argument string and the TEMPLATE -- never from text already
+   substituted -- so a value cannot turn into a placeholder. *)
+function ArgPlaceholderAt(const Template: string; i: Integer;
+                          const Arguments: string; const Toks: TStringArray;
+                          MaxN: Integer; out Value: string; out Len: Integer): Boolean;
+var
+  N: Integer;
+begin
+  Value := '';
+  Len := 0;
+  Result := False;
+  if Template[i] <> '$' then Exit;
+  if Copy(Template, i, 10) = '$ARGUMENTS' then
+  begin
+    Value := Arguments;
+    Len := 10;
+    Exit(True);
+  end;
+  if (i >= Length(Template)) or not (Template[i + 1] in ['0'..'9']) then Exit;
+  N := Ord(Template[i + 1]) - Ord('0');
+  if N = 0 then Value := Arguments
+  else if N <= Length(Toks) then
+  begin
+    if N = MaxN then
+    begin
+      { tokens N..end, rejoined with single spaces }
+      while N <= Length(Toks) do
+      begin
+        if Value <> '' then Value := Value + ' ';
+        Value := Value + Toks[N - 1];
+        Inc(N);
+      end;
+    end
+    else
+      Value := Toks[N - 1];
+  end;
+  Len := 2;
+  Result := True;
+end;
+
+function RenderSkillArguments(const Template, Arguments: string): string;
+var
+  Toks: TStringArray;
+  MaxN, i, Len: Integer;
+  Val: string;
+begin
+  if not TemplateUsesArguments(Template) then Exit(Template);
+  Toks := SplitSkillArgs(Arguments);
+  MaxN := HighestArgIndex(Template);
+  Result := '';
+  i := 1;
+  while i <= Length(Template) do
+    if ArgPlaceholderAt(Template, i, Arguments, Toks, MaxN, Val, Len) then
+    begin
+      Result := Result + Val;
+      Inc(i, Len);
+    end
+    else
+    begin
+      Result := Result + Template[i];
+      Inc(i);
+    end;
+end;
+
+(* {{key}} from the JSON and $ARGUMENTS / $N from its "arguments" string,
+   in ONE pass over the template. Two passes -- keys first, then the
+   argument placeholders over the result -- read a substituted value as
+   template: "Pay {{amount}}" with {"amount":"$50"} became "Pay 0", and a
+   value holding $ARGUMENTS pulled the arguments in. (Codex P2 on #614.)
+   Only placeholders written in the template are placeholders. *)
 function RenderTemplate(const Template, ArgsJSON: string): string;
 var
   Obj: TJsonObject;
   Out_: string;
-  i: Integer;
-  Token, Key, Value: string;
-  InToken: Boolean;
+  i, MaxN, Len: Integer;
+  Token, Key, Value, Arguments: string;
+  Toks: TStringArray;
+  InToken, UsesArgs: Boolean;
 begin
   Result := Template;
   if (Template = '') or (ArgsJSON = '') then Exit;
   Obj := TJsonObject.Parse(ArgsJSON);
   if Obj = nil then Exit;
   try
+    { Command-style arguments ride in as one string ("arguments"), the
+      way a slash invocation or a model call with a single free-text
+      argument supplies them. }
+    Arguments := Obj.GetStr('arguments', '');
+    UsesArgs := TemplateUsesArguments(Template);
+    MaxN := 0;
+    if UsesArgs then
+    begin
+      Toks := SplitSkillArgs(Arguments);
+      MaxN := HighestArgIndex(Template);
+    end;
     Out_ := '';
     Token := '';
     InToken := False;
@@ -214,6 +404,13 @@ begin
         Inc(i, 2);
         Continue;
       end;
+      if (not InToken) and UsesArgs and
+         ArgPlaceholderAt(Template, i, Arguments, Toks, MaxN, Value, Len) then
+      begin
+        Out_ := Out_ + Value;
+        Inc(i, Len);
+        Continue;
+      end;
       if InToken then Token := Token + Template[i]
       else Out_ := Out_ + Template[i];
       Inc(i);
@@ -234,25 +431,25 @@ begin
      the CONFIG default and write into the wrong world. $PASCLAW_WORKSPACE
      is the variable the resolver already honours, and passing it as
      child-only env means it applies to exactly this spawn -- nothing
-     process-global changes, so concurrent requests cannot be polluted. *)
-  if ThreadWorkspace <> '' then
-  begin
-    Env := TStringList.Create;
-    try
+     process-global changes, so concurrent requests cannot be polluted.
+
+     Through the active shell backend, not the host shell directly: with
+     the docker backend configured, a skill's command must run inside the
+     container like shell_exec's does, or the sandbox has a side door. *)
+  Env := TStringList.Create;
+  try
+    if ThreadWorkspace <> '' then
       Env.Add('PASCLAW_WORKSPACE=' + ThreadWorkspace);
-      ExitCode := RunOneShotWithEnv(Cmd, '', Env, Result);
-    finally
-      Env.Free;
-    end;
-  end
-  else
-    ExitCode := RunOneShot(Cmd, Result);
+    ExitCode := RunOneShotWithEnvViaBackend(GetCurrentSessionId, Cmd, '', Env, Result);
+  finally
+    Env.Free;
+  end;
 end;
 
 function RunShellSkill(Slot: Integer; const ArgsJSON: string; out ErrMsg: string): string;
 var
   Spec: TSkillSpec;
-  Cmd: string;
+  Cmd, Reason: string;
   ExitCode: Integer;
 begin
   ErrMsg := '';
@@ -271,6 +468,16 @@ begin
   if Cmd = '' then
   begin
     ErrMsg := 'empty shell template after rendering';
+    Exit('');
+  end;
+  (* The rendered command is subject to the same denylist and workspace
+     rules as shell_exec. The template is operator-authored, but its
+     placeholders are filled from the model's arguments, and a remove
+     command with a model-chosen path is the case the denylist exists
+     for. *)
+  if not ShellAllowed(Cmd, Reason) then
+  begin
+    ErrMsg := 'skill ' + Spec.Name + ': ' + Reason;
     Exit('');
   end;
   LogDebug('skill[%s]: %s', [Spec.Name, Copy(Cmd, 1, 200)]);
@@ -423,6 +630,9 @@ begin
     Spec.Prompt      := '';
     Spec.Dir         := ExtractFileDir(SourcePath);
     Spec.Source      := SourcePath;
+    Spec.Agent       := '';
+    Spec.Model       := '';
+    Spec.Subagent    := False;
 
     InFrontmatter := True;
     for i := StartIdx + 1 to EndIdx - 1 do
@@ -440,6 +650,13 @@ begin
       else if Key = 'schema'      then
       begin
         if Value <> '' then Spec.Schema := Value;
+      end
+      else if Key = 'agent'       then Spec.Agent := Trim(Value)
+      else if Key = 'model'       then Spec.Model := Trim(Value)
+      else if Key = 'subagent'    then
+      begin
+        Value := LowerCase(Trim(Value));
+        Spec.Subagent := (Value = 'true') or (Value = 'yes') or (Value = '1') or (Value = 'on');
       end;
     end;
 
@@ -609,8 +826,20 @@ begin
     Tool.Name        := 'skill_' + Skills[i].Name;
     Tool.Description := Skills[i].Description;
     Tool.Schema      := Skills[i].Schema;
+    { A template that takes $ARGUMENTS / $1.. and declared no schema of
+      its own gets a one-string schema, so the model can call it with
+      the same free text a slash command would carry. }
+    if ((Tool.Schema = '') or (Tool.Schema = '{"type":"object"}')) and
+       TemplateUsesArguments(Skills[i].Prompt + Skills[i].Shell) then
+      Tool.Schema := '{"type":"object","properties":{"arguments":{"type":"string",' +
+                     '"description":"Free-text arguments, as after a slash command: ' +
+                     'fills $ARGUMENTS and $1.. in the template."}}}';
     Tool.Handler     := SkillHandlers[Slot];
     Tool.IsCore      := False;
+    { A shell skill changes the world; a prompt skill only renders text.
+      Left unset, plan mode let shell skills through. }
+    if K = 'shell' then Tool.Category := tcMutating
+    else Tool.Category := tcReadOnly;
     Reg.Register(Tool);
     LogDebug('skills: registered %s (slot=%d, kind=%s)', [Skills[i].Name, Slot, K]);
   end;

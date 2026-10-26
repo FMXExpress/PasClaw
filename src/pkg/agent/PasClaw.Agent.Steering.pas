@@ -137,6 +137,10 @@ var
   Info: TSearchRec;
 begin
   Waited := 0;
+  { The lock is a directory INSIDE the steering dir; without the parent,
+    CreateDir fails for a reason no amount of waiting fixes, and the
+    stale check below never runs. Make the parent, then contend. }
+  EnsureSteeringDir;
   while Waited < LOCK_MAX_WAIT_MS do
   begin
     if CreateDir(LockDir) then Exit(True);
@@ -314,8 +318,43 @@ begin
   SetLength(Result, 0);
   Path := SteeringPath(SessionKey);
   if Path = '' then Exit;
-
   Lock := LockPath(SessionKey);
+  (* Fast path, and the one that matters: the tool loop drains at EVERY
+     iteration top, and almost every iteration has nothing queued. Taking
+     the lock first cost 2,000 ms per iteration whenever the steering
+     directory did not exist yet (a fresh home, a gateway nobody has
+     steered): CreateDir on the lock path failed with ENOENT, the stale
+     check could not run, and AcquireLock spun out its full wait. Measured
+     on bench/ragbench: 2,012 ms of a 2,040 ms gap between a model's
+     answer and its next request, on every turn.
+
+     The LOCK is half the question, and leaving it out was a bug.
+     PushSteering takes the lock BEFORE it creates the queue file, so
+     "no file" does not mean "nothing queued" -- it equally means "a
+     writer is between its lock and its write". Exiting then let the
+     turn carry on without a steer the user had already sent, and if
+     that iteration's response carried no tool calls the loop ended and
+     the message waited for the NEXT turn: the one thing steering
+     exists to prevent. Before the fast path, AcquireLock blocked on
+     that push and the same iteration drained it.
+
+     So the fast path asks for both: no file AND nobody holding the
+     lock. That keeps the whole win -- the hot case is a key nobody has
+     ever steered, which has neither -- and falls back to contending
+     for the lock exactly when someone is mid-push. (Codex P2 on #617.)
+
+     The LOCK is checked first, and the order is the point. File first
+     left a window: a push holding the lock when we looked for the file
+     could write it and let go before we looked for the lock, so both
+     checks came back empty and the message missed this iteration after
+     all. Lock first, a push holding it now sends us to wait for it; one
+     that takes the lock after this check started after we looked, and
+     its file is either already there for the second check (we drain it)
+     or picked up next iteration -- exactly as a contended lock already
+     behaves. Pascal's "and" short-circuits left to right, so this is
+     the order the two run in. *)
+  if (not DirectoryExists(Lock)) and (not FileExists(Path)) then Exit;
+
   if not AcquireLock(Lock) then
   begin
     { Benign and self-healing: we never renamed the queue file, so the
