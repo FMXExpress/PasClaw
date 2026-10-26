@@ -78,6 +78,7 @@ pasclaw agent --system "Be concise" --thinking medium \
               --max-tokens 2048 --max-iterations 25
 pasclaw agent --no-tools --no-mcp --no-hashline
 pasclaw agent --session 20260601T093015-1a2b3c4d            # resume by id
+pasclaw agent --scenarios ./scenarios -m "..."              # held-out checks judge "done"
 pasclaw agent --quiet -m "..."                              # machine-readable
 pasclaw agent --backend docker -m "..."                     # per-run override
 pasclaw agent --plan -m "review the gateway auth flow"      # read-only Plan mode

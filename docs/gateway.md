@@ -49,9 +49,9 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/logs` | GET | SSE tail of the gateway log buffer (1000-entry ring); recent buffer dumps first, then live. |
 | `/v1/models` | GET | OpenAI-compatible model list containing the configured default model. |
 | `/v1/stats` | GET | 5-second-cached aggregate of per-session counters (opt-in via `stats_collection_enabled`). |
-| `/v1/chat` | POST | PasClaw JSON chat endpoint accepting `{"message":"..."}`. |
-| `/v1/chat/completions` | POST | OpenAI Chat Completions-compatible. Streams with `stream: true`. |
-| `/v1/responses` | POST | OpenAI Responses-compatible. String or message-array `input`. Non-streaming only. |
+| `/v1/chat` | POST | PasClaw JSON chat endpoint accepting `{"message":"..."}`. With `verification.scenarios` configured the response carries `verification: {ok, rounds, passed, failed, summary}`, the result of the held-out checks PasClaw ran after the model's final answer. |
+| `/v1/chat/completions` | POST | OpenAI Chat Completions-compatible. Streams with `stream: true`. With `verification.scenarios` configured, an answer whose held-out checks still fail ends with `[verification: … -- this answer is NOT verified …]`, streamed or not, and a non-streaming reply also carries the `verification` object. |
+| `/v1/responses` | POST | OpenAI Responses-compatible. String or message-array `input`. Streams with `stream: true`. Held-out verification is reported as on `/v1/chat/completions` when PasClaw runs the tool loop (no client-supplied `tools`). |
 | `/v1/permissions` | GET | Permission requests waiting for an answer (`{"pending":[{id, session, tool, resource, args, reason}]}`). A request appears when a `permissions` rule says `ask` during a turn; the same object is published as a `permission_request` desktop event. |
 | `/v1/permissions/<id>` | POST | Answer one: `{"answer":"allow"}` (once), `"session"` (remember for that session), or `"deny"`. 404 once it has been answered or has timed out (`permissions_ask_timeout_sec`, then deny). With no desktop-events subscriber connected an `ask` denies immediately. See [Security → Permissions](./security.md#permissions-ordered-rules). |
 | `/mcp`, `/v1/mcp/rpc` | POST | MCP JSON-RPC endpoint when PasClaw is acting as an MCP server. |

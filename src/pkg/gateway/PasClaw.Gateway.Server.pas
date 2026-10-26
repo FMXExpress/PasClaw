@@ -641,6 +641,7 @@ implementation
 
 uses
   PasClaw.Workspaces,
+  PasClaw.Agent.Verify,   { FormatVerificationNotice -- every route says when a turn is NOT verified }
   DateUtils,
   {$IFDEF FPC}{$IFDEF UNIX}BaseUnix,{$ENDIF}{$ENDIF}
   { Windows API for IsRestrictedFsPath's reparse-point resolution
@@ -5340,6 +5341,12 @@ begin
     prepended to fallbacks) is local to this turn. No-op unless enabled. }
   LocalCfg := Cfg;
   ApplyAutoRoute(LocalCfg, FCfg, Messages, RoutedNm);
+  { Held-out verification from config, for every gateway chat path. }
+  if LocalCfg.ScenariosDir = '' then
+  begin
+    LocalCfg.ScenariosDir    := ResolveScenariosDir(FCfg);
+    LocalCfg.VerifyMaxRounds := FCfg.Verification.MaxRounds;
+  end;
 
   { Working-state flush at compaction time -- see TCompactFlush for
     why the gateway flushes here and nowhere else. Wired centrally so
@@ -6189,7 +6196,7 @@ procedure TGatewayServer.HandleChat(ARequest: TIdHTTPRequestInfo;
 var
   Body, Prompt: string;
   Bytes: TBytes;
-  Req, RespJ: TJsonObject;
+  Req, RespJ, VerJ: TJsonObject;
   Msgs: TMessageArray;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
@@ -6326,6 +6333,16 @@ begin
     RespJ.PutInt('iterations',    Loop.Iterations);
     RespJ.PutInt('input_tokens',  Loop.LastResp.Usage.InputTokens);
     RespJ.PutInt('output_tokens', Loop.LastResp.Usage.OutputTokens);
+    if Loop.VerifyRounds > 0 then
+    begin
+      VerJ := TJsonObject.Create;
+      VerJ.PutBool('ok',      Loop.Verified);
+      VerJ.PutInt ('rounds',  Loop.VerifyRounds);
+      VerJ.PutInt ('passed',  Loop.VerifyPassed);
+      VerJ.PutInt ('failed',  Loop.VerifyFailed);
+      VerJ.PutStr ('summary', Loop.VerifyReport);
+      RespJ.PutObject('verification', VerJ);
+    end;
     WriteJSON(AResp, 200, RespJ.ToJSON);
   finally
     RespJ.Free;
@@ -7419,6 +7436,46 @@ begin
     Result := Result + Alphabet[1 + Random(Length(Alphabet))];
 end;
 
+(* Held-out verification on the gateway routes that answer with text.
+
+   RunCheckpointedLoop turns verification on for every chat path, but
+   only /v1/chat read the result. /v1/chat/completions and /v1/responses
+   handed back the model's last answer with an ordinary completed status
+   even when the operator's checks still failed after the last round --
+   an unqualified "done" from the routes most clients use. (Codex P1 on
+   #618.) Two things now, on every such route:
+
+     - AppendVerificationNotice: when verification ran and failed, the
+       answer text itself ends with "[verification ... -- this answer is
+       NOT verified ...]". That reaches every client, streaming or not,
+       including one that ignores fields it does not know.
+     - VerificationJSON: the same object /v1/chat returns (ok, rounds,
+       passed, failed, summary), added to a non-streaming reply. nil when
+       verification never ran, so a gateway without scenarios answers
+       exactly as before. *)
+procedure AppendVerificationNotice(var Content: string; const Loop: TToolLoopResult);
+var
+  Notice: string;
+begin
+  Notice := FormatVerificationNotice(Loop.Verified, Loop.VerifyRounds, Loop.VerifyReport);
+  if Notice = '' then Exit;
+  Content := TrimRight(Content);
+  if Content <> '' then Content := Content + #10#10;
+  Content := Content + Notice;
+end;
+
+function VerificationJSON(const Loop: TToolLoopResult): TJsonObject;
+begin
+  Result := nil;
+  if Loop.VerifyRounds <= 0 then Exit;
+  Result := TJsonObject.Create;
+  Result.PutBool('ok',      Loop.Verified);
+  Result.PutInt ('rounds',  Loop.VerifyRounds);
+  Result.PutInt ('passed',  Loop.VerifyPassed);
+  Result.PutInt ('failed',  Loop.VerifyFailed);
+  Result.PutStr ('summary', Loop.VerifyReport);
+end;
+
 function BuildOpenAICompletion(const Id, Model, Content: string;
                                 Usage: TUsageInfo;
                                 const FinishReason: string): TJsonObject;
@@ -7946,7 +8003,7 @@ var
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
   RawTemp: Double;
-  ReplyObj: TJsonObject;
+  ReplyObj, VerObj: TJsonObject;
   Streamer: TSSEStreamer;
   StreamStarted, StreamClosed: Boolean;
   ActivityCollector: TToolActivityCollector;
@@ -8362,6 +8419,7 @@ begin
                  [Loop.Iterations, Loop.LastResp.Usage.InputTokens,
                   Loop.LastResp.Usage.OutputTokens, FinishReason, Loop.Content]);
       if FDebugIO then LogDebug('chat/completions -> 200 SSE (final)');
+      AppendVerificationNotice(Loop.Content, Loop);   { held-out checks failed: say so in the answer }
       Streamer.Finalize(Loop.Content, FinishReason);
       StreamClosed := Streamer.Closed;
       except
@@ -8459,10 +8517,13 @@ begin
                 Loop.LastResp.Usage.OutputTokens, FinishReason, Loop.Content]);
 
     Loop.Content := PrependToolActivity(ActivityCollector, Loop.Content);
+    AppendVerificationNotice(Loop.Content, Loop);   { held-out checks failed: say so in the answer }
 
     ReplyObj := BuildOpenAICompletion(CompId, ReqModel, Loop.Content,
                                        Loop.LastResp.Usage, FinishReason);
     try
+      VerObj := VerificationJSON(Loop);   { and the same object /v1/chat returns }
+      if VerObj <> nil then ReplyObj.PutObject('verification', VerObj);
       if FDebugIO then LogDebug('chat/completions -> 200 JSON: %s', [ReplyObj.ToJSON]);
       WriteJSON(AResp, 200, ReplyObj.ToJSON);
     finally
@@ -9494,7 +9555,8 @@ procedure TGatewayServer.HandleResponses(AContext: TIdContext;
 var
   Body, ReqModel, InputText, FinishReason, RespId, ItemType: string;
   Bytes: TBytes;
-  Req, InputObj, ReplyObj, ErrObj, ToolObj: TJsonObject;
+  Req, InputObj, ReplyObj, ErrObj, ToolObj, VerObj: TJsonObject;
+  RanLoop: Boolean;   { the internal tool loop ran, so Loop holds a result }
   InputArr, ToolsArrIn: TJsonArray;
   Msgs: TMessageArray;
   i, MsgCount, j: Integer;
@@ -9664,6 +9726,7 @@ var
 begin
   AWasStreamingRequest := False;
   AResponseStarted := False;
+  RanLoop := False;
   Body := '';
   SetLength(Msgs, 0);
   MsgCount := 0;
@@ -10106,6 +10169,10 @@ begin
                 [FinishReason, Loop.Iterations]);
       end;
 
+      { Held-out checks that still fail after the last round: the answer
+        says so, streamed or not (Codex P1 on #618). }
+      AppendVerificationNotice(Loop.Content, Loop);
+      RanLoop := True;
       OutContent := Loop.Content;
       SetLength(OutToolCalls, 0);   { internal loop consumed any tool calls }
       OutUsage   := Loop.LastResp.Usage;
@@ -10121,6 +10188,11 @@ begin
       ReplyObj := BuildResponsesObject(RespId, ReqModel, 'completed', OutContent,
                                         OutToolCalls, ToolsRawJSON, OutUsage);
       try
+        if RanLoop then
+        begin
+          VerObj := VerificationJSON(Loop);   { the same object /v1/chat returns }
+          if VerObj <> nil then ReplyObj.PutObject('verification', VerObj);
+        end;
         if FDebugIO then LogDebug('responses -> 200 JSON: %s', [ReplyObj.ToJSON]);
         WriteJSON(AResp, 200, ReplyObj.ToJSON);
       finally

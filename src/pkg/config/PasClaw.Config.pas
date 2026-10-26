@@ -323,6 +323,16 @@ type
   end;
 
   (* `pasclaw backup` -- where the zips go and how many to keep. *)
+  (* Held-out verification (PasClaw.Agent.Verify). ScenariosDir holds
+     executable checks the agent never sees; after the model's final
+     answer the tool loop runs them with the workspace as cwd and feeds
+     failures back as one more turn, up to MaxRounds. A relative dir is
+     under <home>. '' (default) = off. *)
+  TVerificationConfig = record
+    ScenariosDir: string;
+    MaxRounds:    Integer;
+  end;
+
   TBackupConfig = record
     Dir:         string;    { '' = <home>/backups }
     KeepDaily:   Integer;   { default 7 }
@@ -959,6 +969,7 @@ type
     BackgroundModel:       string;
     Maintenance:           TMaintenanceConfig;
     Backup:                TBackupConfig;
+    Verification:          TVerificationConfig;
     (* Wall-clock bound, in seconds, on every shell_exec / execute_code /
        shell-skill command. Before this there was none: a command that
        never returned hung the turn for good. On expiry the child is
@@ -1093,6 +1104,10 @@ function LoadConfig: TConfig; overload;
    switches provider. Callers do
      M := BackgroundModelFor(Cfg); if M = '' then M := TheirModel;
    so a config with neither key behaves exactly as before. *)
+{ verification.scenarios as an absolute directory ('' when off); a
+  relative setting lives under <home>. }
+function ResolveScenariosDir(Cfg: TConfig): string;
+
 function BackgroundModelFor(Cfg: TConfig): string;
 (* BackgroundModelFor, but only when the work runs on the default provider.
    background_model / fast_model are names on THAT provider; handing one to
@@ -1461,6 +1476,8 @@ begin
   Backup.KeepWeekly  := 4;
   Backup.KeepMonthly := 6;
   Backup.IncludeSecrets := True;   { see the field comment: a backup should restore the integrations too }
+  Verification.ScenariosDir := '';  { off until the operator points at a scenarios dir }
+  Verification.MaxRounds    := 2;
   ShellTimeoutSec        := 600;   { ten minutes; long enough for a build, short enough to notice }
   MCPCodeModeDefault     := True;  { MCP tools are script-callable by default; see TMCPServer.CodeMode }
   BackgroundJobsMax      := 6;     { subagents + background shells, per coordinator }
@@ -2192,6 +2209,18 @@ begin
       Root.PutObject('compaction', Tmp);
     end;
 
+    if (Verification.ScenariosDir <> '') or (Verification.MaxRounds <> 2) then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutStr('scenarios', Verification.ScenariosDir);
+        Tmp.PutInt('max_rounds', Verification.MaxRounds);
+        Root.PutObject('verification', Tmp);
+      finally
+        Tmp.Free;
+      end;
+    end;
+
     Arr := TJsonArray.Create;
     for i := 0 to High(Crons) do
     begin
@@ -2470,6 +2499,15 @@ begin
     MemoryCoreBudgetBytes := Integer(Root.GetInt('memory_core_budget_bytes', MemoryCoreBudgetBytes));
     if MemoryCoreBudgetBytes < 0 then MemoryCoreBudgetBytes := 0;
     BackgroundModel      := Trim(Root.GetStr('background_model', BackgroundModel));
+    Obj := Root.ChildObject('verification');
+    if Obj <> nil then
+    try
+      Verification.ScenariosDir := Trim(Obj.GetStr('scenarios', Verification.ScenariosDir));
+      Verification.MaxRounds    := Integer(Obj.GetInt('max_rounds', Verification.MaxRounds));
+      if Verification.MaxRounds < 1 then Verification.MaxRounds := 1;
+    finally
+      Obj.Free;
+    end;
     ShellTimeoutSec      := Integer(Root.GetInt('shell_timeout_sec', ShellTimeoutSec));
     if ShellTimeoutSec < 0 then ShellTimeoutSec := 0;
     BackgroundJobsMax    := Integer(Root.GetInt('background_jobs_max', BackgroundJobsMax));
@@ -2844,6 +2882,20 @@ begin
   H := GetEnvironmentVariable(EnvHome);
   if H <> '' then Exit(H);
   Result := JoinPath(HomeDir, '.pasclaw');
+end;
+
+function ResolveScenariosDir(Cfg: TConfig): string;
+begin
+  Result := '';
+  if (Cfg = nil) or (Trim(Cfg.Verification.ScenariosDir) = '') then Exit;
+  Result := Trim(Cfg.Verification.ScenariosDir);
+  {$IFDEF MSWINDOWS}
+  if not (((Length(Result) >= 2) and (Result[2] = ':')) or (Result[1] = '\') or (Result[1] = '/')) then
+  {$ELSE}
+  if Result[1] <> '/' then
+  {$ENDIF}
+    Result := JoinPath(GetHome, Result);
+  Result := ExcludeTrailingPathDelimiter(ExpandFileName(Result));
 end;
 
 function BackgroundModelFor(Cfg: TConfig): string;

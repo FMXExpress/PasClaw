@@ -192,6 +192,14 @@ type
        set this to ~8192 and register the OutputCache tool on the
        same registry. *)
     ToolOutputCap:  Integer;
+    (* Held-out verification (PasClaw.Agent.Verify). When ScenariosDir is
+       set, the loop runs the scenarios there after the model's final
+       answer, with the sandbox workspace as cwd; a failing round is fed
+       back as one more user turn and the loop continues, for at most
+       VerifyMaxRounds rounds (0 = DefaultVerifyMaxRounds). The result
+       records rounds, pass/fail counts and Verified. *)
+    ScenariosDir:    string;
+    VerifyMaxRounds: Integer;
     (* Who answers when a permission rule says "ask". Called on the
        dispatching thread and expected to block until a human answers
        (TUI footer, CLI prompt, gateway permission_request event, the
@@ -282,6 +290,15 @@ type
        the limit -- reply to continue" notice (FormatMaxIterNotice) instead
        of presenting the partial output as a completed answer. *)
     HitMaxIterations: Boolean;
+    (* Held-out verification outcome. VerifyRounds = 0 when no scenarios
+       were configured. Verified is True only when the last round passed
+       every scenario; VerifyReport is the one-line summary of that round
+       (surfaces print it beside the answer). *)
+    VerifyRounds:  Integer;
+    VerifyPassed:  Integer;
+    VerifyFailed:  Integer;
+    Verified:      Boolean;
+    VerifyReport:  string;
     (* Set True when ShouldCancel asked the loop to stop. Distinct from
        HitMaxIterations: that one means "unfinished, probably needs
        another turn", this one means "an operator stopped it", and a
@@ -428,7 +445,9 @@ uses
   PasClaw.Condense.JSON,
   PasClaw.Promptware,       { injection scan on tool results -- chokepoint 1 }
   PasClaw.Tools.PlanWrite,  { ResolvePlanPath -- the SPACE-mode gate key }
-  PasClaw.Tools.Sandbox,    { SetThreadSandboxWorkspace -- Cfg.Workspace per dispatch }
+  PasClaw.Agent.Verify,     { held-out scenarios after the final answer }
+  PasClaw.Tools.Sandbox,    { SetThreadSandboxWorkspace -- Cfg.Workspace per dispatch;
+                              CurrentWorkspace -- the scenarios' cwd }
   PasClaw.Utils,            { NowStampWithZone -- the per-turn clock }
   PasClaw.Otel;             (* agent.turn / chat / execute_tool spans.
                                All helpers are no-ops when OTel is
@@ -1809,6 +1828,8 @@ var
   ReadPaths, ReadHashes: TArray<string>;   { per-turn read-dedup state (C3) }
   Steers: TSteeringMessageArray;
   TruncRetries: Integer;      { truncation-recovery: retries spent so far }
+  VerifyRound, VerifyMax: Integer;   { held-out scenario rounds run / allowed }
+  VerifyResults: TScenarioResults;
   TruncNudgePending: Boolean; { fold the corrective nudge next iteration }
   OverflowRetries: Integer;   { reactive-compaction retries spent so far }
   LastPruneIter: Integer;     { 0 = never; the "not every turn" gate }
@@ -1899,6 +1920,9 @@ begin
   SetLength(ReadPaths, 0);
   SetLength(ReadHashes, 0);
   TruncRetries := 0;
+  VerifyRound := 0;
+  VerifyMax := Cfg.VerifyMaxRounds;
+  if VerifyMax <= 0 then VerifyMax := DefaultVerifyMaxRounds;
   TruncNudgePending := False;
   OverflowRetries := 0;
   LastPruneIter := 0;
@@ -2460,6 +2484,36 @@ begin
                 'nudging toward tool use, retry %d/%d',
                 [Resp.FinishReason, TruncRetries, MaxTruncRetries]);
         Continue;
+      end;
+      (* Held-out verification: the model says it is done; the operator's
+         scenarios decide. A failing round becomes one more user turn and
+         the loop goes round again (bounded). The final answer that
+         preceded the feedback stays in the history, so the model can see
+         what it claimed. The last allowed round's result is returned
+         either way -- callers read Loop.Verified. *)
+      if (Cfg.ScenariosDir <> '') and (VerifyRound < VerifyMax) then
+      begin
+        Inc(VerifyRound);
+        Loop.Verified := RunScenarios(Cfg.ScenariosDir, CurrentWorkspace, VerifyResults);
+        Loop.VerifyRounds := VerifyRound;
+        Loop.VerifyPassed := CountPassed(VerifyResults);
+        Loop.VerifyFailed := Length(VerifyResults) - Loop.VerifyPassed;
+        { No scenario to run is a configuration mistake: Verified is False
+          (RunScenarios), the summary says so, and nothing goes back to
+          the model -- it has nothing to fix. }
+        if Length(VerifyResults) = 0 then
+          Loop.VerifyReport := FormatNoScenariosSummary(Cfg.ScenariosDir)
+        else
+          Loop.VerifyReport := FormatVerificationSummary(VerifyResults, VerifyRound, VerifyMax);
+        LogInfo('toolloop: %s', [Loop.VerifyReport]);
+        if (not Loop.Verified) and (VerifyRound < VerifyMax) and (Length(VerifyResults) > 0) then
+        begin
+          SetLength(Hist, Length(Hist) + 2);
+          Hist[High(Hist) - 1] := MakeMessage(mrAssistant, Resp.Content);
+          Hist[High(Hist)]     := MakeMessage(mrUser,
+                                    FormatVerificationFeedback(VerifyResults, VerifyRound, VerifyMax));
+          Continue;
+        end;
       end;
       Loop.Content    := Resp.Content;
       Loop.Iterations := Iter;
