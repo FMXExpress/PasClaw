@@ -262,6 +262,31 @@ action=ask_operator` (a `question`, optional `choices`, optional
 {"answer":"yes"}`, and `GET /v1/needs-you` (open decisions plus reviews
 only you can give) are the HTTP side.
 
+## Lanes
+
+A template agent may name a **lane**: path globs, relative to the
+workspace, that it owns — `"lane": "projects/{{project}}/app/**"` (or a
+list). `team up` fills in the board and records the lanes on the project.
+From then on that agent's file writes — `write_file`, `edit_file`,
+`apply_patch`, every tool that goes through the sandbox's write check —
+land only inside its lane. Anything else is refused with whose lane the
+path is in:
+
+> refused: outside dev's lane: projects/shop/docs/plan.md is pm's.
+> Message pm instead (agent action=send).
+
+or, when no one owns it, with the agent's own lane and "ask your lead".
+A laned agent writing outside the workspace is refused too. Agents
+without a lane, and turns that are not a standing agent's, are not
+bound. `**` is any run of whole path segments, `*` any run inside one,
+`?` one character; a lane is never absolute and never goes through
+`..`. Re-binding the board to a template without lanes lifts them. The
+built-in templates define none; lanes are for templates that want them.
+
+What lanes do **not** reach is `shell_exec`: a shell command's writes
+cannot be path-checked reliably, so this is a guard on the file tools,
+not a sandbox.
+
 ## The wake loop
 
 The gateway ticks every 30 seconds and, for each team whose own cadence
@@ -426,7 +451,9 @@ software team.
 ```
 
 `takes` is `"routed"` (the default: only what is assigned to it) or
-`"any"` (it may also claim unassigned ready work with `next`).
+`"any"` (it may also claim unassigned ready work with `next`). `lane`
+(a glob or a list, `{{project}}` filled in) limits where the agent's file
+tools may write — see [Lanes](#lanes).
 `review.by` must name agents in the template; leave it out and each
 submitter's parent reviews. `"review": false` (or `{"required": false}`)
 leaves the board without review.

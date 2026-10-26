@@ -269,6 +269,22 @@ function ProjectRequiresReview(const Project: string): Boolean;
   which GetProject does to count it. The wake loop asks this per task. }
 function ProjectReviewers(const Project: string): TStringArray;
 
+type
+  (* A team agent's lane on a board: path globs, relative to the workspace
+     ("projects/shop/app/**"), it may write inside -- and only there. *)
+  TLane = record
+    Agent: string;
+    Globs: TStringArray;
+  end;
+  TLaneArray = array of TLane;
+
+function SetProjectLanes(const Project: string; const Lanes: TLaneArray;
+  out Err: string): Boolean;
+function ProjectLanes(const Project: string): TLaneArray;
+(* Every lane on every board in the workspace, from the manifests alone --
+   the write check asks this per call, so it must not load the boards. *)
+function AllLanes: TLaneArray;
+
 { Who may claim unassigned work here (see TProjectInfo.Takers). }
 function SetProjectTakers(const Project: string; const Takers: TStringArray;
   out Err: string): Boolean;
@@ -1161,6 +1177,127 @@ begin
     Result := ManifestNames(Obj, 'reviewers');
   finally
     Obj.Free;
+  end;
+end;
+
+function ParseLanes(Obj: TJsonObject): TLaneArray;
+var
+  L: TJsonObject;
+  Keys: TStringList;
+  Arr: TJsonArray;
+  I, J, N: Integer;
+begin
+  SetLength(Result, 0);
+  if Obj = nil then Exit;
+  L := Obj.ChildObject('lanes');
+  if L = nil then Exit;
+  try
+    Keys := L.Keys;
+    try
+      for I := 0 to Keys.Count - 1 do
+      begin
+        Arr := L.ChildArray(Keys[I]);
+        if Arr = nil then Continue;
+        try
+          N := Length(Result);
+          SetLength(Result, N + 1);
+          Result[N].Agent := SanitizeName(Keys[I]);
+          SetLength(Result[N].Globs, Arr.Count);
+          for J := 0 to Arr.Count - 1 do
+            Result[N].Globs[J] := Trim(Arr.ItemStr(J));
+        finally
+          Arr.Free;
+        end;
+      end;
+    finally
+      Keys.Free;
+    end;
+  finally
+    L.Free;
+  end;
+end;
+
+function SetProjectLanes(const Project: string; const Lanes: TLaneArray;
+  out Err: string): Boolean;
+var
+  Dir, Path: string;
+  Obj, L: TJsonObject;
+  Arr: TJsonArray;
+  I, J: Integer;
+begin
+  Err := '';
+  Result := False;
+  Dir := ProjectDir(Project);
+  if (Dir = '') or not DirectoryExists(Dir) then
+  begin
+    Err := 'no such project: ' + Project;
+    Exit;
+  end;
+  Path := JoinPath(Dir, 'project.json');
+  Obj := ReadManifest(Path);
+  if Obj = nil then
+  begin
+    Obj := TJsonObject.Create;
+    Obj.PutStr('name', Project);
+    Obj.PutStr('created', NowIsoUtc);
+  end;
+  try
+    L := TJsonObject.Create;
+    for I := 0 to High(Lanes) do
+    begin
+      if SanitizeName(Lanes[I].Agent) = '' then Continue;
+      Arr := TJsonArray.Create;
+      for J := 0 to High(Lanes[I].Globs) do
+        if Trim(Lanes[I].Globs[J]) <> '' then Arr.AddStr(Trim(Lanes[I].Globs[J]));
+      L.PutArray(SanitizeName(Lanes[I].Agent), Arr);
+    end;
+    Obj.PutObject('lanes', L);
+    WriteManifest(Path, Obj);
+  finally
+    Obj.Free;
+  end;
+  Result := True;
+end;
+
+function ProjectLanes(const Project: string): TLaneArray;
+var
+  Dir: string;
+  Obj: TJsonObject;
+begin
+  SetLength(Result, 0);
+  Dir := ProjectDir(Project);
+  if Dir = '' then Exit;
+  Obj := ReadManifest(JoinPath(Dir, 'project.json'));
+  if Obj = nil then Exit;
+  try
+    Result := ParseLanes(Obj);
+  finally
+    Obj.Free;
+  end;
+end;
+
+function AllLanes: TLaneArray;
+var
+  Names: TStringList;
+  One: TLaneArray;
+  I, J, N: Integer;
+begin
+  SetLength(Result, 0);
+  Names := SubdirNames(ProjectsRoot);
+  try
+    for I := 0 to Names.Count - 1 do
+    begin
+      if not IsSafeName(Names[I]) then Continue;
+      One := ProjectLanes(Names[I]);
+      for J := 0 to High(One) do
+      begin
+        N := Length(Result);
+        SetLength(Result, N + 1);
+        Result[N] := One[J];
+      end;
+    end;
+  finally
+    Names.Free;
   end;
 end;
 

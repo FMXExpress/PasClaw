@@ -310,6 +310,25 @@ should be settled before the rest of the phase.
 
 ## Phase 5 -- lanes
 
+**Status: built, without the worktree half** ([teams](./teams.md#lanes);
+`team_board_tests`). As built: the check sits in the sandbox's write
+check (`CanWritePath`, behind an `OnLaneCheck` hook) rather than the
+permission rule engine -- every file-writing tool already calls it with
+the resolved path, which is exactly what a lane needs, and the rule
+engine sees a tool name and an argument string. Lanes are recorded on the
+project by `team up` with `{{project}}` filled in, and a laned agent
+writing outside the workspace is refused too.
+
+**Not built: a worktree per lane.** Giving each laned agent its own git
+checkout changes where its writes land, and then the rest of the board
+has to follow them there: the held-out gate and the submit snapshot read
+the project directory, the reviewer reads the project directory, and
+something has to merge each lane's branch back -- on submit? on accept?
+who resolves a conflict? Those are workflow decisions with no obvious
+default, and the lane check above already gives every project, git or
+not, the refusal this phase was for. It is the natural next step for
+git-backed teams once that merge point is decided.
+
 - A template agent may name a **lane**: path globs it owns
   (`"lane": ["projects/{{project}}/app/**"]`).
 - The permission check gains an agent dimension: a file-mutating call
@@ -341,16 +360,18 @@ same way `VERIFY.md` reported #618's.
 
 1. **Verdicts, frozen criteria, receipts** -- `review` state, `submit` /
    `verdict`, `review: true` on team projects, `criteria`,
-   `activity.jsonl`, the scenario gate on submit, desktop badge. One PR.
-2. **`waits_on`, `next`, leases.**
+   `activity.jsonl`, the scenario gate on submit, desktop badge. *Built.*
+2. **`waits_on`, `next`, leases.** *Built.*
 3. **Needs you** -- `ask_operator`, escalation to the parent, the panel,
-   channels.
+   channels. *Built.*
 4. **Rigor** -- causes on rejects, the twice-rule notice, proven drafts,
-   approval into the project's scenarios.
+   approval into the project's scenarios. *Built, proven against submit
+   snapshots.*
 5. **Lanes** -- per-agent path scopes in the permission check; worktree
-   per lane for git projects.
+   per lane for git projects. *Lanes built (in the sandbox's write
+   check); worktree per lane not built -- see Phase 5.*
 
-Open questions to settle before Phase 1 is built:
+Open questions settled before Phase 1 was built (each as recommended):
 
 - Review on by default for team projects, off for everything else -- the
   recommendation above.

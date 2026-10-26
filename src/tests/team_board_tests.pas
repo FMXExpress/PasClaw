@@ -37,6 +37,9 @@ uses
   PasClaw.Decisions,
   PasClaw.Tools.Sandbox,
   PasClaw.Projects.Snapshots,
+  PasClaw.Tools.Types,
+  PasClaw.Tools.Registry,
+  PasClaw.Tools.FS,
   PasClaw.Teams;
 
 var
@@ -658,6 +661,95 @@ begin
   SetCallingAgent('');
 end;
 
+{ ------------------------------------------------------------- phase 5 -- }
+
+procedure TestLaneGlobs;
+begin
+  WriteLn('-- lane globs');
+  AssertTrue(LaneMatches('projects/x/app/**', 'projects/x/app/index.html'), '** covers a file in the dir');
+  AssertTrue(LaneMatches('projects/x/app/**', 'projects/x/app/js/a.js'), 'and any depth below');
+  AssertTrue(not LaneMatches('projects/x/app/**', 'projects/x/docs/plan.md'), 'not a sibling dir');
+  AssertTrue(not LaneMatches('projects/x/app/**', 'projects/x/appendix.md'), 'nor a name that only starts the same');
+  AssertTrue(LaneMatches('docs/*.md', 'docs/a.md'), '* within a segment');
+  AssertTrue(not LaneMatches('docs/*.md', 'docs/sub/a.md'), 'but not across one');
+  AssertTrue(LaneMatches('**/*.md', 'a.md') and LaneMatches('**/*.md', 'd/e/a.md'),
+             '**/ matches zero or more segments');
+  AssertTrue(not LaneMatches('**/app.json', 'projects/notapp.json'), '**/ starts at a segment boundary');
+  AssertTrue(LaneMatches('projects/?/x', 'projects/a/x') and not LaneMatches('projects/?/x', 'projects/ab/x'),
+             '? is one character');
+end;
+
+procedure TestLanes;
+var
+  T: TTeamTemplate;
+  Err, Reason, Out_, Path: string;
+  Reg: TToolRegistry;
+  Tl: TTool;
+  L: TLaneArray;
+begin
+  WriteLn('-- lanes');
+  AssertTrue(ParseTemplateJSON('{"name":"laned","agents":[' +
+    '{"name":"l5-lead","role":"r"},' +
+    '{"name":"l5-dev","role":"r","parent":"l5-lead","lane":"projects/{{project}}/app/**"},' +
+    '{"name":"l5-pm","role":"r","parent":"l5-lead","lane":["projects/{{project}}/docs/**"]}]}', T),
+    'a template with lanes parses');
+  AssertTrue(ValidateTeamTemplate(T, Err), 'and validates: ' + Err);
+  CreateProject('Shop', 'shop', '', Err);
+  AssertTrue(BindTeamBoard(T, 'shop', Err), 'binding it records the lanes: ' + Err);
+  L := ProjectLanes('shop');
+  AssertTrue((Length(L) = 2) and (L[0].Globs[0] = 'projects/shop/app/**'),
+             '{{project}} is filled in');
+
+  AssertTrue(ParseTemplateJSON('{"name":"bad","agents":[{"name":"a","role":"r","lane":"/etc/**"}]}', T)
+             and not ValidateTeamTemplate(T, Err), 'an absolute lane is refused');
+  AssertTrue(ParseTemplateJSON('{"name":"bad","agents":[{"name":"a","role":"r","lane":"projects/../x"}]}', T)
+             and not ValidateTeamTemplate(T, Err), 'and one through ..');
+
+  SetCallingAgent('l5-dev');
+  AssertTrue(CanWritePath(JoinPath(ProjectAppDir('shop'), 'index.html'), Reason),
+             'dev writes inside its lane');
+  AssertTrue(not CanWritePath(JoinPath(JoinPath(ProjectDir('shop'), 'docs'), 'plan.md'), Reason),
+             'but not in pm''s');
+  AssertContains(Reason, 'l5-pm''s', 'and is told whose it is');
+  AssertContains(Reason, 'Message l5-pm', 'and what to do instead');
+  AssertTrue(not CanWritePath(JoinPath(ProjectDir('shop'), 'README.md'), Reason),
+             'nor anywhere else on the board');
+  AssertContains(Reason, 'not in projects/shop/app/**', 'naming its own lane');
+  AssertTrue(not CanWritePath('/tmp/scratch.txt', Reason), 'nor outside the workspace');
+
+  { Through the real file tool: the lane is not advice. }
+  Reg := TToolRegistry.Create;
+  try
+    RegisterFSTools(Reg);
+    AssertTrue(Reg.Find('write_file', Tl), 'write_file is registered');
+    Path := JoinPath(JoinPath(ProjectDir('shop'), 'docs'), 'plan.md');
+    Out_ := Tl.Handler('{"path":' + '"' + StringReplace(Path, '\', '\\', [rfReplaceAll]) +
+                       '","content":"mine now"}', Err);
+    AssertContains(Err + Out_, 'l5-pm', 'write_file refuses dev''s write into pm''s lane');
+    AssertTrue(not FileExists(Path), 'and nothing was written');
+    SetCallingAgent('l5-pm');
+    Out_ := Tl.Handler('{"path":' + '"' + StringReplace(Path, '\', '\\', [rfReplaceAll]) +
+                       '","content":"the plan"}', Err);
+    AssertTrue(FileExists(Path), 'pm writes there: ' + Err);
+  finally
+    Reg.Free;
+  end;
+
+  SetCallingAgent('l5-lead');
+  AssertTrue(CanWritePath(JoinPath(ProjectDir('shop'), 'README.md'), Reason),
+             'an agent with no lane is not bound by others''');
+  SetCallingAgent('');
+  AssertTrue(CanWritePath(JoinPath(JoinPath(ProjectDir('shop'), 'docs'), 'x.md'), Reason),
+             'nor is a turn that is not an agent''s');
+
+  ParseTemplateJSON('{"name":"laned","agents":[{"name":"l5-lead","role":"r"}]}', T);
+  BindTeamBoard(T, 'shop', Err);
+  SetCallingAgent('l5-dev');
+  AssertTrue(CanWritePath(JoinPath(ProjectDir('shop'), 'README.md'), Reason),
+             're-binding to a template without lanes lifts them');
+  SetCallingAgent('');
+end;
+
 begin
   TestWaitsOn;
   TestNext;
@@ -668,6 +760,8 @@ begin
   TestDecisionStore;
   TestAskOperator;
   TestRules;
+  TestLaneGlobs;
+  TestLanes;
 
   if Failures = 0 then
     WriteLn('team_board_tests: OK')

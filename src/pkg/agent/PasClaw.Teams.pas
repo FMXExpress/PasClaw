@@ -43,6 +43,10 @@ type
     (* 'routed' (or '') takes only tasks assigned to it; 'any' may also
        claim unassigned ready work with `task action=next`. *)
     Takes:  string;
+    (* Path globs, relative to the workspace, this agent may write in
+       ("projects/{{project}}/app/**"); empty = no lane, writes anywhere
+       the sandbox allows. {{project}} is filled in at up-time. *)
+    Lane:   TStringArray;
   end;
   TTeamAgentArray = array of TTeamAgent;
 
@@ -277,7 +281,9 @@ const
     'and never message someone just to say you will message them. A ' +
     'decision only a person can make goes through agent ' +
     'action=ask_operator: it reaches your manager first, and the ' +
-    'operator only if your manager cannot decide it.'#10 +
+    'operator only if your manager cannot decide it. If your team gave ' +
+    'you a lane, you write files only inside it; a file in someone ' +
+    'else''s lane is theirs -- message them rather than editing it.'#10 +
     'Done means: it actually ran or was actually checked, the board ' +
     'says so, and your manager heard about it if it closes their ' +
     'request. Claiming done without evidence is the one prohibited move.'#10 +
@@ -793,8 +799,8 @@ end;
 function ParseTemplateJSON(const Body: string; out T: TTeamTemplate): Boolean;
 var
   Obj, AObj, W: TJsonObject;
-  Arr, Who: TJsonArray;
-  I: Integer;
+  Arr, Who, LaneArr: TJsonArray;
+  I, K: Integer;
 begin
   Result := False;
   T := Default(TTeamTemplate);
@@ -862,6 +868,21 @@ begin
           T.Agents[I].Model  := LowerCase(Trim(AObj.GetStr('model', '')));
           T.Agents[I].Parent := AgentSlug(AObj.GetStr('parent', ''));
           T.Agents[I].Takes  := LowerCase(Trim(AObj.GetStr('takes', '')));
+          (* "lane": one glob as a string, or a list. *)
+          LaneArr := AObj.ChildArray('lane');
+          if LaneArr <> nil then
+          try
+            SetLength(T.Agents[I].Lane, LaneArr.Count);
+            for K := 0 to LaneArr.Count - 1 do
+              T.Agents[I].Lane[K] := Trim(LaneArr.ItemStr(K));
+          finally
+            LaneArr.Free;
+          end
+          else if Trim(AObj.GetStr('lane', '')) <> '' then
+          begin
+            SetLength(T.Agents[I].Lane, 1);
+            T.Agents[I].Lane[0] := Trim(AObj.GetStr('lane', ''));
+          end;
         finally
           AObj.Free;
         end;
@@ -1003,6 +1024,17 @@ begin
              '" -- use "", "primary" or "fast" (never a model id)';
       Exit;
     end;
+    for J := 0 to High(T.Agents[I].Lane) do
+      if (T.Agents[I].Lane[J] = '') or (T.Agents[I].Lane[J][1] = '/') or
+         (T.Agents[I].Lane[J][1] = '\') or (Pos('..', T.Agents[I].Lane[J]) > 0) or
+         ((Length(T.Agents[I].Lane[J]) > 1) and (T.Agents[I].Lane[J][2] = ':')) then
+      begin
+        Err := 'template "' + T.Name + '": agent "' + T.Agents[I].Name +
+               '" has lane "' + T.Agents[I].Lane[J] + '" -- a lane is a ' +
+               'glob relative to the workspace (projects/{{project}}/app/**), ' +
+               'never absolute and never through ..';
+        Exit;
+      end;
     if (T.Agents[I].Takes <> '') and (T.Agents[I].Takes <> 'routed') and
        (T.Agents[I].Takes <> 'any') then
     begin
@@ -1188,7 +1220,8 @@ function BindTeamBoard(const T: TTeamTemplate; const Project: string;
                        out Err: string): Boolean;
 var
   Takers: TStringArray;
-  I: Integer;
+  Lanes: TLaneArray;
+  I, J, N: Integer;
 begin
   Err := '';
   SetLength(Takers, 0);
@@ -1201,6 +1234,21 @@ begin
   { Written even when empty: a board re-bound to a template that no
     longer opens the pool must stop offering it. }
   if not SetProjectTakers(Project, Takers, Err) then Exit(False);
+  (* Lanes, with the board filled in. Also written when empty, for the
+     same reason: re-binding to a template without lanes lifts them. *)
+  SetLength(Lanes, 0);
+  for I := 0 to High(T.Agents) do
+    if Length(T.Agents[I].Lane) > 0 then
+    begin
+      N := Length(Lanes);
+      SetLength(Lanes, N + 1);
+      Lanes[N].Agent := T.Agents[I].Name;
+      SetLength(Lanes[N].Globs, Length(T.Agents[I].Lane));
+      for J := 0 to High(T.Agents[I].Lane) do
+        Lanes[N].Globs[J] := StringReplace(T.Agents[I].Lane[J], '{{project}}',
+                                            Project, [rfReplaceAll]);
+    end;
+  if not SetProjectLanes(Project, Lanes, Err) then Exit(False);
   if T.SkipReview then Exit(True);
   Result := SetProjectReview(Project, True, T.ReviewBy, Err);
 end;

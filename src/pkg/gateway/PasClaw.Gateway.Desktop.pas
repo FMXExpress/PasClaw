@@ -461,7 +461,9 @@ function ProjectJSON(const P: TProjectInfo): TJsonObject;
 var
   App: TAppInfo;
   Arr: TJsonArray;
-  I: Integer;
+  LObj: TJsonObject;
+  Lanes: TLaneArray;
+  I, J: Integer;
 begin
   Result := TJsonObject.Create;
   Result.PutStr ('name',        P.Name);
@@ -482,6 +484,16 @@ begin
   Arr := TJsonArray.Create;
   for I := 0 to High(P.Takers) do Arr.AddStr(P.Takers[I]);
   Result.PutArray('takers', Arr);
+  { Lanes: who may write where on this board (Phase 5). }
+  Lanes := ProjectLanes(P.Name);
+  LObj := TJsonObject.Create;
+  for I := 0 to High(Lanes) do
+  begin
+    Arr := TJsonArray.Create;
+    for J := 0 to High(Lanes[I].Globs) do Arr.AddStr(Lanes[I].Globs[J]);
+    LObj.PutArray(Lanes[I].Agent, Arr);
+  end;
+  Result.PutObject('lanes', LObj);
   Arr := TJsonArray.Create;
   for I := 0 to High(P.Reviewers) do Arr.AddStr(P.Reviewers[I]);
   Result.PutArray('reviewers', Arr);

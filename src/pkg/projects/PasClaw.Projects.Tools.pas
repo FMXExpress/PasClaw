@@ -90,6 +90,11 @@ function ProposeRule(const Project, Cause, Name, Script, Actor: string;
 { The rule files installed for a project, its rule and declined causes,
   and how often each cause has rejected work -- as JSON. }
 function RulesJSON(const Project: string): string;
+
+(* Does a lane glob cover a workspace-relative path ('/'-separated)?
+   '**' is any run of whole segments (including none), '*' any run within
+   one segment, '?' one character that is not '/'. Exposed for tests. *)
+function LaneMatches(const Glob, RelPath: string): Boolean;
 function Tool_Desktop(const ArgsJSON: string; out ErrMsg: string): string;
 
 (* Exposed for tests: what a `desktop` call is READ as, before anything
@@ -114,7 +119,8 @@ uses
   PasClaw.Decisions,       { a proven rule waits for the operator }
   PasClaw.Projects.Snapshots,  { what a rule is proven against }
   PasClaw.Config,          { GetHome -- where drafts are kept }
-  PasClaw.Workspaces;      { ActiveWorkspaceName }
+  PasClaw.Workspaces,      { ActiveWorkspaceName }
+  PasClaw.Tools.Sandbox;   { OnLaneCheck -- lanes bind the file tools }
 
 var
   GTeamActionsAllowed: Boolean = False;
@@ -1388,6 +1394,125 @@ begin
   end;
 end;
 
+{ ------------------------------------------------------------------ lanes -- }
+
+function GlobFrom(const P, S: string; PI, SI: Integer): Boolean;
+var
+  K: Integer;
+  Boundary: Boolean;
+begin
+  while PI <= Length(P) do
+  begin
+    if (P[PI] = '*') and (PI < Length(P)) and (P[PI + 1] = '*') then
+    begin
+      Inc(PI, 2);
+      { "**/" matches at segment starts only, so **/app.json is not
+        satisfied by notapp.json. }
+      Boundary := (PI <= Length(P)) and (P[PI] = '/');
+      if Boundary then Inc(PI);
+      for K := SI to Length(S) + 1 do
+        if ((not Boundary) or (K = SI) or (S[K - 1] = '/')) and
+           GlobFrom(P, S, PI, K) then Exit(True);
+      Exit(False);
+    end;
+    if P[PI] = '*' then
+    begin
+      Inc(PI);
+      for K := SI to Length(S) + 1 do
+      begin
+        if GlobFrom(P, S, PI, K) then Exit(True);
+        if (K <= Length(S)) and (S[K] = '/') then Break;
+      end;
+      Exit(False);
+    end;
+    if SI > Length(S) then Exit(False);
+    if P[PI] = '?' then
+    begin
+      if S[SI] = '/' then Exit(False);
+    end
+    else if P[PI] <> S[SI] then Exit(False);
+    Inc(PI);
+    Inc(SI);
+  end;
+  Result := SI > Length(S);
+end;
+
+function LaneMatches(const Glob, RelPath: string): Boolean;
+var
+  G, P: string;
+begin
+  G := StringReplace(Trim(Glob), '\', '/', [rfReplaceAll]);
+  P := StringReplace(RelPath, '\', '/', [rfReplaceAll]);
+  {$IFDEF MSWINDOWS}
+  G := LowerCase(G);
+  P := LowerCase(P);
+  {$ENDIF}
+  Result := (G <> '') and GlobFrom(G, P, 1, 1);
+end;
+
+(* OnLaneCheck: a team agent with a lane writes only inside it.
+
+   The caller is the agent whose turn is running; a turn that is not a
+   standing agent's has no lane and is not checked. A laned agent's write
+   anywhere else -- including outside the workspace -- is refused, and the
+   refusal says whose lane the path IS in, because "message pm instead"
+   is the next move and "permission denied" is not. Lanes bind the file
+   tools only: a shell command's writes cannot be path-checked, and the
+   plan says so rather than pretending. *)
+function LaneCheck(const CanonPath: string; out Reason: string): Boolean;
+var
+  Agent, Root, Rel, Owner: string;
+  Lanes: TLaneArray;
+  Mine: TStringArray;
+  I, J: Integer;
+begin
+  Result := True;
+  Reason := '';
+  Agent := CallingAgent;
+  if Agent = '' then Exit;
+  Lanes := AllLanes;
+  SetLength(Mine, 0);
+  for I := 0 to High(Lanes) do
+    if Lanes[I].Agent = Agent then
+      for J := 0 to High(Lanes[I].Globs) do
+      begin
+        SetLength(Mine, Length(Mine) + 1);
+        Mine[High(Mine)] := Lanes[I].Globs[J];
+      end;
+  if Length(Mine) = 0 then Exit;
+
+  Root := ExcludeTrailingPathDelimiter(ExpandFileName(ActiveWorkspaceRoot));
+  Rel := '';
+  if PathInsideDirectory(CanonPath, Root) and (Length(CanonPath) > Length(Root)) then
+    Rel := StringReplace(Copy(CanonPath, Length(Root) + 2, MaxInt), '\', '/',
+                         [rfReplaceAll]);
+  if Rel <> '' then
+    for I := 0 to High(Mine) do
+      if LaneMatches(Mine[I], Rel) then Exit(True);
+
+  Owner := '';
+  if Rel <> '' then
+    for I := 0 to High(Lanes) do
+      if (Lanes[I].Agent <> Agent) and (Owner = '') then
+        for J := 0 to High(Lanes[I].Globs) do
+          if LaneMatches(Lanes[I].Globs[J], Rel) then
+          begin
+            Owner := Lanes[I].Agent;
+            Break;
+          end;
+  Result := False;
+  if Rel = '' then
+    Reason := 'refused: outside ' + Agent + '''s lane -- ' + CanonPath +
+              ' is not in the workspace, and ' + Agent + ' writes only in ' +
+              JoinList(Mine) + '.'
+  else if Owner <> '' then
+    Reason := 'refused: outside ' + Agent + '''s lane: ' + Rel + ' is ' +
+              Owner + '''s. Message ' + Owner + ' instead (agent action=send).'
+  else
+    Reason := 'refused: outside ' + Agent + '''s lane: ' + Rel + ' is not in ' +
+              JoinList(Mine) + '. Ask your lead if your lane should change.';
+end;
+
 { --------------------------------------------------------------- register -- }
 
 (* desktop -- arrange the screen the user is looking at.
@@ -1820,6 +1945,7 @@ initialization
   OnSubmitGate := ProjectScenarioGate;
   OnTaskClosed := NotifyDependents;
   OnTaskRejected := NoticeRepeatedCause;
+  OnLaneCheck := LaneCheck;
   AddDecisionAnsweredListener(RuleDecisionAnswered);
 
 end.

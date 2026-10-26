@@ -83,6 +83,16 @@ procedure ConfigureSandbox(const Policy: TSandboxPolicy; const Workspace: string
 
 function CanReadPath (const Path: string; out Reason: string): Boolean;
 function CanWritePath(const Path: string; out Reason: string): Boolean;
+
+type
+  (* Consulted by CanWritePath for every model-driven write, with the
+     canonical path. False refuses with Reason. Installed by
+     PasClaw.Projects.Tools, which knows the calling agent and the lanes
+     its team gave it; nil (the default) checks nothing. *)
+  TLaneCheck = function(const CanonPath: string; out Reason: string): Boolean;
+
+var
+  OnLaneCheck: TLaneCheck = nil;
 function ShellAllowed(const Cmd:  string; out Reason: string): Boolean;
 
 { Like CanReadPath, but the workspace boundary is ALWAYS enforced regardless of
@@ -427,6 +437,12 @@ function CanWritePath(const Path: string; out Reason: string): Boolean;
 var
   Canon: string;
 begin
+  Reason := '';
+  (* Lanes (docs/team-board-plan.md, Phase 5): a team agent with a lane
+     writes only inside it. Asked first, so the refusal a laned agent sees
+     names whose lane the path is in, which is the useful thing to know. *)
+  if Assigned(OnLaneCheck) and not OnLaneCheck(Canonicalize(Path), Reason) then
+    Exit(False);
   Reason := '';
   if IsBoardRecord(Canonicalize(Path)) then
   begin
