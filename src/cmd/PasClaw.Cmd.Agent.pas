@@ -638,8 +638,11 @@ begin
       by default, so skipping this would hide spawn*/db_*/workflow_* AND
       remove the tool that reveals them -- undiscoverable, not just
       invisible (Codex P1, PR #547). Registering it also latches the
-      deferral, so the two can never come apart. }
-    RegisterMCPDisclosureTools(Reg, Cfg);
+      deferral, so the two can never come apart. With no MCP clients,
+      built-in deferral is the only reason for the tool, and the tool
+      must not talk about MCP servers that will never start -- the
+      --no-mcp entry does both (Codex P2 on #615). }
+    RegisterBuiltinDisclosureTools(Reg, Cfg);
     Exit;
   end;
   Result := ConnectMCPServers(Cfg, Reg);

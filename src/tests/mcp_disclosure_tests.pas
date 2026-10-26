@@ -19,6 +19,9 @@ program mcp_disclosure_tests;
       rather than crashing or wedging.
     - Cfg.MCPProgressiveDisclosure round-trips through SaveConfig /
       LoadConfig.
+    - the --no-mcp entry: tool_search only when built-in deferral is on,
+      and an empty search names --no-mcp rather than a configured server
+      as "still connecting"; the four surfaces use it.
 
   These tests construct a TToolRegistry directly and register synthetic
   TTool records -- no actual MCP server is started, so the test stays
@@ -30,7 +33,7 @@ program mcp_disclosure_tests;
 {$IFDEF FPC}{$CODEPAGE UTF8}{$ENDIF}
 
 uses
-  SysUtils,
+  SysUtils, Classes,
   PasClaw.Config,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
@@ -392,6 +395,57 @@ begin
   WriteLn('  ok: tool_search explains an enabled-but-unloaded MCP server');
 end;
 
+{ The built-in long tail: one predicate (ToolIsLongTail) drives both the
+  one-shot sweep and the registry latch, so a tool registered AFTER
+  disclosure (the spawn_* verbs, from the background coordinator) is
+  deferred exactly like one registered before. And the tools tried in the
+  set and put back -- memory_write, shell_background, memory_fetch -- stay
+  visible through both paths: a hidden one is a tool the model stops
+  choosing, not one it searches for. }
+procedure TestBuiltinLongTailOneSet;
+var
+  Reg: TToolRegistry;
+  Names: TStringArray;
+  i: Integer;
+  function Deferred(const N: string): Boolean;
+  var j: Integer;
+  begin
+    Result := False;
+    for j := 0 to High(Names) do if Names[j] = N then Exit(True);
+  end;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    { Registered before the sweep... }
+    RegisterVisible(Reg, 'read_file');
+    RegisterVisible(Reg, 'desktop');
+    RegisterVisible(Reg, 'memory_write');
+    RegisterVisible(Reg, 'db_query');
+    AssertEqI(DeferBuiltinTools(Reg), 2, 'sweep defers desktop and db_query, not memory_write');
+    { ...and after it, through the latch. }
+    Reg.DeferLongTail := True;
+    RegisterVisible(Reg, 'spawn_status');
+    RegisterVisible(Reg, 'shell_background');
+    RegisterVisible(Reg, 'memory_fetch');
+    RegisterVisible(Reg, 'shell_exec');
+    Names := Reg.DeferredNames;
+    for i := 0 to High(Names) do ;
+    AssertTrue(Deferred('desktop'), 'desktop deferred (until a desktop connects)');
+    AssertTrue(Deferred('db_query'), 'db_query deferred (prefix)');
+    AssertTrue(Deferred('spawn_status'), 'spawn_status deferred (prefix, through the latch)');
+    AssertTrue(not Deferred('memory_write'), 'memory_write stays visible: the prompt recommends it');
+    AssertTrue(not Deferred('shell_background'),
+               'shell_background stays visible: hidden, the model blocks in shell_exec instead');
+    AssertTrue(not Deferred('memory_fetch'), 'memory_fetch stays visible');
+    AssertTrue(not Deferred('read_file'), 'read_file visible');
+    AssertTrue(not Deferred('shell_exec'), 'shell_exec visible');
+    AssertEqI(CountResults(Reg), 5, 'provider sees exactly the five visible tools');
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: built-in long tail is one set across sweep and latch');
+end;
+
 procedure TestToolSearchSkipsRegistrationWhenDisabled;
 var
   Reg: TToolRegistry;
@@ -423,6 +477,91 @@ begin
     Reg.Free;
   end;
   WriteLn('  ok: tool_search skipped when disclosure off');
+end;
+
+(* --no-mcp: no MCP client starts, so tool_search exists only for the
+   built-in long tail and must say nothing about MCP servers. (Codex P2 on
+   #615.) *)
+procedure TestNoMCPEntry;
+var
+  Reg: TToolRegistry;
+  Cfg: TConfig;
+  T: TTool;
+  Res, ErrMsg: string;
+  Names: TStringArray;
+  Src: string;
+  i: Integer;
+  Sl: TStringList;
+const
+  Surfaces: array[0..3] of string = (
+    'src/cmd/PasClaw.Cmd.Agent.pas', 'src/cmd/PasClaw.Cmd.Gateway.pas',
+    'src/cmd/PasClaw.Cmd.Serve.pas', 'src/cmd/PasClaw.Cmd.TUI.pas');
+begin
+  Cfg := TConfig.Create;
+  Reg := TToolRegistry.Create;
+  try
+    SetLength(Cfg.MCPServers, 1);
+    Cfg.MCPServers[0].Name    := 'replicate';
+    Cfg.MCPServers[0].Enabled := True;
+
+    { builtin_progressive_disclosure: false -- nothing to defer, so no
+      tool, whatever the MCP flag (default on) says. }
+    Cfg.MCPProgressiveDisclosure     := True;
+    Cfg.BuiltinProgressiveDisclosure := False;
+    RegisterVisible(Reg, 'db_query');
+    AssertTrue(RegisterBuiltinDisclosureTools(Reg, Cfg) = nil, 'no-mcp + built-in off: nothing registered');
+    AssertTrue(not Reg.Find('tool_search', T), 'no-mcp + built-in off: no tool_search schema');
+    AssertEqI(Length(Reg.DeferredNames), 0, 'no-mcp + built-in off: nothing deferred');
+
+    { Built-in deferral on: the tool is there and the long tail defers. }
+    Reg.Free;
+    Reg := TToolRegistry.Create;
+    Cfg.BuiltinProgressiveDisclosure := True;
+    RegisterVisible(Reg, 'read_file');
+    AssertTrue(RegisterBuiltinDisclosureTools(Reg, Cfg) <> nil, 'no-mcp + built-in on: registered');
+    AssertTrue(Reg.Find('tool_search', T), 'no-mcp + built-in on: tool_search present');
+    { Nothing deferred yet: the empty answer names --no-mcp, not the
+      configured server as "still connecting". }
+    Res := Reg.RunTool('tool_search', '{"query":"flux image"}', ErrMsg);
+    AssertTrue(ErrMsg = '', 'no-mcp empty search: no error');
+    AssertContains(Res, '--no-mcp', 'no-mcp empty search: says MCP is off here');
+    AssertTrue(Pos('connecting', Res) = 0, 'no-mcp empty search: no "still connecting" -- got: ' + Res);
+    AssertTrue(Pos('retry', Res) = 0, 'no-mcp empty search: no retry advice -- got: ' + Res);
+    AssertTrue(Pos('replicate', Res) = 0, 'no-mcp empty search: names no MCP server -- got: ' + Res);
+    { The latch still defers what registers later, and a reveal works. }
+    RegisterVisible(Reg, 'db_query');
+    Names := Reg.DeferredNames;
+    AssertTrue((Length(Names) = 1) and (Names[0] = 'db_query'), 'no-mcp: the long tail is deferred');
+    Res := Reg.RunTool('tool_search', '{"query":"select:db_query"}', ErrMsg);
+    AssertContains(Res, '"db_query"', 'no-mcp: tool_search reveals a built-in');
+    Res := Reg.RunTool('tool_search', '{"query":"anything"}', ErrMsg);
+    AssertContains(Res, 'revealed', 'no-mcp after reveal: says they are active');
+    AssertTrue(Pos('connecting', Res) = 0, 'no-mcp after reveal: no "still connecting"');
+  finally
+    Reg.Free;
+    Cfg.Free;
+  end;
+
+  { The four --no-mcp paths go through this entry, not the MCP one. }
+  if FileExists(Surfaces[0]) then
+    for i := 0 to High(Surfaces) do
+    begin
+      Sl := TStringList.Create;
+      try
+        Sl.LoadFromFile(Surfaces[i]);
+        Src := Sl.Text;
+      finally
+        Sl.Free;
+      end;
+      AssertContains(Src, 'RegisterBuiltinDisclosureTools(Reg, Cfg);',
+                     Surfaces[i] + ': --no-mcp path uses the built-in entry');
+      AssertTrue(Pos('RegisterMCPDisclosureTools(', Src) = 0,
+                 Surfaces[i] + ': calls RegisterMCPDisclosureTools directly -- on the ' +
+                 '--no-mcp path that names servers that never start');
+    end
+  else
+    WriteLn('  skipping surface check: run from the repo root');
+  WriteLn('  ok: --no-mcp registers tool_search only for built-in deferral, with no MCP state');
 end;
 
 procedure TestConfigRoundTrip;
@@ -475,6 +614,8 @@ begin
   TestToolSearchEmptyDeferredEnabledButUnloaded;
   TestToolSearchEmptyAfterAllRevealed;
   TestToolSearchSkipsRegistrationWhenDisabled;
+  TestBuiltinLongTailOneSet;
+  TestNoMCPEntry;
   TestConfigRoundTrip;
   WriteLn('ok - mcp disclosure tests passed');
 end.
