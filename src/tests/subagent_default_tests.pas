@@ -7,7 +7,9 @@ program subagent_default_tests;
     - a configured "general-purpose" overrides the built-in (no duplicate);
     - BuildFilteredRegistry('*') inherits the parent's ACTIVE tools, excluding
       the spawn family, tool_search, and deferred (unrevealed) MCP tools;
-    - subagents_enabled round-trips through Save/Load (default True).
+    - subagents_enabled round-trips through Save/Load (default True);
+    - a code-mode MCP tool is copied into the child AS code mode -- never
+      promoted into the child's provider schemas (Codex P1 on #609).
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -17,11 +19,13 @@ program subagent_default_tests;
 uses
   SysUtils,
   PasClaw.Config,
+  PasClaw.Utils,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
   PasClaw.MCP.Disclosure,
+  PasClaw.Tools.ExecuteCode,
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg;
 
@@ -77,6 +81,31 @@ begin
   T.Name := Name; T.Description := Name; T.Schema := '{}';
   T.Handler := NoopHandler; T.Category := tcReadOnly;
   Reg.RegisterDeferred(T, True);
+end;
+
+procedure AddCodeMode(Reg: TToolRegistry; const Name: string);
+var T: TTool;
+begin
+  FillChar(T, SizeOf(T), 0);
+  T.Name := Name; T.Description := Name; T.Schema := '{}';
+  T.Handler := NoopHandler; T.Category := tcReadOnly;
+  Reg.RegisterCodeMode(T);
+end;
+
+function InDefs(Defs: TToolDefinitionArray; const Name: string): Boolean;
+var i: Integer;
+begin
+  for i := 0 to High(Defs) do
+    if Defs[i].Name = Name then Exit(True);
+  Result := False;
+end;
+
+function InArr(const A: TStringArray; const S: string): Boolean;
+var i: Integer;
+begin
+  for i := 0 to High(A) do
+    if A[i] = S then Exit(True);
+  Result := False;
 end;
 
 procedure TestDefaultPresentWhenNoneConfigured;
@@ -216,6 +245,40 @@ begin
   WriteLn('  ok: subagent tool_search reveals into the child registry, not the parent');
 end;
 
+procedure TestExecuteCodeReboundPerChild;
+{ The copied execute_code record carried the PARENT's runner, so a
+  subagent script's `pasclaw __tool` dispatched into the parent's full
+  registry -- the allowlist bypass the per-registry runner exists to close.
+  BuildFilteredRegistry must re-register execute_code bound to the child. }
+var
+  Parent, Child: TToolRegistry;
+  Names: array of string;
+  PT, CT: TTool;
+begin
+  Parent := TToolRegistry.Create;
+  try
+    AddPlain(Parent, 'fs_read');
+    RegisterExecuteCodeTool(Parent);
+    AssertTrue(Parent.Find('execute_code', PT), 'parent has execute_code');
+    SetLength(Names, 1); Names[0] := '*';
+    Child := BuildFilteredRegistry(Parent, Names);
+    try
+      AssertTrue(Child.Find('execute_code', CT), 'child inherits execute_code');
+      AssertTrue(TMethod(CT.HandlerObj).Data <> TMethod(PT.HandlerObj).Data,
+                 'child execute_code is bound to its own runner, not the parent''s');
+      AssertTrue(TMethod(CT.HandlerObj).Data <> nil, 'child runner is a real object');
+    finally Child.Free; end;
+    SetLength(Names, 2); Names[0] := 'fs_read'; Names[1] := 'execute_code';
+    Child := BuildFilteredRegistry(Parent, Names);
+    try
+      AssertTrue(Child.Find('execute_code', CT), 'explicit list keeps execute_code');
+      AssertTrue(TMethod(CT.HandlerObj).Data <> TMethod(PT.HandlerObj).Data,
+                 'explicit-list child is rebound too');
+    finally Child.Free; end;
+  finally Parent.Free; end;
+  WriteLn('  ok: execute_code is rebound to each child registry');
+end;
+
 procedure TestExplicitListStillExcludesSpawn;
 var Src, Filtered: TToolRegistry; Names: array of string;
 begin
@@ -230,6 +293,56 @@ begin
     finally Filtered.Free; end;
   finally Src.Free; end;
   WriteLn('  ok: explicit tool list never includes the spawn family');
+end;
+
+procedure TestCopyPreservesCodeMode;
+(* A code-mode MCP tool must stay code-mode in the child registry.
+
+   It used to not: the copy ran through TToolRegistry.Register, which
+   force-clears IsDeferred / Hidden / CodeMode for the legacy stack-built
+   records it was written for. The flags on a record that came out of Find
+   are real, so clearing them handed the subagent the full MCP schema its
+   parent had deliberately kept out of the tools array -- and the child
+   called it directly instead of through execute_code. Both copy paths
+   (wildcard and explicit allowlist) had it. (Codex P1 on #609.) *)
+var
+  Src, Filtered: TToolRegistry;
+  Names: array of string;
+  T: TTool;
+begin
+  Src := TToolRegistry.Create;
+  try
+    AddPlain(Src, 'fs_read');
+    AddDeferred(Src, 'other__x');     { classic deferred: tool_search can reveal }
+    AddCodeMode(Src, 'gh__list');     { code mode: execute_code only }
+
+    SetLength(Names, 1); Names[0] := '*';
+    Filtered := BuildFilteredRegistry(Src, Names);
+    try
+      AssertTrue(Filtered.Find('gh__list', T), 'the code-mode tool is inherited');
+      AssertTrue(T.CodeMode, 'and is STILL code mode in the child');
+      AssertTrue(not InDefs(Filtered.ToProviderDefs, 'gh__list'),
+                 'so the child provider never sees its schema');
+      AssertTrue(InArr(Filtered.CodeModeNames, 'gh__list'),
+                 'the child catalog lists it, which is how a script finds it');
+      AssertTrue(not InArr(Filtered.DeferredNames, 'gh__list'),
+                 'and the child tool_search cannot reveal it');
+      { The neighbours still behave as before. }
+      AssertTrue(InDefs(Filtered.ToProviderDefs, 'fs_read'), 'plain tool stays active');
+      AssertTrue(InArr(Filtered.DeferredNames, 'other__x'), 'classic deferred unchanged');
+    finally Filtered.Free; end;
+
+    { Same for a spec that names the tool explicitly. }
+    SetLength(Names, 2); Names[0] := 'fs_read'; Names[1] := 'gh__list';
+    Filtered := BuildFilteredRegistry(Src, Names);
+    try
+      AssertTrue(Filtered.Find('gh__list', T) and T.CodeMode,
+                 'an explicitly allowlisted code-mode tool keeps its mode too');
+      AssertTrue(not InDefs(Filtered.ToProviderDefs, 'gh__list'),
+                 'and stays out of the explicit child''s schemas');
+    finally Filtered.Free; end;
+  finally Src.Free; end;
+  WriteLn('  ok: code mode survives the copy into a subagent registry');
 end;
 
 procedure TestConfigRoundTrip;
@@ -301,8 +414,10 @@ begin
   TestOperatorOverridesGeneralPurpose;
   TestWildcardInheritsActiveTools;
   TestExplicitListStillExcludesSpawn;
+  TestExecuteCodeReboundPerChild;
   TestWildcardCarriesRevealedToolActive;
   TestChildToolSearchRevealsInChildOnly;
+  TestCopyPreservesCodeMode;
   TestRegisterSubagentToolsWiresSpawn;
   TestRegisterSubagentToolsRespectsDisable;
   TestConfigRoundTrip;

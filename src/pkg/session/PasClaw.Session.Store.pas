@@ -116,6 +116,10 @@ type
     Model:                string;     { last model used }
     Provider:             string;     { last provider name }
     Profile:              string;     { config profile this session runs under }
+    (* The directory the session worked in: the sandbox workspace at the
+       time of its first save (a project checkout, a git worktree).
+       `session list` shows it and `pasclaw resume` returns to it. *)
+    Location:             string;
     SystemPromptOverride: string;     { compacted system prompt across turns }
     (* How much of the live transcript is already in the append-only
        transcript log, and whether a compaction has just moved the
@@ -420,6 +424,7 @@ implementation
 
 uses
   PasClaw.Workspaces,
+  PasClaw.Tools.Sandbox,   { CurrentWorkspace -- Meta.Location on first save }
   DateUtils,
   {$IFDEF MSWINDOWS}
   { Lets dcc64 inline SysUtils.RenameFile (used by Save's atomic
@@ -1449,6 +1454,10 @@ begin
   Path := SessionPath(Meta.Id);
   if Path = '' then
     raise EArgumentException.CreateFmt('Session.Save: unsafe id %s', [Meta.Id]);
+  { First save stamps where the session works. The sandbox workspace is
+    the directory the tools resolve against, which is the one a resume
+    should return to; '' before ConfigureSandbox (embedders) stays ''. }
+  if Meta.Location = '' then Meta.Location := CurrentWorkspace;
   EnsureSessionsDir;
   Root := TJsonObject.Create;
   try
@@ -1460,6 +1469,7 @@ begin
     MetaObj.PutStr('model',                  Meta.Model);
     MetaObj.PutStr('provider',               Meta.Provider);
     MetaObj.PutStr('profile',                Meta.Profile);
+    if Meta.Location <> '' then MetaObj.PutStr('location', Meta.Location);
     MetaObj.PutStr('system_prompt_override', Meta.SystemPromptOverride);
     { Omitted at their defaults so a session that never compacted keeps
       a JSON byte-identical to the pre-feature schema. }
@@ -1572,6 +1582,7 @@ begin
         Meta.Model                := MetaObj.GetStr('model',                  '');
         Meta.Provider             := MetaObj.GetStr('provider',               '');
         Meta.Profile              := MetaObj.GetStr('profile',                '');
+        Meta.Location             := MetaObj.GetStr('location',               '');
         Meta.SystemPromptOverride := MetaObj.GetStr('system_prompt_override', '');
         Meta.LoggedCount          := MetaObj.GetInt('logged_count',           0);
         Meta.LogPending           := MetaObj.GetBool('log_pending',           False);

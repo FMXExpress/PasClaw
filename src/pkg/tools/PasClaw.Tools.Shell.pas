@@ -35,11 +35,17 @@ uses
 
 procedure RegisterShellTool(R: TToolRegistry);
 
+{ The shell_exec handler itself, exposed for tests (the timeout and cwd
+  contracts are pinned against it directly). Production goes through the
+  registry. }
+function Tool_Shell(const ArgsJSON: string; out ErrMsg: string): string;
+
 implementation
 
 uses
   PasClaw.JSON,
   PasClaw.Logger,
+  PasClaw.Platform,              { SetShellTimeoutOverrideMs -- the per-call bound }
   PasClaw.Tools.Sandbox,
   PasClaw.Tools.Shell.Filters,
   PasClaw.Tools.OutputCache,     { AttachReversibleStashFooter --
@@ -90,10 +96,29 @@ begin
             (Pos('not a git repository', L) > 0);
 end;
 
+function ParseIntArg(const ArgsJSON, Field: string; Default: Integer): Integer;
+var
+  Obj: TJsonObject;
+begin
+  Result := Default;
+  if Trim(ArgsJSON) = '' then Exit;
+  try
+    Obj := TJsonObject.Parse(ArgsJSON);
+    if Obj = nil then Exit;
+    try
+      if Obj.Has(Field) then Result := Obj.GetInt(Field, Default);
+    finally
+      Obj.Free;
+    end;
+  except
+    Result := Default;
+  end;
+end;
+
 function Tool_Shell(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Cmd, Reason, WorkDir, ReqDir: string;
-  ExitCode: Integer;
+  ExitCode, TimeoutSec: Integer;
   Out_, RawOut: string;
   ExplicitCwd: Boolean;
   EffDir, Tail: string;
@@ -160,7 +185,16 @@ begin
   if (WorkDir <> '') and (not DirectoryExists(WorkDir)) then
     WorkDir := '';
   LogDebug('shell exec (cwd=%s): %s', [WorkDir, Cmd]);
-  ExitCode := RunOneShotViaBackend(GetCurrentSessionId, Cmd, WorkDir, Out_);
+  { Per-call wall-clock bound. 0 / absent = the process default
+    (shell_timeout_sec). Thread-scoped so a parallel batch cannot leak one
+    call's choice into another's; cleared in the finally either way. }
+  TimeoutSec := ParseIntArg(ArgsJSON, 'timeout_sec', 0);
+  if TimeoutSec > 0 then SetShellTimeoutOverrideMs(TimeoutSec * 1000);
+  try
+    ExitCode := RunOneShotViaBackend(GetCurrentSessionId, Cmd, WorkDir, Out_);
+  finally
+    if TimeoutSec > 0 then SetShellTimeoutOverrideMs(-1);
+  end;
   { Per-command condenser, gated on the reversible-condensation switch.
     Codex PR #289 P1: when CondenseReversibleEnabled is False the
     stash footer in AttachReversibleStashFooter no-ops, but the
@@ -252,7 +286,8 @@ begin
                    'see its real exit status.' + BackendNote;
   T.Schema      := '{"type":"object","properties":' +
                    '{"command":{"type":"string","description":"Shell command to execute."},' +
-                   '"cwd":{"type":"string","description":"Directory to run in. Defaults to the workspace -- set this when the files you are working on live somewhere else, or the command runs in the wrong place and reports success anyway."}},' +
+                   '"cwd":{"type":"string","description":"Directory to run in. Defaults to the workspace -- set this when the files you are working on live somewhere else, or the command runs in the wrong place and reports success anyway."},' +
+                   '"timeout_sec":{"type":"integer","description":"Wall-clock limit for this command in seconds. On expiry the process is killed and exit=124 is reported. Default: the configured shell_timeout_sec (600)."}},' +
                    '"required":["command"]}';
   T.Handler     := Tool_Shell;
   T.IsCore      := True;

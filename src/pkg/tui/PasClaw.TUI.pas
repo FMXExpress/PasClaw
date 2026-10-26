@@ -37,7 +37,7 @@ unit PasClaw.TUI;
 interface
 
 uses
-  SysUtils,
+  SysUtils, SyncObjs,              { TCriticalSection for the background-done flash }
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
   PasClaw.Providers.Models,        { TModelInfoArray is referenced from the
@@ -46,6 +46,9 @@ uses
                                      from the interface section's uses, not
                                      just the implementation's. FPC was
                                      permissive about this; dcc64 is not. }
+  PasClaw.Permissions,             { TAskAnswer -- the footer permissions asker }
+  PasClaw.Skills.Loader,           { TSkillSpecArray -- prompt skills as slash commands }
+  PasClaw.Skills.Slash,
   PasClaw.Tools.ToolLoop,          { TToolLoopResult -- referenced by the
                                      AccumulateLoopStats method declaration
                                      in the TTUI class; same dcc64
@@ -60,7 +63,8 @@ uses
                                      snapshot field + RouteConfig method
                                      declared on TTUI; same interface-
                                      visibility rule as the types above. }
-  PasClaw.Session.Store;
+  PasClaw.Session.Store,
+  PasClaw.Agent.Prompt;      { BuildSystemPrompt -- the TUI turn sees what the CLI turn sees }
 
 type
   {$IFNDEF FPC}
@@ -87,6 +91,20 @@ type
       so a session-lifetime snapshot is correct and matches the CLI's
       session-scoped easy-provider cache. }
     FRouteCfg: TConfig;
+    { Background-job completions arrive on the job's thread; they are
+      parked here and flashed from the UI loop. }
+    FBgFlashLock:    TCriticalSection;
+    FBgFlashPending: string;
+    { A permissions "ask" in flight. The loop thread parks the request
+      here and waits on FAskEvent; the UI loop shows it in the footer and
+      answers from HandleKey (Delphi build). The FPC line build reads the
+      answer from stdin on the loop thread instead -- its UI thread is
+      blocked in DoneEvent.WaitFor during a turn. }
+    FAskLock:        TCriticalSection;
+    FAskPending:     Boolean;
+    FAskLine:        string;
+    FAskAnswer:      TAskAnswer;
+    FAskEvent:       TEvent;
     { NB: RouteConfig is declared further down, after every field -- dcc64
       (E2169) forbids a field definition after a method/property in the same
       visibility section, and the build branches below add more fields. }
@@ -201,7 +219,10 @@ type
     procedure OpenThemeMenu;
     procedure ApplyTheme(const Name: string; ForcePreview: Boolean);
     procedure SubmitInput;
-    procedure StartTurn(const UserText: string);
+    { TurnModel: a slash skill's model: for this turn only, '' = FModel.
+      A parameter, not a field, so it cannot outlive the turn it was
+      typed for -- see SubmitInput. }
+    procedure StartTurn(const UserText, TurnModel: string);
     procedure PollLoopWorker;
     procedure RefreshSessions;
     procedure SelectSession(Id: string);
@@ -231,7 +252,8 @@ type
     procedure HandleUndoCommand(const Args: string);
     procedure HandleInitCommand(const Args: string);
     procedure HandleRedoCommand(const Args: string);
-    procedure HandleUserInput(const Text: string);
+    { TurnModel as for StartTurn: a slash skill's model:, '' = FModel. }
+    procedure HandleUserInput(const Text, TurnModel: string);
     { Live tool activity for the line-based REPL: print each call/result as it
       happens (the worker fires these while the main thread blocks in WaitFor,
       so it's the sole stdout writer -- no locking needed). }
@@ -242,6 +264,7 @@ type
       field-before-method rule isn't broken by the conditional field blocks
       above. Lazily loads + caches FRouteCfg for the per-turn auto-router. }
     function RouteConfig: TConfig;
+    procedure DrainBackgroundFlash;   { both builds: parks -> footer flash }
   public
     (* Operator's prompt-cache settings. Defaults to default-on (matches
        DefaultChatOptions). Cmd_TUI_Run copies Cfg.PromptCache into this
@@ -296,9 +319,24 @@ type
        session switches -- they belong to the process, not the
        session pane selection). *)
     BgCoordinator:      TBackgroundSpawnCoordinator;
+    { Installed skills; prompt skills answer to /name in the chat input
+      (PasClaw.Skills.Slash). Set by Cmd.TUI after loading manifests. }
+    Skills:             TSkillSpecArray;
     constructor Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
     {$IFNDEF FPC}destructor Destroy; override;{$ENDIF}
     procedure Run;
+    { SetBackgroundDoneHook target: a spawn_background / shell_background
+      job finished. Called on the job's thread, so it only parks the line;
+      the UI loop flashes it. The model gets the result itself at the top
+      of its next turn through the drain. }
+    procedure BackgroundDone(const Key, Handle, Summary: string);
+    { TPermAskFn for the loop config: a permissions "ask" rule matched.
+      Blocks the calling (loop) thread until the operator answers or
+      permissions_ask_timeout_sec passes (then deny). }
+    function AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+    { True while an ask is waiting for a key; HandleKey and the footer read it. }
+    function AskPending(out Line: string): Boolean;
+    procedure AnswerAsk(Answer: TAskAnswer);
   end;
 
 implementation
@@ -306,7 +344,6 @@ implementation
 uses
   PasClaw.Workspaces,
   Classes,
-  SyncObjs,
   DateUtils,
   PasClaw.CliUI,
   PasClaw.Utils,                   { VisibleLength + PadVisibleRight +
@@ -496,9 +533,145 @@ begin
   PromptCacheTTL     := '';
   RenderMarkdownEnabled := True;
   FRouteCfg := nil;
+  FBgFlashLock := TCriticalSection.Create;
+  FBgFlashPending := '';
+  FAskLock := TCriticalSection.Create;
+  FAskEvent := TEvent.Create(nil, True, False, '');
+  FAskPending := False;
+  FAskLine := '';
   {$IFNDEF FPC}
   FToolActivityLock := TCriticalSection.Create;
   SetLength(FToolActivity, 0);
+  {$ENDIF}
+end;
+
+procedure TTUI.BackgroundDone(const Key, Handle, Summary: string);
+begin
+  FBgFlashLock.Enter;
+  try
+    FBgFlashPending := 'background ' + Handle + ' finished -- ' + Summary +
+                       ' (delivered on your next turn)';
+  finally
+    FBgFlashLock.Leave;
+  end;
+end;
+
+function TTUI.AskPending(out Line: string): Boolean;
+begin
+  FAskLock.Enter;
+  try
+    Result := FAskPending;
+    Line := FAskLine;
+  finally
+    FAskLock.Leave;
+  end;
+end;
+
+procedure TTUI.AnswerAsk(Answer: TAskAnswer);
+begin
+  FAskLock.Enter;
+  try
+    if not FAskPending then Exit;
+    FAskAnswer := Answer;
+    FAskPending := False;
+    FAskEvent.SetEvent;
+  finally
+    FAskLock.Leave;
+  end;
+end;
+
+function TTUI.AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+var
+  Res: string;
+  {$IFDEF FPC}
+  Line: string;
+  {$ELSE}
+  Waited, LimitMs: Integer;
+  {$ENDIF}
+begin
+  Result := aaDeny;
+  Res := Resource;
+  if Length(Res) > 100 then Res := Copy(Res, 1, 97) + '...';
+  (* One ask at a time. There is one footer and one keyboard, and the
+     loop dispatches in parallel: two ask-gated calls in a batch used to
+     overwrite each other's pending request and both take the single
+     keypress as their answer, so a call the operator never saw was
+     approved by the keystroke meant for the one they did. The FPC
+     branch below has the same problem in sharper form -- two threads
+     reading one stdin. (Codex P1 on #611.) *)
+  BeginInteractiveAsk;
+  try
+  {$IFDEF FPC}
+  { Line build: the UI thread is parked in DoneEvent.WaitFor, so the
+    prompt is read here, on the loop thread, like the CLI's. }
+  if Res <> '' then Res := '  ' + Ansi.Dim + Res + Ansi.Reset;
+  PrintLn('');
+  PrintLn(Ansi.Bold + 'permission: ' + Ansi.Reset + ToolName + Res);
+  PrintLn(Ansi.Dim + '  (' + Reason + ')' + Ansi.Reset);
+  Print('  allow [y]once / [s]ession / [n]o > ');
+  if EOF then Exit;
+  ReadLn(Line);
+  Line := LowerCase(Trim(Line));
+  if (Line = 'y') or (Line = 'yes') or (Line = 'once') then Result := aaAllowOnce
+  else if (Line = 's') or (Line = 'session') or (Line = 'always') then Result := aaAllowSession;
+  {$ELSE}
+  FAskLock.Enter;
+  try
+    FAskEvent.ResetEvent;
+    FAskAnswer := aaDeny;
+    FAskPending := True;
+    FAskLine := ToolName;
+    if Res <> '' then FAskLine := FAskLine + ' ' + Res;
+  finally
+    FAskLock.Leave;
+  end;
+  LimitMs := RouteConfig.PermissionsAskTimeoutSec * 1000;
+  Waited := 0;
+  { Poll in slices so a quitting TUI (FQuit) releases the loop thread
+    instead of holding it for the full timeout. }
+  while (Waited < LimitMs) and (not FQuit) do
+  begin
+    if FAskEvent.WaitFor(250) = wrSignaled then Break;
+    Inc(Waited, 250);
+  end;
+  FAskLock.Enter;
+  try
+    if FAskPending then
+    begin
+      { timed out or quitting: withdraw the prompt, answer stays deny }
+      FAskPending := False;
+      FAskLine := '';
+    end
+    else
+      Result := FAskAnswer;
+  finally
+    FAskLock.Leave;
+  end;
+  {$ENDIF}
+  finally
+    EndInteractiveAsk;
+  end;
+end;
+
+procedure TTUI.DrainBackgroundFlash;
+var
+  S: string;
+begin
+  FBgFlashLock.Enter;
+  try
+    S := FBgFlashPending;
+    FBgFlashPending := '';
+  finally
+    FBgFlashLock.Leave;
+  end;
+  if S = '' then Exit;
+  {$IFNDEF FPC}
+  Flash(S);
+  {$ELSE}
+  { The FPC build is a line REPL with no footer; a dim line will do.
+    PrintLn, not WriteLn, like the rest of this surface -- it is the
+    helper that gets UTF-8 onto a Windows console. }
+  PrintLn(Ansi.Dim + '[' + S + ']' + Ansi.Reset);
   {$ENDIF}
 end;
 
@@ -568,6 +741,22 @@ begin
   end;
   FSession.Free;
   FRouteCfg.Free;
+  { Safe to free, unlike FToolActivityLock below: the only thing that
+    touches it from another thread is BackgroundDone, and Cmd_TUI_Run
+    calls SetBackgroundDoneHook(nil) -- which blocks until any in-flight
+    callback has returned -- before it frees this object. (The FPC build
+    has no destructor at all and leaks this one; it is a single critical
+    section in a one-TUI-per-process surface.) }
+  FBgFlashLock.Free;
+  FBgFlashLock := nil;
+  (* FAskLock / FAskEvent are deliberately NOT freed either, and for the
+     same reason as FToolActivityLock below. A worker parked in
+     AskPermission is woken by FQuit within a poll slice, but the bounded
+     wait above gives up after the same 250 ms and hands the thread to
+     FreeOnTerminate -- so Destroy cannot know the worker has left
+     AskPermission, and freeing the event it is waiting on is exactly the
+     use-after-free the hand-off is designed around. Two synchronisation
+     objects at process exit cost nothing. *)
   { FToolActivityLock is deliberately NOT freed: on the bounded-wait timeout
     path above a worker is handed to FreeOnTerminate and may still fire
     OnToolCall/OnToolResult into LiveToolCall during teardown. Freeing the lock
@@ -1378,8 +1567,9 @@ begin
   end;
 end;
 
-procedure TTUI.StartTurn(const UserText: string);
+procedure TTUI.StartTurn(const UserText, TurnModel: string);
 var
+  WorkingState: string;
   Cfg: TToolLoopConfig;
   Worker: TRunToolLoopThread;
   RoutedNm: string;
@@ -1408,10 +1598,16 @@ begin
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
+  if TurnModel <> '' then
+  begin
+    Cfg.Model := TurnModel;    { a slash skill's model:, this turn only }
+    Cfg.ModelPinned := True;   { ...which ApplyAutoRoute below keeps }
+  end;
   Cfg.CompactModel  := BackgroundModelOn(RouteConfig, ProviderName);
   Cfg.MaxIterations := 6;
   Cfg.Parallel      := True;
   Cfg.Mode          := FMode;  { PR #290: thread current Plan/Build into the dispatch gate }
+  Cfg.OnAsk         := AskPermission;  { permissions "ask" rules prompt in the footer }
   Cfg.Options       := DefaultChatOptions;
   { #414 review: the cap default flipped on, but these builders never set
     ToolOutputCap, so TUI turns sent oversized tool output verbatim while
@@ -1437,57 +1633,19 @@ begin
       BgCoordinator.SetKey(FSession.Meta.Id);
       Cfg.BackgroundDrainKey := FSession.Meta.Id;
     end;
-    { Inject the working-state snapshot built up over previous
-      turns. Empty string when the snapshot is empty so the system
-      prompt stays clean for fresh sessions. Helper lives in
-      PasClaw.Session.Store. }
-    Cfg.Options.SystemPrompt := FormatWorkingStateBlock(FSession.Meta);
-    (* PR #290: prepend a Plan Mode block so the model knows mutating
-       tools will refuse. The dispatch gate in Tools.ToolLoop is the
-       authority, but telling the model up-front means it produces a
-       useful analysis instead of a turn full of refused tool calls. *)
-    if FMode = pmPlan then
-      Cfg.Options.SystemPrompt :=
-        '## Plan Mode' + sLineBreak + sLineBreak +
-        'You are in PLAN mode (TUI Tab pressed). Read-only tools work; ' +
-        'write_file / append_file / edit_file / shell_exec / execute_code / ' +
-        'send_message / skills_manage / ... will REFUSE. Analyse the ' +
-        'codebase and propose a plan; do not attempt mutating tools.' +
-        sLineBreak + sLineBreak +
-        Cfg.Options.SystemPrompt;
-    (* Improve mode refuses nothing, so unlike the block above this one
-       is not a warning -- it is the entire mode. Kept short here on
-       purpose: the TUI prepends to a prompt it did not build, and the
-       full text lives in PasClaw.Agent.Prompt where the CLI and
-       gateway get it. *)
-    if FMode = pmImprove then
-      Cfg.Options.SystemPrompt :=
-        '## Improve Mode' + sLineBreak + sLineBreak +
-        'You are in IMPROVE mode (TUI). Every tool works. Work the loop: ' +
-        'benchmark it FIRST and record the number and the command; ' +
-        'profile to find where the cost really is; change ONE thing; ' +
-        're-run the SAME measurement and report before -> after; ' +
-        'research when the profile suggests no fix. Revert a change ' +
-        'that did not move the number, and say so. Report regressions ' +
-        'plainly. Never claim a speedup you did not measure.' +
-        sLineBreak + sLineBreak +
-        Cfg.Options.SystemPrompt;
-    { Space keeps the same short-form register as Improve above; the
-      full section lives in PasClaw.Agent.Prompt for CLI + gateway.
-      The dispatch gate (mutating tools refused until plan_write) is
-      enforced in the tool loop regardless of what this prompt says. }
-    if FMode = pmSpace then
-      Cfg.Options.SystemPrompt :=
-        '## Space Mode' + sLineBreak + sLineBreak +
-        'You are in SPACE mode (TUI): Search, Plan, Assert, Code, ' +
-        'Evaluate. Search for what exists before designing; record ' +
-        'the plan with plan_write (mutating tools are refused until ' +
-        'you do); write each check FIRST and show it failing; code ' +
-        'the minimum that turns it green; re-run the same check, ' +
-        'quote it, and state what it did NOT cover. Never claim red ' +
-        'or green output you did not produce this session.' +
-        sLineBreak + sLineBreak +
-        Cfg.Options.SystemPrompt;
+    (* The same system prompt the CLI and the gateway build: identity,
+       workspace, the memory tier (MEMORY.md / USER.md / SOUL.md / daily
+       notes), distilled facts, AGENTS.md, the active plan, the skills
+       catalog, deferred tools, the mode block and the rules. The TUI used
+       to send only the working-state snapshot plus a short mode blurb, so
+       a TUI turn saw none of the operator's memory or project rules while
+       `pasclaw agent` on the same workspace saw all of it. The working
+       state still rides along, after the built prompt. *)
+    Cfg.Options.SystemPrompt :=
+      BuildSystemPrompt(RouteConfig, '', FRegistry <> nil, UserText, FMode);
+    WorkingState := FormatWorkingStateBlock(FSession.Meta);
+    if WorkingState <> '' then
+      Cfg.Options.SystemPrompt := Cfg.Options.SystemPrompt + sLineBreak + sLineBreak + WorkingState;
   end;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := LiveToolCall;
@@ -1717,9 +1875,14 @@ procedure TTUI.SubmitInput;
 var
   Text: string;
   ModeArg: TPasClawMode;
+  SkSpec: TSkillSpec;
+  SkArgs, SkModel: string;
+  SkExpanded: Boolean;
 begin
   Text := Trim(FInputBuf);
   if Text = '' then Exit;
+  SkExpanded := False;
+  SkModel := '';
 
   { Slash-command shortcuts -- without these the model gets "/quit"
     as a literal user message because StartTurn doesn't filter. The
@@ -1783,10 +1946,29 @@ begin
       HandleInitCommand(Copy(Text, 7, MaxInt))
     else if (Text = '/redo') or (Copy(Text, 1, 6) = '/redo ') then
       HandleRedoCommand(Copy(Text, 7, MaxInt))
+    { Not a built-in: an installed prompt skill? Expand it into this
+      turn's message and fall through to the normal send path below.
+      model: is honoured for the turn; agent: / subagent: become a hint
+      in the message on this surface. }
+    else if ResolveSlashSkill(Text, Skills, SkSpec, SkArgs) then
+    begin
+      SkModel := SkSpec.Model;
+      Text := ExpandSlashSkill(SkSpec, SkArgs);
+      if SkSpec.Agent <> '' then
+        Text := 'Use the spawn tool with agent "' + SkSpec.Agent + '" for this task:' + sLineBreak + sLineBreak + Text
+      else if SkSpec.Subagent then
+        Text := 'Delegate this task to a background subagent if one is available, else do it yourself:' +
+                sLineBreak + sLineBreak + Text;
+      Flash('skill /' + SkSpec.Name);
+      SkExpanded := True;
+    end
     else
       Flash('unknown: ' + Text);
-    FInputBuf := '';
-    Exit;
+    if not SkExpanded then
+    begin
+      FInputBuf := '';
+      Exit;
+    end;
   end;
 
   { When a loop is already running, queue the input as steering so
@@ -1794,17 +1976,24 @@ begin
     (PR #120 mechanism). Route to FLoopSessionId -- the originating
     session -- not FSession.Meta.Id, in case the user swapped panes
     while the loop was in flight. Same Codex P1 fix as PollLoopWorker. }
+  (* A skill's model: belongs to a turn that STARTS here. Steering joins
+     the turn already running, on that turn's model, so it is dropped
+     (and said so) -- held in a field instead, it used to wait there and
+     put the NEXT, unrelated turn on the skill's model. (Codex P2 on
+     #614.) *)
   if FLoopThread <> nil then
   begin
-    if PushSteering(FLoopSessionId, Text) then
-      Flash('steering queued')
+    if not PushSteering(FLoopSessionId, Text) then
+      Flash('steer push failed')
+    else if SkModel <> '' then
+      Flash('steering queued (the running turn keeps its model, not ' + SkModel + ')')
     else
-      Flash('steer push failed');
+      Flash('steering queued');
     FInputBuf := '';
     Exit;
   end;
 
-  StartTurn(Text);
+  StartTurn(Text, SkModel);
   FInputBuf := '';
 end;
 
@@ -2048,12 +2237,27 @@ end;
 procedure TTUI.HandleKey(Key: Integer);
 const
   KEY_TAB = 9;
+var
+  AskLine: string;
 begin
   { Menu intercepts first -- Esc cancels the menu (reverts theme)
     instead of quitting the TUI, Up/Down navigates with live
     preview, Enter commits the selection. Model menu intercept piggybacks
     on the same gate; only one overlay can be open per the mutual-exclusion
     contract enforced in OpenThemeMenu / OpenModelMenu. }
+  { A permissions ask outranks every other key: the loop thread is
+    waiting on this answer. y/a = allow once, s = this session, anything
+    else = deny. }
+  if AskPending(AskLine) then
+  begin
+    case Key of
+      Ord('y'), Ord('Y'), Ord('a'), Ord('A'): AnswerAsk(aaAllowOnce);
+      Ord('s'), Ord('S'):                     AnswerAsk(aaAllowSession);
+    else
+      AnswerAsk(aaDeny);
+    end;
+    Exit;
+  end;
   if FStatsOpen then
   begin
     { Any key dismisses the read-only stats overlay. No selection
@@ -2134,9 +2338,11 @@ end;
 
 procedure TTUI.DrawFooterBar(Y, W: Integer);
 var
-  Hint, Status: string;
+  Hint, Status, AskLine: string;
 begin
-  if FConfirmDelete then
+  if AskPending(AskLine) then
+    Hint := ' permission? [Y] allow once  [S] this session  [N] deny -- ' + AskLine
+  else if FConfirmDelete then
     Hint := ' [Y]es delete  [N]o cancel  '
   else if FFocus = foSessions then
     Hint := ' [Tab] chat  [Up/Dn] nav  [Enter] open  [N]ew  [D]elete  [R]efresh  [Q]uit '
@@ -2729,6 +2935,7 @@ begin
     begin
       PollLoopWorker;
       PollModelRefresh;
+      DrainBackgroundFlash;
 
       { Periodic ListSessions refresh so cron-side / parallel-CLI
         session changes show up without keystrokes. 3s cadence. }
@@ -2923,6 +3130,8 @@ end;
 procedure TTUI.HandleSlashCommand(const Cmd: string);
 var
   Arg: string;
+  SkSpec: TSkillSpec;
+  SkArgs, Expanded: string;
 begin
   if (Cmd = '/quit') or (Cmd = '/exit') or (Cmd = '/q') then begin FQuit := True; Exit; end;
   if Cmd = '/clear' then begin Print(#27'[2J' + #27'[H'); DrawHeader; Exit; end;
@@ -2948,6 +3157,21 @@ begin
   if (Cmd = '/redo') or (Copy(Cmd, 1, 6) = '/redo ') then
   begin
     HandleRedoCommand(Copy(Cmd, 7, MaxInt));
+    Exit;
+  end;
+  { Not a built-in: an installed prompt skill? Expand and run it as this
+    turn's message (model: honoured for the turn; agent: / subagent: as
+    a hint in the message on this surface). }
+  if ResolveSlashSkill(Cmd, Skills, SkSpec, SkArgs) then
+  begin
+    Expanded := ExpandSlashSkill(SkSpec, SkArgs);
+    if SkSpec.Agent <> '' then
+      Expanded := 'Use the spawn tool with agent "' + SkSpec.Agent + '" for this task:' + sLineBreak + sLineBreak + Expanded
+    else if SkSpec.Subagent then
+      Expanded := 'Delegate this task to a background subagent if one is available, else do it yourself:' +
+                  sLineBreak + sLineBreak + Expanded;
+    PrintLn(Ansi.Dim + '(skill /' + SkSpec.Name + ')' + Ansi.Reset);
+    HandleUserInput(Expanded, SkSpec.Model);
     Exit;
   end;
   PrintLn(Ansi.Yellow + 'unknown command: ' + Cmd + Ansi.Reset);
@@ -3069,7 +3293,7 @@ begin
     PrintLn(Ansi.Dim + '  ✓ ' + FlattenClip(ResultText, 200) + Ansi.Reset);
 end;
 
-procedure TTUI.HandleUserInput(const Text: string);
+procedure TTUI.HandleUserInput(const Text, TurnModel: string);
 var
   Msgs: array of TMessage;
   Loop: TToolLoopResult;
@@ -3100,6 +3324,11 @@ begin
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
+  if TurnModel <> '' then
+  begin
+    Cfg.Model := TurnModel;    { a slash skill's model:, this turn only }
+    Cfg.ModelPinned := True;   { ...which ApplyAutoRoute below keeps }
+  end;
   Cfg.CompactModel  := BackgroundModelOn(RouteConfig, ProviderName);
   Cfg.MaxIterations := 6;
   Cfg.Parallel := True;
@@ -3116,6 +3345,7 @@ begin
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := LiveToolCallLine;
   Cfg.OnToolResult  := LiveToolResultLine;
+  Cfg.OnAsk         := AskPermission;  { permissions "ask" rules prompt on stdin }
   { Background subagents on the FPC line-based path. Codex on
     PR #212: Cmd.TUI registers spawn_background for FPC builds too,
     so without this binding a job would start but its result would
@@ -3202,9 +3432,19 @@ begin
   FQuit := False;
   while not FQuit do
   begin
+    (* Background completions, as a line. There is no footer to flash
+       into here and no frame loop to flash from -- this REPL blocks in
+       ReadLn -- so they print at the two moments the operator is looking
+       at the prompt: before it (a job that finished during the last
+       turn) and right after their Enter (one that finished while they
+       were typing). Without this the parked line was never shown at all:
+       DrainBackgroundFlash was only called from the Delphi frame loop, so
+       the FPC branch of it was dead code. (Codex P2 on #610.) *)
+    DrainBackgroundFlash;
     Print(Ansi.BoldBlue + 'you' + Ansi.Reset + '      > ');
     if EOF then Break;
     ReadLn(Line);
+    DrainBackgroundFlash;
     Line := Trim(Line);
     if Line = '' then Continue;
     if (Line[1] = '/') then
@@ -3212,7 +3452,7 @@ begin
       HandleSlashCommand(Line);
       Continue;
     end;
-    HandleUserInput(Line);
+    HandleUserInput(Line, '');
   end;
   FRouteCfg.Free;   { FPC has no TTUI destructor override; free the cache here }
   FRouteCfg := nil;
