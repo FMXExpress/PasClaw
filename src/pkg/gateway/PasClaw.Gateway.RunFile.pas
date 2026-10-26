@@ -92,8 +92,7 @@ uses
   {$ELSE}
     {$IFDEF MSWINDOWS}Winapi.Windows,{$ELSE}Posix.Signal, Posix.Unistd, Posix.Errno,{$ENDIF}
   {$ENDIF}
-  DateUtils,
-  PasClaw.Utils,
+  PasClaw.Utils,   { NowIsoUtc, ReadFileText, WriteFileText }
   PasClaw.JSON,
   PasClaw.Crypto.HMAC;
 
@@ -128,6 +127,16 @@ begin
   {$ENDIF}
 end;
 
+{$IFDEF MSWINDOWS}
+const
+  { PROCESS_QUERY_LIMITED_INFORMATION (Vista+): enough for
+    GetExitCodeProcess, and granted on processes of other users where
+    PROCESS_QUERY_INFORMATION is not. Declared here because dcc64's
+    Winapi.Windows does not declare it (E2003 on the Delphi build); our own
+    name, so it cannot collide with a unit that does. }
+  RUNFILE_PROCESS_QUERY_LIMITED = $1000;
+{$ENDIF}
+
 function ProcessAlive(Pid: Integer): Boolean;
 {$IFDEF MSWINDOWS}
 var
@@ -137,7 +146,7 @@ var
 begin
   if Pid <= 0 then Exit(False);
   {$IFDEF MSWINDOWS}
-  H := OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, DWORD(Pid));
+  H := OpenProcess(RUNFILE_PROCESS_QUERY_LIMITED, False, DWORD(Pid));
   if H = 0 then Exit(False);
   try
     Result := GetExitCodeProcess(H, Code) and (Code = STILL_ACTIVE);
@@ -169,7 +178,11 @@ begin
     Obj.PutStr('bind', Bind);
     Obj.PutInt('pid', CurrentProcessId);
     Obj.PutStr('token_hash', TokenHashHex(Token));
-    Obj.PutStr('started_at', FormatDateTime('yyyy-mm-dd"T"hh:nn:ss"Z"', LocalTimeToUniversal(Now)));
+    { NowIsoUtc: LocalTimeToUniversal is FPC's DateUtils only (E2003 on
+      dcc64); the helper picks TTimeZone on Delphi, and quotes its
+      separators, which a bare ':' in FormatDateTime is not -- it becomes
+      the locale's time separator. }
+    Obj.PutStr('started_at', NowIsoUtc);
     Obj.PutStr('version', Version);
     WriteFileText(Path, Obj.ToJSON);
   finally
@@ -183,8 +196,11 @@ var
   Alive: Boolean;
 begin
   if not ReadGatewayRunFileRaw(Home, Info, Alive) then Exit;
+  { SysUtils', by name: on Delphi, Winapi.Windows comes later in scope and
+    its DeleteFile(PWideChar) wins over SysUtils.DeleteFile(string) --
+    E2010 on dcc64. }
   if (Info.Pid = CurrentProcessId) or (not Alive) then
-    DeleteFile(Info.Path);
+    SysUtils.DeleteFile(Info.Path);
 end;
 
 function ReadGatewayRunFileRaw(const Home: string; out Info: TGatewayRunInfo;
