@@ -1396,45 +1396,45 @@ end;
 
 { ------------------------------------------------------------------ lanes -- }
 
-function GlobFrom(const P, S: string; PI, SI: Integer): Boolean;
+function GlobFrom(const P, S: string; PIdx, SIdx: Integer): Boolean;
 var
   K: Integer;
   Boundary: Boolean;
 begin
-  while PI <= Length(P) do
+  while PIdx <= Length(P) do
   begin
-    if (P[PI] = '*') and (PI < Length(P)) and (P[PI + 1] = '*') then
+    if (P[PIdx] = '*') and (PIdx < Length(P)) and (P[PIdx + 1] = '*') then
     begin
-      Inc(PI, 2);
+      Inc(PIdx, 2);
       { "**/" matches at segment starts only, so **/app.json is not
         satisfied by notapp.json. }
-      Boundary := (PI <= Length(P)) and (P[PI] = '/');
-      if Boundary then Inc(PI);
-      for K := SI to Length(S) + 1 do
-        if ((not Boundary) or (K = SI) or (S[K - 1] = '/')) and
-           GlobFrom(P, S, PI, K) then Exit(True);
+      Boundary := (PIdx <= Length(P)) and (P[PIdx] = '/');
+      if Boundary then Inc(PIdx);
+      for K := SIdx to Length(S) + 1 do
+        if ((not Boundary) or (K = SIdx) or (S[K - 1] = '/')) and
+           GlobFrom(P, S, PIdx, K) then Exit(True);
       Exit(False);
     end;
-    if P[PI] = '*' then
+    if P[PIdx] = '*' then
     begin
-      Inc(PI);
-      for K := SI to Length(S) + 1 do
+      Inc(PIdx);
+      for K := SIdx to Length(S) + 1 do
       begin
-        if GlobFrom(P, S, PI, K) then Exit(True);
+        if GlobFrom(P, S, PIdx, K) then Exit(True);
         if (K <= Length(S)) and (S[K] = '/') then Break;
       end;
       Exit(False);
     end;
-    if SI > Length(S) then Exit(False);
-    if P[PI] = '?' then
+    if SIdx > Length(S) then Exit(False);
+    if P[PIdx] = '?' then
     begin
-      if S[SI] = '/' then Exit(False);
+      if S[SIdx] = '/' then Exit(False);
     end
-    else if P[PI] <> S[SI] then Exit(False);
-    Inc(PI);
-    Inc(SI);
+    else if P[PIdx] <> S[SIdx] then Exit(False);
+    Inc(PIdx);
+    Inc(SIdx);
   end;
-  Result := SI > Length(S);
+  Result := SIdx > Length(S);
 end;
 
 function LaneMatches(const Glob, RelPath: string): Boolean;
