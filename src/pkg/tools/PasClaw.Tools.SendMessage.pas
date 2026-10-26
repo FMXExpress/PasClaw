@@ -47,6 +47,12 @@ uses
   (NewBuiltinRegistry does) or just call this and let it gate itself. }
 procedure RegisterSendMessageTool(R: TToolRegistry);
 
+(* Post Message to the configured channel called Name -- the same lookup
+   and senders the tool uses, for callers that are not the model (a new
+   decision for the operator, PasClaw.Agents.Tools). Names only, for the
+   same reason the tool takes names only. *)
+function PostToChannel(const Name, Message: string; out ErrMsg: string): Boolean;
+
 implementation
 
 uses
@@ -152,21 +158,14 @@ begin
     ErrMsg := Kind + ' post failed (HTTP error -- check the target URL/token)';
 end;
 
-function Tool_SendMessage(const ArgsJSON: string; out ErrMsg: string): string;
+function PostToChannel(const Name, Message: string; out ErrMsg: string): Boolean;
 var
-  Name, Message: string;
   Cfg: TConfig;
   i, Found: Integer;
-  Kind, Target: string;
-  Names: string;
+  Kind, Target, Names: string;
 begin
+  Result := False;
   ErrMsg := '';
-  Result := '';
-  Name    := Trim(ParseArg(ArgsJSON, 'channel'));
-  Message := ParseArg(ArgsJSON, 'message');
-  if Name = '' then begin ErrMsg := 'missing required argument: channel'; Exit; end;
-  if Trim(Message) = '' then begin ErrMsg := 'missing required argument: message'; Exit; end;
-
   { Re-load config at call time (not registration time) so an operator
     editing config.json mid-session is honoured, and so the handler --
     a plain function pointer with no closure -- has somewhere to get
@@ -196,12 +195,24 @@ begin
     Cfg.Free;
   end;
 
-  if DispatchToChannel(Kind, Target, Message, ErrMsg) then
-  begin
+  Result := DispatchToChannel(Kind, Target, Message, ErrMsg);
+  if Result then
     LogInfo('send_message: posted %d bytes to %s (%s)',
             [Length(Message), Name, Kind]);
-    Result := 'posted to ' + Name + ' (' + Kind + ')';
-  end;
+end;
+
+function Tool_SendMessage(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  Name, Message: string;
+begin
+  ErrMsg := '';
+  Result := '';
+  Name    := Trim(ParseArg(ArgsJSON, 'channel'));
+  Message := ParseArg(ArgsJSON, 'message');
+  if Name = '' then begin ErrMsg := 'missing required argument: channel'; Exit; end;
+  if Trim(Message) = '' then begin ErrMsg := 'missing required argument: message'; Exit; end;
+  if PostToChannel(Name, Message, ErrMsg) then
+    Result := 'posted to ' + Name;
 end;
 
 procedure RegisterSendMessageTool(R: TToolRegistry);

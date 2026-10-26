@@ -106,7 +106,8 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
   PasClaw.Crypto.HMAC,
-  PasClaw.Identity;
+  PasClaw.Identity,
+  PasClaw.Decisions;  { HandleDecisionReply -- "D12 yes" }
 
 type
   (* One-shot worker that calls TWhatsAppBot.ProcessMessage off the Indy
@@ -333,10 +334,17 @@ begin
   LoopCfg.OnToolCall    := nil;
   LoopCfg.OnToolResult  := nil;
 
-  if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
-    Response := Loop.Content
-  else
-    Response := '(sorry -- model returned no content)';
+  { "D12 yes" answers the operator's decision (PasClaw.Decisions) rather
+    than starting a turn -- and only from a sender decisions.answer_from
+    names, which HandleDecisionReply checks. }
+  if not HandleDecisionReply(Text, CanonicalOf(LoopCfg.Identity),
+                             FCfg.DecisionsAnswerFrom, Response) then
+  begin
+    if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
+      Response := Loop.Content
+    else
+      Response := '(sorry -- model returned no content)';
+  end;
 
   FPush.Push(FromNumber, Response);
 end;

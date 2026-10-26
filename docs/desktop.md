@@ -131,6 +131,15 @@ Jobs are opened by the runtime when a turn starts working a task, so the
 model only has to close them. Opening a job marks its task **active**;
 reporting a job **done** closes the task. The desktop tree shows this live.
 
+**Needs you.** A taskbar button that appears only when something waits
+on you, with the count: decisions an agent team asked for, permission
+`ask` requests the gateway is holding a tool call on, and submitted tasks
+no agent can review. Its window answers each — a decision's choices as
+buttons (or a free-text answer), Allow once / Allow for this session /
+Deny for a permission ask, Accept / Reject for a review. It repaints on
+the `decision` and `permission_request` events. See
+[teams](./teams.md#needs-you-one-queue-for-your-calls).
+
 **Boards that require review.** An agent team's board requires a second
 agent's verdict ([teams](./teams.md#review-the-board-holds-the-rule)):
 there, a job reported done **submits** its task instead, and the task
@@ -917,6 +926,10 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | GET/PATCH/DELETE | `/v1/projects/<name>` | inspect / edit / remove |
 | GET | `/v1/projects/<name>/blueprint` | export |
 | POST | `/v1/projects/import` | import |
+| GET | `/v1/decisions` | the operator's decisions (`?open=1` for the open ones) |
+| GET | `/v1/decisions/<id>` | one decision |
+| POST | `/v1/decisions/<id>/answer` | `{"answer":"yes"}` -- recorded as the operator's (409 when answered or not one of the choices) |
+| GET | `/v1/needs-you` | open decisions, and tasks in review no agent can give the verdict on |
 | POST | `/v1/projects/<n>/review` | `{"review":true,"reviewers":["qa"]}` -- require a verdict on this board |
 | GET | `/v1/projects/<n>/activity` | the receipts, oldest first (`?task=T0004&limit=50`) |
 | GET/POST | `/v1/projects/<n>/tasks` | list / create (`criteria`, `waits_on` optional) |

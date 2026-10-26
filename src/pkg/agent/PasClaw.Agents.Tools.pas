@@ -66,14 +66,24 @@ implementation
 
 uses
   SysUtils,
+  PasClaw.Utils,
   PasClaw.Tools.Types,
   PasClaw.JSON,
-  PasClaw.Agents;
+  PasClaw.Config,           { decisions.channel }
+  PasClaw.Logger,
+  PasClaw.Agents,
+  PasClaw.Decisions,        { ask_operator }
+  PasClaw.Projects.Store,   { the task a question blocks }
+  PasClaw.Tools.SendMessage; { PostToChannel -- decisions off the desk }
 
 const
   AgentSchema =
     '{"type":"object","properties":{' +
-    '"action":{"type":"string","enum":["list","create","get","delete","send","inbox"]},' +
+    '"action":{"type":"string","enum":["list","create","get","delete","send","inbox","ask_operator"]},' +
+    '"question":{"type":"string","description":"what only a person can decide (ask_operator)"},' +
+    '"choices":{"type":"array","items":{"type":"string"},"description":"the answers you can act on, e.g. [\"yes\",\"no\"] (ask_operator; optional)"},' +
+    '"project":{"type":"string","description":"project the question is about (ask_operator; optional)"},' +
+    '"task":{"type":"string","description":"task it holds up -- blocked until answered (ask_operator; optional)"},' +
     '"name":{"type":"string","description":"the agent to act on"},' +
     '"title":{"type":"string","description":"human label (create)"},' +
     '"role":{"type":"string","description":"what this agent is for (create)"},' +
@@ -94,6 +104,55 @@ threadvar
 procedure SetCallingAgent(const Name: string);
 begin
   GCallerAgent := Name;
+end;
+
+function IfThenStr(Cond: Boolean; const Yes, No: string): string;
+begin
+  if Cond then Result := Yes else Result := No;
+end;
+
+(* A new decision goes off the desk too: to decisions.channel, when the
+   operator named one, so the question reaches a phone and not only an
+   open desktop. Best effort -- the decision exists either way. *)
+procedure NotifyDecisionChannel(const D: TDecisionInfo);
+var
+  Cfg: TConfig;
+  Channel, Err: string;
+begin
+  Cfg := LoadEffectiveConfig;
+  try
+    Channel := Cfg.DecisionsChannel;
+  finally
+    Cfg.Free;
+  end;
+  if Channel = '' then Exit;
+  if not PostToChannel(Channel,
+           'PasClaw needs you -- ' + DecisionSummary(D) + #10 +
+           'Reply "' + D.Id + ' <answer>" in a chat with the bot, or answer ' +
+           'it on the desktop (Needs you).', Err) then
+    LogWarn('decisions: could not post %s to channel %s: %s', [D.Id, Channel, Err]);
+end;
+
+(* The answer goes where the asker reads first -- its mailbox, which also
+   wakes it -- and the task the question blocked goes back to what it was
+   doing. A rule's approval is Phase 4's listener; this one still tells
+   whoever proposed it. *)
+procedure DeliverDecisionAnswer(const D: TDecisionInfo);
+var
+  T: TTaskInfo;
+  Delivered, Err, Back: string;
+begin
+  if D.AskedBy <> '' then
+    AgentSend(D.AskedBy, 'operator',
+              'Operator decided ' + D.Id + ' ("' + D.Question + '"): ' +
+              D.Answer, Delivered, Err);
+  if (D.Task = '') or (D.Project = '') then Exit;
+  if not GetTask(D.Project, D.Task, T) or (T.Status <> tsBlocked) then Exit;
+  if (D.TaskStatusBefore = 'active') or (D.TaskStatusBefore = 'todo') then
+    Back := D.TaskStatusBefore
+  else
+    Back := 'todo';
+  UpdateTask(D.Project, D.Task, '', '-', Back, Err);
 end;
 
 function CallingAgent: string;
@@ -123,6 +182,128 @@ begin
   if Info.RunEnd   <> '' then Result.PutStr('run_end',   Info.RunEnd);
   if Info.RunNote  <> '' then Result.PutStr('run_note',  Info.RunNote);
   Result.PutInt ('idle_minutes', AgentIdleMinutes(Info.Name));
+end;
+
+(* ask_operator: a question only a person can answer.
+
+   Only the top of a reporting chain asks. An agent with a parent has its
+   question delivered to the parent's mailbox, marked as an escalation:
+   the parent decides, or escalates in turn. Held here, by the tool,
+   rather than asked of the role prompt -- which is how "only your
+   decisions reach you" stays true when twelve agents are working.
+
+   A question about a task blocks the task until the answer comes, and
+   the decision remembers what status to put it back to. *)
+function AskOperator(Args: TJsonObject; out ErrMsg: string): string;
+var
+  Info: TAgentInfo;
+  Caller, Question, Project, TaskId, Before, Id, Text, Delivered, Err, Notes: string;
+  Choices: TStringArray;
+  Arr: TJsonArray;
+  T: TTaskInfo;
+  Root: TJsonObject;
+  I: Integer;
+begin
+  ErrMsg := '';
+  Result := '';
+  Caller := GCallerAgent;
+  if Caller = '' then
+  begin
+    ErrMsg := 'ask_operator is for standing agents, and this turn is not ' +
+              'one -- you are already talking with the operator, so ask ' +
+              'them in your reply.';
+    Exit;
+  end;
+  Question := Trim(Args.GetStr('question', Args.GetStr('text', '')));
+  if Question = '' then
+  begin
+    ErrMsg := 'ask_operator needs a "question"';
+    Exit;
+  end;
+  SetLength(Choices, 0);
+  Arr := Args.ChildArray('choices');
+  if Arr <> nil then
+  try
+    for I := 0 to Arr.Count - 1 do
+      if Trim(Arr.ItemStr(I)) <> '' then
+      begin
+        SetLength(Choices, Length(Choices) + 1);
+        Choices[High(Choices)] := Trim(Arr.ItemStr(I));
+      end;
+  finally
+    Arr.Free;
+  end;
+  Project := Trim(Args.GetStr('project', ''));
+  TaskId  := UpperCase(Trim(Args.GetStr('task', '')));
+
+  if GetAgent(Caller, Info) and (Info.Parent <> '') then
+  begin
+    Text := '[escalation] ' + Caller + ' needs a decision: ' + Question;
+    if Length(Choices) > 0 then
+    begin
+      Text := Text + ' (choices:';
+      for I := 0 to High(Choices) do Text := Text + ' ' + Choices[I];
+      Text := Text + ')';
+    end;
+    if TaskId <> '' then Text := Text + ' [task ' + TaskId + ' on ' + Project + ']';
+    Text := Text + #10'Decide it and message ' + Caller + ' back (agent ' +
+            'action=send), or -- if it is the operator''s call -- ask them ' +
+            'yourself with agent action=ask_operator.';
+    if not AgentSend(Info.Parent, Caller, Text, Delivered, Err) then
+    begin
+      ErrMsg := 'ask_operator: could not reach ' + Info.Parent + ': ' + Err;
+      Exit;
+    end;
+    Root := TJsonObject.Create;
+    try
+      Root.PutStr('escalated_to', Info.Parent);
+      Root.PutStr('note', 'You report to ' + Info.Parent + ', so the question ' +
+                  'went to them, not to the operator. Their answer arrives ' +
+                  'in your mailbox.');
+      Result := Root.ToJSON;
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
+  Before := '';
+  if TaskId <> '' then
+  begin
+    if not GetTask(Project, TaskId, T) then
+    begin
+      ErrMsg := 'ask_operator: no such task ' + Project + '/' + TaskId;
+      Exit;
+    end;
+    Before := TaskStatusToStr(T.Status);
+  end;
+  Id := CreateDecision('question', Caller, Question, Choices, Project, TaskId,
+                       Before, '', Err);
+  if Id = '' then
+  begin
+    ErrMsg := 'ask_operator: ' + Err;
+    Exit;
+  end;
+  { Only work that is waiting to be done is blocked; a task in review or
+    done is left alone -- the question is about it, not holding it up. }
+  if (TaskId <> '') and (T.Status in [tsTodo, tsActive]) then
+  begin
+    Notes := TrimRight(T.Notes);
+    if Notes <> '' then Notes := Notes + #10;
+    UpdateTask(Project, TaskId, '', Notes + '[waiting on the operator: ' + Id +
+               ' -- ' + Question + ']', 'blocked', Err, '-', '-', Caller);
+  end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr('decision', Id);
+    Root.PutStr('note', 'The operator has it (Needs you on the desktop, and ' +
+                'the decisions channel when one is set). The answer arrives in ' +
+                'your mailbox' + IfThenStr(TaskId <> '', '; ' + TaskId +
+                ' is blocked until then.', '.'));
+    Result := Root.ToJSON;
+  finally
+    Root.Free;
+  end;
 end;
 
 function Tool_Agent(const ArgsJSON: string; out ErrMsg: string): string;
@@ -277,8 +458,14 @@ begin
       Exit;
     end;
 
+    if Action = 'ask_operator' then
+    begin
+      Result := AskOperator(Args, ErrMsg);
+      Exit;
+    end;
+
     ErrMsg := 'agent: unknown action "' + Action +
-              '" (list | create | get | delete | send | inbox)';
+              '" (list | create | get | delete | send | inbox | ask_operator)';
   finally
     Args.Free;
   end;
@@ -293,15 +480,21 @@ begin
   T.Name        := 'agent';
   T.Description :=
     'Standing agents and the messages between them. ' +
-    'list | create | get | delete | send | inbox. ' +
+    'list | create | get | delete | send | inbox | ask_operator. ' +
     'An agent is a name, a role and a durable session -- it survives ' +
     'restarts, unlike a spawned subagent. `send` reaches an agent that ' +
     'is working right now (it sees the message between tool calls) as ' +
-    'well as one that is idle (it sees it next turn).';
+    'well as one that is idle (it sees it next turn). `ask_operator` ' +
+    'raises a question only a person can decide; if you report to ' +
+    'someone it goes to them first.';
   T.Schema      := AgentSchema;
   T.Handler     := Tool_Agent;
   T.Category    := tcMutating;
   R.Register(T);
 end;
+
+initialization
+  AddDecisionCreatedListener(NotifyDecisionChannel);
+  AddDecisionAnsweredListener(DeliverDecisionAnswer);
 
 end.

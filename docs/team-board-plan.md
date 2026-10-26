@@ -243,6 +243,15 @@ team due (mail skips the cadence). Built-in templates stay `routed`;
 
 ## Phase 3 -- one queue for the human's calls
 
+**Status: built** ([teams](./teams.md#needs-you-one-queue-for-your-calls);
+`team_board_tests`, `desktop_routes_tests`). As built: answering from a
+chat needs the sender in a new `decisions.answer_from` list --
+`allow_senders` would not do, since an empty one admits anyone; reviews
+no agent can give join decisions and permission asks in Needs you; the
+permission asks get their first window here (#611 shipped the server side
+only); and decisions are refused to the file tools like the board's
+records, so an agent cannot answer its own.
+
 - **`agent action=ask_operator`** (question, optional choices, optional
   task) creates a decision: `workspace/decisions/<id>.json` with who
   asked, the question, the answer, and when.

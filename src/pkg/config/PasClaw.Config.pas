@@ -833,6 +833,16 @@ type
        claim held by a run that died (docs/team-board-plan.md, Phase 2).
        Default 120. *)
     TeamsClaimLeaseMinutes: Integer;
+    (* decisions.channel: the configured channel (by name, from
+       "channels") a new decision for the operator is posted to, so a
+       question reaches a phone and not only an open desktop. '' = none.
+       decisions.answer_from: the sender identities ("telegram:12345")
+       whose "D12 yes" reply in a chat with one of the bots answers a
+       decision. Empty = no channel may answer -- allow_senders alone is
+       not enough, because an empty allow_senders lets anyone talk to the
+       bot, and a decision is the operator's call. *)
+    DecisionsChannel:    string;
+    DecisionsAnswerFrom: array of string;
     (* Per-Chat() wait timeout in milliseconds for the relay provider
        (PasClaw.Providers.Relay -- the pull-worker pattern). 0 = use
        the Pascal default RelayDefaultWaitTimeoutMs (5 minutes).
@@ -2216,6 +2226,23 @@ begin
       Root.PutObject('compaction', Tmp);
     end;
 
+    if (DecisionsChannel <> '') or (Length(DecisionsAnswerFrom) > 0) then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        if DecisionsChannel <> '' then Tmp.PutStr('channel', DecisionsChannel);
+        if Length(DecisionsAnswerFrom) > 0 then
+        begin
+          Arr := TJsonArray.Create;
+          for i := 0 to High(DecisionsAnswerFrom) do Arr.AddStr(DecisionsAnswerFrom[i]);
+          Tmp.PutArray('answer_from', Arr);
+        end;
+        Root.PutObject('decisions', Tmp);
+      finally
+        Tmp.Free;
+      end;
+    end;
+
     if TeamsClaimLeaseMinutes <> 120 then
     begin
       Tmp := TJsonObject.Create;
@@ -2517,6 +2544,22 @@ begin
     MemoryCoreBudgetBytes := Integer(Root.GetInt('memory_core_budget_bytes', MemoryCoreBudgetBytes));
     if MemoryCoreBudgetBytes < 0 then MemoryCoreBudgetBytes := 0;
     BackgroundModel      := Trim(Root.GetStr('background_model', BackgroundModel));
+    Obj := Root.ChildObject('decisions');
+    if Obj <> nil then
+    try
+      DecisionsChannel := Trim(Obj.GetStr('channel', DecisionsChannel));
+      Arr := Obj.ChildArray('answer_from');
+      if Arr <> nil then
+      try
+        SetLength(DecisionsAnswerFrom, Arr.Count);
+        for i := 0 to Arr.Count - 1 do
+          DecisionsAnswerFrom[i] := Trim(Arr.ItemStr(i, ''));
+      finally
+        Arr.Free;
+      end;
+    finally
+      Obj.Free;
+    end;
     Obj := Root.ChildObject('teams');
     if Obj <> nil then
     try

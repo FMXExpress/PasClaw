@@ -380,6 +380,10 @@ var
   P: Integer;
 begin
   Result := False;
+  { The operator's decisions are the same kind of record: an agent that
+    could write one could answer its own question. }
+  if PathInsideDirectory(Canon, Canonicalize(WorkspacePath('decisions'))) then
+    Exit(True);
   Root := ExcludeTrailingPathDelimiter(Canonicalize(WorkspacePath('projects')));
   if not PathInsideDirectory(Canon, Root) then Exit;
   if PathsEqual(Canon, Root) then Exit(True);
@@ -417,11 +421,12 @@ begin
   Reason := '';
   if IsBoardRecord(Canonicalize(Path)) then
   begin
-    Reason := 'refused: "' + Canonicalize(Path) + '" is part of the task ' +
-              'board, which only the task and project tools write -- the ' +
-              'board''s rules (review, frozen criteria, the activity log) ' +
-              'live there. Use the task tool (action=update, submit, ' +
-              'verdict) instead.';
+    Reason := 'refused: "' + Canonicalize(Path) + '" is one of the task ' +
+              'board''s records (tasks, jobs, the activity log, the ' +
+              'operator''s decisions), which only the task, project and ' +
+              'agent tools write -- the board''s rules live there. Use the ' +
+              'task tool (action=update, submit, verdict) or agent ' +
+              'action=ask_operator instead.';
     Exit(False);
   end;
   if not GPolicy.RestrictToWorkspace then Exit(True);

@@ -69,7 +69,8 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Providers.HTTP,
   PasClaw.Tools.ToolLoop,
-  PasClaw.Identity;
+  PasClaw.Identity,
+  PasClaw.Decisions;  { HandleDecisionReply -- "D12 yes" }
 
 (* ---- Webhook ---- *)
 
@@ -193,7 +194,7 @@ var
   Arr: TJsonArray;
   Msg, Author: TJsonObject;
   i: Integer;
-  Content, Id, NewestId, AuthorId, AuthorName: string;
+  Content, Id, NewestId, AuthorId, AuthorName, DecisionReply: string;
   IsBot: Boolean;
   Msgs: array of TMessage;
   Loop: TToolLoopResult;
@@ -240,6 +241,14 @@ begin
         begin
           LogInfo('discord: sender %s rejected by allow_senders',
                   [FormatIdentity(LoopCfg.Identity)]);
+          Continue;
+        end;
+        { "D12 yes" answers the operator's decision rather than starting a
+          turn -- only from a sender decisions.answer_from names. }
+        if HandleDecisionReply(Content, CanonicalOf(LoopCfg.Identity),
+                               FCfg.DecisionsAnswerFrom, DecisionReply) then
+        begin
+          PostMessage(DecisionReply);
           Continue;
         end;
 

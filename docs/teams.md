@@ -192,6 +192,43 @@ hand or by the desktop's Ask path does not require review unless you
 switch it on (`POST /v1/projects/<p>/review {"review":true}`), so one
 person building one app sees no change.
 
+## Needs you: one queue for your calls
+
+Some things only a person can decide — spend money, pick between two
+designs, hand over a key. An agent asks with `agent
+action=ask_operator` (a `question`, optional `choices`, optional
+`project` and `task`):
+
+- **Only the top of the chain asks you.** An agent with a `parent` has
+  its question delivered to the parent's mailbox, marked
+  `[escalation]`; the parent decides, or asks in turn. The tool holds
+  this, not the role prompt, so twelve working agents still produce only
+  the questions their leads could not answer.
+- A top-level agent's question becomes a **decision**:
+  `workspace/decisions/D0012.json` — who asked, the question, the
+  choices, the answer and who gave it. A question about a task **blocks
+  the task** until it is answered, with a note saying what it waits on.
+- **Needs you** on the desktop taskbar appears whenever something waits
+  on you and counts it: open decisions, the gateway's pending permission
+  `ask` requests (which had no window before), and tasks in review that
+  no agent can give the verdict on. The window answers all three.
+- **Off the desk.** With `decisions.channel` naming one of your
+  configured channels, a new decision is posted there too. A reply of
+  `D12 yes` in a chat with any of PasClaw's bots answers it — **only**
+  from a sender listed in `decisions.answer_from` (`"telegram:12345"`);
+  everyone else's reply is refused with the reason. `allow_senders`
+  alone is not enough: an empty one lets anyone talk to the bot.
+- **The answer** reaches the asker's mailbox (*"Operator decided D12:
+  yes"*), which wakes it under the mail rule, and the task it blocked
+  goes back to what it was doing. With choices, the answer must be one
+  of them; a decision is answered once.
+- Decisions are on the same footing as the board's records: the file
+  tools cannot write them, so an agent cannot answer its own question.
+
+`GET /v1/decisions[?open=1]`, `POST /v1/decisions/<id>/answer
+{"answer":"yes"}`, and `GET /v1/needs-you` (open decisions plus reviews
+only you can give) are the HTTP side.
+
 ## The wake loop
 
 The gateway ticks every 30 seconds and, for each team whose own cadence

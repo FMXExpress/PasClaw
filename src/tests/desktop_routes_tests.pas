@@ -29,6 +29,7 @@ uses
   PasClaw.Suite.Notes,
   PasClaw.Apps.Runner,
   PasClaw.Desktop.Events,
+  PasClaw.Decisions,
   PasClaw.Gateway.Desktop;
 
 var
@@ -334,6 +335,40 @@ begin
     Fail_('activity with a query -- route not handled');
 end;
 
+(* The operator's queue over HTTP: decisions listed and answered, and
+   /v1/needs-you gathering open decisions with the reviews no agent can
+   give. *)
+procedure TestDecisionRoutes;
+var
+  Err, Id: string;
+  Choices: TStringArray;
+begin
+  SetLength(Choices, 2);
+  Choices[0] := 'yes'; Choices[1] := 'no';
+  Id := CreateDecision('question', 'lead', 'Ship it?', Choices, '', '', '', '', Err);
+  ExpectBodyContains('GET', '/v1/decisions', '', '"question":"Ship it?"', 'decisions are listed');
+  ExpectBodyContains('GET', '/v1/needs-you', '', Id, 'an open decision needs you');
+  ExpectStatus('GET', '/v1/decisions/D9999', '', 404, 'a missing decision is a 404');
+  ExpectStatus('POST', '/v1/decisions/' + Id + '/answer', '{}', 400, 'an answer needs a body');
+  ExpectStatus('POST', '/v1/decisions/' + Id + '/answer', '{"answer":"maybe"}', 409,
+               'an answer outside the choices is a 409');
+  ExpectBodyContains('POST', '/v1/decisions/' + Id + '/answer', '{"answer":"yes"}',
+                     '"answered_by":"operator"', 'the operator answers');
+  ExpectStatus('POST', '/v1/decisions/' + Id + '/answer', '{"answer":"no"}', 409,
+               'and cannot answer twice');
+  ExpectBodyMissing('GET', '/v1/needs-you', '', Id, 'an answered decision no longer needs you');
+
+  { A task in review that no agent can review -- submitted by an agent
+    with no parent on a board that names no reviewers -- is the
+    operator's verdict. }
+  CreateProject('Lone', 'lone', '', Err);
+  CreateTask('lone', 'Solo work', '', Err);
+  UpdateTask('lone', 'T0001', '', '-', 'active', Err, 'nobody-above');
+  SubmitTask('lone', 'T0001', 'nobody-above', 'ran it', '', Err);
+  ExpectBodyContains('GET', '/v1/needs-you', '', '"project":"lone"',
+                     'a verdict only the operator can give needs you');
+end;
+
 var
   R: TDesktopResponse;
   Err, AppDir, Slug, Blueprint: string;
@@ -538,6 +573,7 @@ begin
                'bad task id is a 404');
 
   TestReviewRoutes;
+  TestDecisionRoutes;
 
   { ----------------------------------------------------------------- jobs -- }
   ExpectStatus('GET', '/v1/projects/spam-filter/tasks/T0001/jobs', '', 200, 'list jobs');

@@ -34,6 +34,8 @@ uses
   PasClaw.Projects.Tools,
   PasClaw.Agents,
   PasClaw.Agents.Tools,
+  PasClaw.Decisions,
+  PasClaw.Tools.Sandbox,
   PasClaw.Teams;
 
 var
@@ -412,6 +414,105 @@ begin
   AssertContains(Err, 'named agent', 'next from a turn that is not an agent''s is refused');
 end;
 
+{ ------------------------------------------------------------- phase 3 -- }
+
+procedure TestDecisionStore;
+var
+  Err, Id, Id2, R, Ans: string;
+  D: TDecisionInfo;
+begin
+  WriteLn('-- decisions');
+  AssertEqStr(NormalizeDecisionId('D12'), 'D0012', 'D12 is D0012');
+  AssertEqStr(NormalizeDecisionId('d0012'), 'D0012', 'case and padding fold');
+  AssertEqStr(NormalizeDecisionId('Dave'), '', 'a word is not an id');
+  AssertEqStr(NormalizeDecisionId('D0'), '', 'nor is zero');
+
+  Id := CreateDecision('question', 'lead', 'Spend $40 on a domain?',
+                       Names(['yes', 'no']), '', '', '', '', Err);
+  AssertEqStr(Id, 'D0001', 'the first decision');
+  Id2 := CreateDecision('question', 'lead', 'Which colour?', Names([]), '', '', '', '', Err);
+  AssertEqStr(Id2, 'D0002', 'ids increment');
+  AssertTrue(CreateDecision('question', 'lead', '  ', Names([]), '', '', '', '', Err) = '',
+             'a decision needs a question');
+  AssertTrue(Length(ListDecisions(True)) = 2, 'two open');
+
+  AssertTrue(not AnswerDecision(Id, 'maybe', 'operator', Err), 'an answer outside the choices is refused');
+  AssertContains(Err, 'yes, no', 'and the choices are named');
+  AssertTrue(AnswerDecision(Id, 'YES', 'operator', Err), 'a choice matches case-insensitively');
+  AssertTrue(GetDecision(Id, D) and (D.Answer = 'yes') and (D.Status = 'answered'),
+             'stored as the choice is written');
+  AssertTrue(not AnswerDecision(Id, 'no', 'operator', Err), 'an answered decision is not re-answered');
+  AssertContains(Err, 'already answered', 'because the asker may have acted');
+  AssertTrue(Length(ListDecisions(True)) = 1, 'one left open');
+
+  AssertTrue(ParseDecisionReply('D2 teal', R, Ans) and (R = 'D0002') and (Ans = 'teal'),
+             '"D2 teal" is a reply');
+  AssertTrue(ParseDecisionReply('d0002: a nice teal', R, Ans) and (Ans = 'a nice teal'),
+             '"d0002: ..." too');
+  AssertTrue(not ParseDecisionReply('D2teal', R, Ans), 'the id has to end');
+  AssertTrue(not ParseDecisionReply('Dave says hi', R, Ans), 'a sentence is not a reply');
+  AssertTrue(not ParseDecisionReply('D2', R, Ans), 'an id with no answer is not one');
+
+  AssertTrue(HandleDecisionReply('D2 teal', 'telegram:999', ['telegram:123'], R),
+             'a reply from someone not in answer_from is handled');
+  AssertContains(R, 'answer_from', 'refused, saying why');
+  AssertTrue(GetDecision(Id2, D) and (D.Status = 'open'), 'and the decision stays open');
+  AssertTrue(HandleDecisionReply('D2 teal', 'telegram:999', [], R) and
+             (Pos('not answered', R) > 0), 'an empty answer_from refuses every chat');
+  AssertTrue(HandleDecisionReply('D2 teal', 'telegram:123', ['telegram:123'], R),
+             'a named sender answers it');
+  AssertTrue(GetDecision(Id2, D) and (D.Answer = 'teal') and (D.AnsweredBy = 'telegram:123'),
+             'recorded with who answered');
+  AssertTrue(not HandleDecisionReply('D77 yes', 'telegram:123', ['telegram:123'], R),
+             'a "D77" that is not a decision goes on to the model');
+  AssertTrue(not CanWritePath(JoinPath(DecisionsDir, 'D0002.json'), R),
+             'the file tools cannot write a decision -- an agent cannot answer its own');
+end;
+
+procedure TestAskOperator;
+var
+  Err, Out_, Tid: string;
+  List: TDecisionInfoArray;
+  D: TDecisionInfo;
+  Before: Integer;
+begin
+  WriteLn('-- ask_operator');
+  MakeAgent('a-lead', '');
+  MakeAgent('a-dev', 'a-lead');
+  CreateProject('Asks', 'asks', '', Err);
+  Tid := CreateTask('asks', 'Buy the domain', 'register it', Err);
+  UpdateTask('asks', Tid, '', '-', 'active', Err, 'a-lead', '-', 'a-lead');
+  Before := Length(ListDecisions(False));
+
+  SetCallingAgent('a-dev');
+  Out_ := Tool_Agent('{"action":"ask_operator","question":"Buy example.dev for $40?",' +
+                     '"choices":["yes","no"]}', Err);
+  AssertEqStr(Err, '', 'a worker asks');
+  AssertContains(Out_, '"escalated_to"', 'and it is routed up the chain');
+  AssertContains(Out_, 'a-lead', 'to its lead');
+  AssertTrue(Length(ListDecisions(False)) = Before, 'no decision reaches the operator');
+  AssertTrue(AgentPending('a-lead') > 0, 'the lead has it in its mailbox');
+
+  SetCallingAgent('a-lead');
+  Out_ := Tool_Agent('{"action":"ask_operator","question":"Buy example.dev for $40? I recommend yes.",' +
+                     '"choices":["yes","no"],"project":"asks","task":"' + Tid + '"}', Err);
+  AssertEqStr(Err, '', 'the lead asks the operator');
+  AssertContains(Out_, '"decision"', 'which makes a decision');
+  List := ListDecisions(True);
+  D := List[High(List)];
+  AssertEqStr(D.AskedBy, 'a-lead', 'asked by the lead');
+  AssertTrue(Task_('asks', Tid).Status = tsBlocked, 'the task it holds up is blocked');
+  AssertContains(Task_('asks', Tid).Notes, D.Id, 'saying what it waits on');
+
+  AssertTrue(AnswerDecision(D.Id, 'yes', 'operator', Err), 'the operator answers');
+  AssertTrue(Task_('asks', Tid).Status = tsActive, 'the task goes back to what it was doing');
+  AssertTrue(AgentPending('a-lead') > 0, 'and the lead hears the answer');
+
+  SetCallingAgent('');
+  Out_ := Tool_Agent('{"action":"ask_operator","question":"anything?"}', Err);
+  AssertContains(Err, 'standing agents', 'a turn that is not an agent''s is told to ask in its reply');
+end;
+
 begin
   TestWaitsOn;
   TestNext;
@@ -419,6 +520,8 @@ begin
   TestLeases;
   TestNotifyAndWake;
   TestTool;
+  TestDecisionStore;
+  TestAskOperator;
 
   if Failures = 0 then
     WriteLn('team_board_tests: OK')

@@ -139,6 +139,7 @@ uses
   PasClaw.Logger,           { the off-origin warning when serving an app }
   PasClaw.Agents,        { standing agents + the mailbox between them }
   PasClaw.Teams,         { ready-made teams: templates, seeding, the tick }
+  PasClaw.Decisions,     { the operator's queue -- /v1/decisions, /v1/needs-you }
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
   PasClaw.Apps,
@@ -1040,6 +1041,172 @@ begin
   if Info.RunEnd   <> '' then Result.PutStr('run_end',   Info.RunEnd);
   if Info.RunNote  <> '' then Result.PutStr('run_note',  Info.RunNote);
   Result.PutInt ('idle_minutes', AgentIdleMinutes(Info.Name));
+end;
+
+function DecisionJSON(const D: TDecisionInfo): TJsonObject;
+var
+  Arr: TJsonArray;
+  P: TJsonObject;
+  I: Integer;
+begin
+  Result := TJsonObject.Create;
+  Result.PutStr('id', D.Id);
+  Result.PutStr('kind', D.Kind);
+  Result.PutStr('asked_by', D.AskedBy);
+  Result.PutStr('question', D.Question);
+  Arr := TJsonArray.Create;
+  for I := 0 to High(D.Choices) do Arr.AddStr(D.Choices[I]);
+  Result.PutArray('choices', Arr);
+  Result.PutStr('project', D.Project);
+  Result.PutStr('task', D.Task);
+  Result.PutStr('status', D.Status);
+  Result.PutStr('answer', D.Answer);
+  Result.PutStr('answered_by', D.AnsweredBy);
+  Result.PutStr('created', D.Created);
+  Result.PutStr('answered_at', D.AnsweredAt);
+  if D.Payload <> '' then
+  begin
+    P := TJsonObject.Parse(D.Payload);
+    if P <> nil then Result.PutObject('payload', P);
+  end;
+end;
+
+(* /v1/decisions -- the operator's queue (PasClaw.Decisions).
+
+     GET  /v1/decisions[?open=1]          every decision, or the open ones
+     GET  /v1/decisions/<id>
+     POST /v1/decisions/<id>/answer        {"answer": "..."}
+
+   The operator's surface, like /v1/agents: not behind agent_tools_enabled,
+   and an answer here is recorded as the operator's. *)
+function RouteDecisions(const Method, Doc, Query, Body: string;
+  out Resp: TDesktopResponse): Boolean;
+var
+  Segs: TStringList;
+  Root, Item, Obj: TJsonObject;
+  Arr: TJsonArray;
+  List: TDecisionInfoArray;
+  D: TDecisionInfo;
+  I: Integer;
+  Err: string;
+begin
+  Result := True;
+  Segs := PathSegments(Doc);
+  try
+    if (Segs.Count = 2) and (Method = 'GET') then
+    begin
+      List := ListDecisions(QueryValue(Query, 'open') = '1');
+      Root := TJsonObject.Create;
+      try
+        Arr := TJsonArray.Create;
+        for I := 0 to High(List) do
+        begin
+          Item := DecisionJSON(List[I]);
+          Arr.AddObject(Item);
+        end;
+        Root.PutArray('decisions', Arr);
+        ReplyJSON(Resp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+      Exit;
+    end;
+    if (Segs.Count >= 3) and not GetDecision(Segs[2], D) then
+    begin
+      ReplyErr(Resp, 404, 'no such decision');
+      Exit;
+    end;
+    if (Segs.Count = 3) and (Method = 'GET') then
+    begin
+      Item := DecisionJSON(D);
+      try
+        ReplyJSON(Resp, 200, Item.ToJSON);
+      finally
+        Item.Free;
+      end;
+      Exit;
+    end;
+    if (Segs.Count = 4) and (LowerCase(Segs[3]) = 'answer') and (Method = 'POST') then
+    begin
+      Obj := BodyObj(Body);
+      try
+        if (Obj = nil) or (Trim(Obj.GetStr('answer', '')) = '') then
+        begin
+          ReplyErr(Resp, 400, 'expected {"answer": "..."}');
+          Exit;
+        end;
+        if not AnswerDecision(D.Id, Obj.GetStr('answer', ''), 'operator', Err) then
+        begin
+          { Already answered, or not one of the choices: a conflict with
+            the decision's state, not a malformed request. }
+          ReplyErr(Resp, 409, Err);
+          Exit;
+        end;
+      finally
+        Obj.Free;
+      end;
+      { Through a copy of the id: D is the OUT parameter, and an out
+        record is cleared before the call reads D.Id. }
+      Err := D.Id;
+      GetDecision(Err, D);
+      Item := DecisionJSON(D);
+      try
+        ReplyJSON(Resp, 200, Item.ToJSON);
+      finally
+        Item.Free;
+      end;
+      Exit;
+    end;
+    ReplyErr(Resp, 404, 'no such decisions route');
+  finally
+    Segs.Free;
+  end;
+end;
+
+(* GET /v1/needs-you -- everything on this workspace's boards waiting on
+   a person: open decisions, and tasks in review that no agent can give
+   the verdict on (TaskReviewers is empty -- a top-level agent's own
+   work, say), so the verdict is yours. The gateway's pending permission
+   asks are /v1/permissions; the desktop shows all three in one window. *)
+function RouteNeedsYou(out Resp: TDesktopResponse): Boolean;
+var
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+  List: TDecisionInfoArray;
+  Projects: TProjectInfoArray;
+  Tasks: TTaskInfoArray;
+  I, J: Integer;
+begin
+  Result := True;
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    List := ListDecisions(True);
+    for I := 0 to High(List) do
+    begin
+      Item := DecisionJSON(List[I]);
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('decisions', Arr);
+    Arr := TJsonArray.Create;
+    Projects := ListProjects;
+    for I := 0 to High(Projects) do
+    begin
+      if Projects[I].ReviewTasks = 0 then Continue;
+      Tasks := ListTasks(Projects[I].Name);
+      for J := 0 to High(Tasks) do
+        if (Tasks[J].Status = tsReview) and
+           (Length(TaskReviewers(Projects[I].Name, Tasks[J])) = 0) then
+        begin
+          Item := TaskJSONOn(Tasks[J], Tasks);
+          Arr.AddObject(Item);
+        end;
+    end;
+    Root.PutArray('reviews', Arr);
+    ReplyJSON(Resp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
 end;
 
 function RouteAgents(const Method, Doc, Body: string;
@@ -3944,6 +4111,12 @@ begin
 
   if HasPrefix(Doc, '/v1/agents') then
     Exit(RouteAgents(M, Doc, Body, Resp));
+
+  if (Doc = '/v1/decisions') or HasPrefix(Doc, '/v1/decisions/') then
+    Exit(RouteDecisions(M, Doc, Query, Body, Resp));
+
+  if (M = 'GET') and (Doc = '/v1/needs-you') then
+    Exit(RouteNeedsYou(Resp));
 
   if HasPrefix(Doc, '/v1/workspaces') then
     Exit(RouteWorkspaces(M, Doc, Body, Resp));
