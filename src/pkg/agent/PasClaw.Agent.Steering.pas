@@ -341,11 +341,19 @@ begin
      So the fast path asks for both: no file AND nobody holding the
      lock. That keeps the whole win -- the hot case is a key nobody has
      ever steered, which has neither -- and falls back to contending
-     for the lock exactly when someone is mid-push. A queue file that
-     appears after BOTH checks belongs to a push that started after we
-     looked, and is picked up next iteration, exactly as a contended
-     lock already behaves. (Codex P2 on #617.) *)
-  if (not FileExists(Path)) and (not DirectoryExists(Lock)) then Exit;
+     for the lock exactly when someone is mid-push. (Codex P2 on #617.)
+
+     The LOCK is checked first, and the order is the point. File first
+     left a window: a push holding the lock when we looked for the file
+     could write it and let go before we looked for the lock, so both
+     checks came back empty and the message missed this iteration after
+     all. Lock first, a push holding it now sends us to wait for it; one
+     that takes the lock after this check started after we looked, and
+     its file is either already there for the second check (we drain it)
+     or picked up next iteration -- exactly as a contended lock already
+     behaves. Pascal's "and" short-circuits left to right, so this is
+     the order the two run in. *)
+  if (not DirectoryExists(Lock)) and (not FileExists(Path)) then Exit;
 
   if not AcquireLock(Lock) then
   begin
