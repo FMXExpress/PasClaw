@@ -165,7 +165,28 @@ type
 var
   ConsentProbe: TConsentProbe = nil;
 
+(* Did the call running on this thread come through the tool loop's
+   permission gate -- every rule satisfied, every question answered yes?
+   Set by the dispatcher for exactly as long as the tool runs. A tool that
+   needs the operator's say-so refuses a call that did not: PasClaw's MCP
+   server calls RunTool directly, and there is no one there to ask. *)
+procedure SetDispatchGatePassed(Value: Boolean);
+function DispatchGatePassed: Boolean;
+
 implementation
+
+threadvar
+  GGatePassed: Boolean;
+
+procedure SetDispatchGatePassed(Value: Boolean);
+begin
+  GGatePassed := Value;
+end;
+
+function DispatchGatePassed: Boolean;
+begin
+  Result := GGatePassed;
+end;
 
 function IsAgentTurn: Boolean;
 begin
@@ -623,6 +644,16 @@ begin
   if (not Assigned(T.Handler)) and (not Assigned(T.HandlerObj)) then
   begin
     ErrMsg := 'tool "' + Name + '" has no handler';
+    Exit('');
+  end;
+  { The question is asked at the tool loop's gate; a call that reached
+    here some other way -- an MCP client, a script with no loop -- was
+    never asked, and is not let through. A standing agent's own turn
+    needs no question. }
+  if T.AskOutsideAgents and not IsAgentTurn and not DispatchGatePassed then
+  begin
+    ErrMsg := 'tool "' + Name + '" needs the operator''s say-so, which a ' +
+              'chat asks for; this call did not come through one';
     Exit('');
   end;
   try

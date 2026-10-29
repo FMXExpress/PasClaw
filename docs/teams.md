@@ -554,11 +554,14 @@ on the desktop, the TUI's footer, or the CLI's prompt:
 > This chat wants to manage the project board (task create) — the work a
 > team's agents do.
 
-The same goes for the desktop tool's `team_up` in a chat ("spin up a team
-to build …"): advertised always, asked before anything starts. Tiling
-windows asks nothing. With nobody to ask — a cron run, a piped `pasclaw
-agent`, a gateway with no desktop connected — the call is refused, never
-quietly allowed.
+The same goes for the desktop tool's `team_up` ("spin up a team to build
+…"): advertised always, asked before anything starts — on *every* turn,
+a team member's included, because starting another team is not one of a
+team's own tools. Tiling windows asks nothing. With nobody to ask — a cron
+run, a piped `pasclaw agent`, a gateway with no desktop connected — the
+call is refused, never quietly allowed; so is one that never meets the
+question at all (PasClaw's MCP server runs tools directly). A subagent a
+chat spawns inherits the question, not the tool.
 
 To say yes for good, write it down as a permission rule:
 

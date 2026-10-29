@@ -42,6 +42,7 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Mode,
+  PasClaw.Agent.Subagent,
   PasClaw.Permissions,
   PasClaw.Tools.FS,
   PasClaw.Teams;
@@ -1020,7 +1021,8 @@ procedure TestAskOutsideAgents;
   end;
 
 var
-  R, Open: TToolRegistry;
+  R, Open, Child: TToolRegistry;
+  T: TTool;
   Cfg: TToolLoopConfig;
   Disp: IToolDispatcher;
   Asker: TConsentAsker;
@@ -1048,6 +1050,24 @@ begin
                'but tool_search finds them');
     AssertTrue(Offered(Open, 'task') and Offered(Open, 'agent'),
                'with the old flags on, an ordinary chat has them outright');
+
+    { Called directly -- as PasClaw's MCP server does, with no loop and so
+      no question -- the question is not skipped, the call is refused. }
+    Out_ := R.RunTool('task', List, Err);
+    AssertContains(Err, 'did not come through', 'a board tool run directly from a chat is refused');
+    Out_ := R.RunTool('desktop', TeamUp, Err);
+    AssertContains(Err, 'team_up needs the operator', 'and so is team_up');
+    Out_ := R.RunTool('desktop', Tile, Err);
+    AssertTrue(Err = '', 'tiling windows directly is fine: ' + Err);
+
+    { A subagent's registry is a copy; the copy keeps the question. }
+    Child := BuildFilteredRegistry(R, ['*']);
+    try
+      AssertTrue(Child.Find('task', T) and T.AskOutsideAgents and not Offered(Child, 'task'),
+                 'a subagent spawned from a chat inherits the question, not the tool');
+    finally
+      Child.Free;
+    end;
 
     Cfg := Default(TToolLoopConfig);
     Cfg.Registry := R; Cfg.Mode := pmBuild; Cfg.Model := 'fake'; Cfg.MaxIterations := 1;
@@ -1088,6 +1108,11 @@ begin
     Asker.Asked := 0;
     Disp.Dispatch('desktop', Tile, Err);
     AssertTrue(Asker.Asked = 0, 'tiling windows asks nothing');
+    Asker.Answer := aaAllowOnce;
+    Out_ := Disp.Dispatch('desktop', TeamUp, Err);
+    AssertTrue((Err = '') and (Pos('desktop action', Out_) > 0),
+               'a yes lets team_up through to the desktop: ' + Err);
+    Asker.Answer := aaDeny; Asker.Asked := 0;
     SetTeamActionsAllowed(True);
     Disp.Dispatch('desktop', TeamUp, Err);
     AssertTrue(Asker.Asked = 0, 'agent_tools_enabled still says yes for good');
@@ -1099,7 +1124,9 @@ begin
     Asker.Asked := 0;
     Out_ := Disp.Dispatch('task', List, Err);
     AssertTrue((Asker.Asked = 0) and (Pos('Tasks in newwork', Out_) > 0),
-               'and is never asked');
+               'and is never asked for its own tools');
+    Disp.Dispatch('desktop', TeamUp, Err);
+    AssertTrue(Asker.Asked = 1, 'but starting another team is not its own to do: that asks');
     SetCallingAgent('');
     ForgetSessionAllows('sess-consent');
   finally

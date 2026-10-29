@@ -216,6 +216,12 @@ procedure CopyPreservingMode(Dest: TToolRegistry; const T: TTool);
 begin
   if T.CodeMode then
     Dest.RegisterCodeMode(T)
+  else if T.AskOutsideAgents then
+    { Same trap, other flag (Codex P1 on #624): cleared, a standing
+      agent's board and agent tools became ordinary in the child, and an
+      ordinary chat could spawn its way past the question it would have
+      been asked itself. }
+    Dest.RegisterAskOutsideAgents(T)
   else
     Dest.Register(T);
 end;

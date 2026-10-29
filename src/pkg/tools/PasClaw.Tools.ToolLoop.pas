@@ -792,10 +792,12 @@ begin
 end;
 
 { True = proceed. False = refused; Refusal holds the tool result. }
-(* Why an ordinary chat's call needs the operator's say-so when no rule
-   has spoken: a standing agent's tool (TTool.AskOutsideAgents), or a call
-   the consent probe names. '' = it does not. A standing agent's own turn
-   never asks -- starting a team, or making the agent, was the say-so. *)
+(* Why a call needs the operator's say-so when no rule has spoken: a
+   standing agent's tool (TTool.AskOutsideAgents) on an ordinary chat's
+   turn, or a call the consent probe names on ANY turn. '' = it does not.
+   A standing agent uses its own tools unasked -- starting the team was
+   the say-so -- but what the probe guards (starting another team) is not
+   one of them. *)
 function OutsideAgentConsent(const Cfg: TToolLoopConfig;
   const ToolName, ArgsJSON: string): string;
 var
@@ -804,8 +806,8 @@ var
   Action: string;
 begin
   Result := '';
-  if IsAgentTurn then Exit;
-  if (Cfg.Registry <> nil) and Cfg.Registry.Find(ToolName, T) and T.AskOutsideAgents then
+  if (not IsAgentTurn) and (Cfg.Registry <> nil) and Cfg.Registry.Find(ToolName, T) and
+     T.AskOutsideAgents then
   begin
     Action := '';
     try
@@ -886,6 +888,7 @@ var
   PlanTool: TTool;
   SavedCfg: PToolLoopConfig;
   SavedWs: string;
+  SavedGate: Boolean;
 begin
   { Publish this run's config to the dispatching thread (loop thread for
     serial/mutating tools, worker thread for parallel read-only ones) so any
@@ -895,6 +898,8 @@ begin
   SetActiveConfig(Cfg.ActiveConfig);
   SavedCfg := GDispatchingCfg;
   GDispatchingCfg := @Cfg;
+  SavedGate := DispatchGatePassed;
+  SetDispatchGatePassed(False);
   SavedWs := ThreadSandboxWorkspace;
   if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(Cfg.Workspace);
   try
@@ -943,6 +948,10 @@ begin
      denylist and the family switches still run inside the tool. *)
   if not PermissionGate(Cfg, D.Call.Func.Name, RetryArgs, D.ResultText) then
     Exit;
+  { Through the gate: what it asked was answered yes. The tool reads this
+    to tell a gated call from one that never met the gate (restored in
+    the finally -- a tool that dispatches others nests). }
+  SetDispatchGatePassed(True);
   if not PreflightToolCall(D.Call.Func.Name, RetryArgs, D.Err) then
     D.ResultText := ''
   else if Cfg.Registry <> nil then
@@ -1001,6 +1010,7 @@ begin
       D.Err := 'format_error: unable to canonicalize patch for deterministic retry; regenerate patch intent or use safer apply-patch/unified-diff edit path. original=' + D.Err;
   end;
   finally
+    SetDispatchGatePassed(SavedGate);
     if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(SavedWs);
     GDispatchingCfg := SavedCfg;
     SetActiveConfig(nil);

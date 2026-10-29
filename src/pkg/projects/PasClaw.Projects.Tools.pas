@@ -1932,10 +1932,22 @@ begin
       if Arr <> nil then Arr.Free;
       Exit;
     end;
-    { team_up is the operator's to allow, and was asked BEFORE this ran:
-      the tool loop's permission gate puts the question (DesktopConsent)
-      ahead of the publish, which is the point of no return -- the
-      connected desktop acts on it immediately. }
+    (* team_up is the operator's to allow. From the tool loop the gate
+       asked it BEFORE this ran (DesktopConsent); a call that never met
+       the gate -- PasClaw's MCP server runs tools directly, and the
+       desktop tool is exposed read-only -- was never asked, and is
+       refused here, before the publish: the point of no return, since
+       the connected desktop acts on it immediately. *)
+    if (not GTeamActionsAllowed) and (not DispatchGatePassed) and
+       ArrayHasAction(Arr, 'team_up') then
+    begin
+      ErrMsg := 'team_up needs the operator''s say-so, which a chat asks ' +
+                'for; this call did not come through one. The operator can ' +
+                'start a team from the desktop (Start -> Software Factory) ' +
+                'or with `pasclaw team up`.';
+      Arr.Free;
+      Exit;
+    end;
     N := Arr.Count;
     Body := Arr.ToJSON;
     Arr.Free;

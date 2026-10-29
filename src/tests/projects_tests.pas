@@ -18,6 +18,7 @@ uses
   PasClaw.Config,
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
+  PasClaw.Tools.Registry,   { SetDispatchGatePassed -- what the tool loop's gate sets }
   PasClaw.Projects.Tools;
 
 var
@@ -393,10 +394,20 @@ begin
   ExpectStr(DesktopConsent('desktop', '{"actions":[{"do":"team_up","template":"duo"}]}'), '',
             'agent_tools_enabled says yes for good');
   SetTeamActionsAllowed(False);
-  { The tool itself no longer refuses: by the time it runs, the answer was
-    yes. }
+  { And the tool holds the line for a call that never met the gate --
+    PasClaw's MCP server runs it directly, and the desktop tool is exposed
+    read-only. Through the gate, the answer was yes. }
+  Out_ := Tool_Desktop('{"actions":[{"do":"team_up","template":"duo"}]}', Err);
+  ExpectContains(Err, 'needs the operator', 'team_up that skipped the gate is refused');
+  ExpectTrue(Pos('team_up', Out_) = 0, 'and nothing was sent');
+  Out_ := Tool_Desktop('{"action":"team_up","template":"duo"}', Err);
+  ExpectContains(Err, 'needs the operator', 'in any shape');
   Out_ := Tool_Desktop('{"actions":[{"do":"tile"}]}', Err);
   ExpectStr(Err, '', 'ordinary window actions are clean');
+  SetDispatchGatePassed(True);
+  Out_ := Tool_Desktop('{"actions":[{"do":"team_up","template":"duo"}]}', Err);
+  ExpectStr(Err, '', 'through the gate it goes');
+  SetDispatchGatePassed(False);
 
   { --------------------------------------------------- workspace isolation -- }
   { Projects belong to a workspace: switching desktops must switch boards. }
