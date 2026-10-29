@@ -261,8 +261,8 @@ One wiring consequence: the board tools (`project`/`task`) sat behind
 `desktop_tools_enabled` and the messaging tool behind
 `agent_tools_enabled`, both off by default, and a team with either flag
 off half-worked in confusing ways. `team up` first warned about it; now
-standing agents always have both, and the flags govern only an ordinary
-chat's model ([teams](./teams.md#flags)).
+standing agents always have both, and an ordinary chat asks the operator
+before using them ([teams](./teams.md#flags-none--it-asks)).
 
 ## Watching the team work — the supervisor runs the desktop
 

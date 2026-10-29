@@ -107,15 +107,20 @@ type
        TToolRegistry.RegisterCodeMode for MCP servers with codemode on
        (PasClaw.MCP.Bridge); Register / RegisterDeferred clear it. *)
     CodeMode:    Boolean;
-    (* AgentOnly -- offered to standing agents' turns only (a team's
-       members, any agent with a role and a mailbox), not to an ordinary
-       chat. The board and agent tools register this way when their flags
-       are off: starting a team is the operator's opt-in to agents that
-       manage a board and message each other, so a team works without a
-       config edit, while an ordinary chat's model still cannot create
-       tasks or agents on its own initiative. Set by
-       TToolRegistry.RegisterAgentOnly; the other Register calls clear it. *)
-    AgentOnly:   Boolean;
+    (* AskOutsideAgents -- a standing agent's tool (a team's members, any
+       agent with a role and a mailbox) that an ordinary chat may use only
+       with the operator's say-so. A standing agent is offered it and calls
+       it like any other: starting a team is the operator's opt-in to
+       agents that manage a board and message each other. An ordinary chat
+       finds it with tool_search -- it is not in the chat's tool list, so
+       it costs no schema bytes until wanted -- and calling it ASKS the
+       operator (allow once / for this session / deny), like a
+       permissions "ask" rule; with nobody to ask it is refused. A
+       permissions "allow" rule for the tool answers yes in advance. The
+       board and agent tools register this way unless their old config
+       flags are on. Set by TToolRegistry.RegisterAskOutsideAgents; the
+       other Register calls clear it. *)
+    AskOutsideAgents: Boolean;
   end;
 
   TToolList = array of TTool;

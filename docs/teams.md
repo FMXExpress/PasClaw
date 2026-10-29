@@ -538,35 +538,37 @@ leaves the board without review.
 `pasclaw team export <file>` writes the live roster out as one of these
 — how a team you hand-tuned becomes a team you can share.
 
-## Flags
+## Flags: none — it asks
 
-None to set. A team's members always have the board tools (`project`,
+Nothing to set. A team's members always have the board tools (`project`,
 `task`, `rule`) and the `agent` tool: a team *is* those tools, and starting
-one is the operator's opt-in to agents that manage a board and message each
-other. Until this, both sat behind two flags that are off by default, and a
-team started on a fresh install woke its lead with no `task` tool.
+one is your opt-in to agents that manage a board and message each other.
 
-The flags still decide one thing — whether an **ordinary chat's** model has
-those tools too:
+An **ordinary chat** — the CLI, a project chat, Ask PasClaw — gets them by
+**asking you**. They are not in a chat's tool list (no schema bytes until
+wanted); `tool_search` finds them, and the call waits for your answer —
+**Allow once**, **Allow for this session**, or **Deny** — in **Needs you**
+on the desktop, the TUI's footer, or the CLI's prompt:
+
+> task: create, title Add a search box, project shop
+> This chat wants to manage the project board (task create) — the work a
+> team's agents do.
+
+The same goes for the desktop tool's `team_up` in a chat ("spin up a team
+to build …"): advertised always, asked before anything starts. Tiling
+windows asks nothing. With nobody to ask — a cron run, a piped `pasclaw
+agent`, a gateway with no desktop connected — the call is refused, never
+quietly allowed.
+
+To say yes for good, write it down as a permission rule:
 
 ```json
-{ "desktop_tools_enabled": true, "agent_tools_enabled": true }
+"permissions": [{"tool": "task", "effect": "allow"}, {"tool": "agent", "effect": "allow"}]
 ```
 
-Off (the default), the tools are registered for standing agents' turns
-only: a team member is offered them and may call them; an ordinary chat —
-the CLI, a project chat, Ask PasClaw — is not offered them, and calling one
-by name is refused. On, every chat has them, as before. Managing the board
-and creating colleagues on its own initiative is the autonomy step a chat's
-model should only take when you have said so.
-
-`agent_tools_enabled` also **gates the model's `team_up` action**. The
-`desktop` tool is registered always, because gating window management
-behind a flag meant a fresh install could not answer "tile these" — but
-`team_up` is not window management: it seeds standing agents, creates a
-project and starts a turn, which is precisely what this flag exists to
-let an operator decline. With the flag off the action is refused before
-anything is published, and is not advertised to the model at all.
+The old switches, `desktop_tools_enabled` and `agent_tools_enabled`, still
+mean "yes, every chat, always" for configs that set them; nothing needs
+them any more.
 
 The **HTTP route stays open**. A person clicking **New team…** is the
 operator, and gating them behind a switch meant for the model is the

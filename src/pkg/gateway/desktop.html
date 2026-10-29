@@ -2257,8 +2257,29 @@ function paintNeedsYou(w) {
   if (NEEDS.asks.length) head("Permission asks");
   NEEDS.asks.forEach(p => {
     const r = row();
-    r.appendChild(el("div", null, `${p.tool} wants ${p.resource || "(no resource)"}`));
-    if (p.reason) r.appendChild(el("div", "muted", p.reason));
+    /* What the call would do. A tool with no resource -- the board and
+       agent tools, the desktop's team_up -- is described by its arguments
+       ("task: create, title Add a search box"), not "(no resource)". */
+    let what = p.resource;
+    if (!what) {
+      try {
+        const a = JSON.parse(p.args || "{}");
+        const parts = [];
+        if (a.action) parts.push(a.action);
+        ["title", "name", "project", "text", "question"].forEach(k => {
+          if (a[k]) parts.push(k + " " + String(a[k]).slice(0, 80));
+        });
+        (a.actions || []).forEach(x => x && x.do && parts.push(x.do +
+          (x.brief ? " " + String(x.brief).slice(0, 80) : "")));
+        what = parts.join(", ");
+      } catch {}
+    }
+    r.appendChild(el("div", null, `${p.tool}: ${what || "(no details)"}`));
+    if (p.reason) {
+      const why = el("div", "muted", p.reason);
+      why.style.whiteSpace = "normal";
+      r.appendChild(why);
+    }
     const a = acts();
     const say = ans => api(`/v1/permissions/${p.id}`,
                            { method: "POST", body: { answer: ans } });

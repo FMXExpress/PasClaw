@@ -423,7 +423,7 @@ begin
   if Res <> '' then Res := ' on "' + Res + '"';
   if NobodyAsked then
     Result := 'refused: tool "' + Tool + '"' + Res + ' needs the user''s permission ' +
-              '(an "ask" rule matched) and no one is here to ask -- this session has ' +
+              'and no one is here to ask -- this session has ' +
               'no interactive operator. Do not retry the same call; tell the user ' +
               'what you needed and why, or find another way.'
   else

@@ -792,10 +792,49 @@ begin
 end;
 
 { True = proceed. False = refused; Refusal holds the tool result. }
+(* Why an ordinary chat's call needs the operator's say-so when no rule
+   has spoken: a standing agent's tool (TTool.AskOutsideAgents), or a call
+   the consent probe names. '' = it does not. A standing agent's own turn
+   never asks -- starting a team, or making the agent, was the say-so. *)
+function OutsideAgentConsent(const Cfg: TToolLoopConfig;
+  const ToolName, ArgsJSON: string): string;
+var
+  T: TTool;
+  Obj: TJsonObject;
+  Action: string;
+begin
+  Result := '';
+  if IsAgentTurn then Exit;
+  if (Cfg.Registry <> nil) and Cfg.Registry.Find(ToolName, T) and T.AskOutsideAgents then
+  begin
+    Action := '';
+    try
+      Obj := TJsonObject.Parse(ArgsJSON);
+      try
+        if Obj <> nil then Action := Trim(Obj.GetStr('action', ''));
+      finally
+        Obj.Free;
+      end;
+    except
+      Action := '';
+    end;
+    if ToolName = 'agent' then
+      Result := 'This chat wants to work with standing agents (agent ' + Action +
+                ') -- creating them, messaging them, asking for decisions.'
+    else
+      Result := 'This chat wants to manage the project board (' + ToolName + ' ' +
+                Action + ') -- the work a team''s agents do.';
+    Result := Result + ' Allow for this session to stop being asked here; a ' +
+              'permissions "allow" rule for "' + ToolName + '" stops it for good.';
+    Exit;
+  end;
+  if Assigned(ConsentProbe) then Result := ConsentProbe(ToolName, ArgsJSON);
+end;
+
 function PermissionGate(const Cfg: TToolLoopConfig; const ToolName, ArgsJSON: string;
                         out Refusal: string): Boolean;
 var
-  Res: string;
+  Res, Why: string;
   Dec: TPermDecision;
   Ans: TAskAnswer;
 begin
@@ -803,6 +842,14 @@ begin
   Refusal := '';
   Res := ResourceOf(ToolName, ArgsJSON);
   Dec := Decide(ToolName, Res);
+  { No rule has an opinion: the operator's say-so may still be needed. An
+    "allow" rule answered it in advance; a "deny" refuses as always. }
+  Why := '';
+  if Dec.Effect = peNone then
+  begin
+    Why := OutsideAgentConsent(Cfg, ToolName, ArgsJSON);
+    if Why <> '' then Dec.Effect := peAsk;
+  end;
   case Dec.Effect of
     peDeny:
       begin
@@ -817,7 +864,8 @@ begin
           Refusal := PermissionAskRefusal(ToolName, Res, True);
           Exit(False);
         end;
-        Ans := Cfg.OnAsk(ToolName, ArgsJSON, Res, PermissionAskReason(Dec));
+        if Why = '' then Why := PermissionAskReason(Dec);
+        Ans := Cfg.OnAsk(ToolName, ArgsJSON, Res, Why);
         case Ans of
           aaAllowOnce: ;
           aaAllowSession: RememberSessionAllow(Cfg.SteeringKey, ToolName, Res);

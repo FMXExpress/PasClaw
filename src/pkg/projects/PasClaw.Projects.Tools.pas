@@ -69,11 +69,11 @@ procedure RegisterDesktopTool(R: TToolRegistry);
    already documents. *)
 procedure SetTeamActionsAllowed(Allowed: Boolean);
 
-(* project / task / rule. AgentOnly registers them for standing agents'
-   turns only (TTool.AgentOnly) -- what the gateway does when
-   desktop_tools_enabled is off, so a team always has its board and an
-   ordinary chat's model does not. *)
-procedure RegisterProjectTools(R: TToolRegistry; AgentOnly: Boolean = False);
+(* project / task / rule. AskOutsideAgents registers them as a standing
+   agent's tools that an ordinary chat finds with tool_search and may call
+   only with the operator's say-so (TTool.AskOutsideAgents) -- the default;
+   desktop_tools_enabled registers them plainly for everyone. *)
+procedure RegisterProjectTools(R: TToolRegistry; AskOutsideAgents: Boolean = False);
 
 { Handlers, exposed for tests. }
 function Tool_Project(const ArgsJSON: string; out ErrMsg: string): string;
@@ -115,6 +115,12 @@ function Tool_Desktop(const ArgsJSON: string; out ErrMsg: string): string;
    carried nothing usable. Publishing is the side effect; this is the
    decision, and the decision is what is worth pinning. *)
 function DesktopActionsJSON(const ArgsJSON: string): string;
+
+(* The consent question for a desktop call, '' when there is none: a
+   team_up action -- in any shape the tool accepts -- asks the operator
+   first unless agent_tools_enabled said yes for good. Installed as the
+   tool loop's ConsentProbe; public for its tests. *)
+function DesktopConsent(const ToolName, ArgsJSON: string): string;
 
 implementation
 
@@ -1827,6 +1833,39 @@ end;
 (* Does this actions array carry the named verb? Reads the coerced
    array, so a near-miss shape cannot smuggle a gated action past the
    check by arriving keyed "action". *)
+function ArrayHasAction(Arr: TJsonArray; const Verb: string): Boolean; forward;
+
+(* The consent probe for the desktop tool: a team_up action starts
+   standing agents that go on working by themselves, so an ordinary chat's
+   call that includes one asks the operator first -- unless
+   agent_tools_enabled said yes for good. Tiling windows asks nothing. *)
+function DesktopConsent(const ToolName, ArgsJSON: string): string;
+var
+  Arr: TJsonArray;
+  Coerced: string;
+begin
+  Result := '';
+  if (ToolName <> 'desktop') or GTeamActionsAllowed then Exit;
+  (* The COERCED array, as the tool itself will read it -- so a team_up in
+     a near-miss shape ({"action":"team_up"}, "TEAM_UP") asks like any. *)
+  Coerced := DesktopActionsJSON(ArgsJSON);
+  if Coerced = '' then Exit;
+  try
+    Arr := TJsonArray.Parse(Coerced);
+  except
+    Exit;
+  end;
+  if Arr = nil then Exit;
+  try
+    if ArrayHasAction(Arr, 'team_up') then
+      Result := 'This chat wants to start an agent team (team_up): standing ' +
+                'agents that plan, build and review on their own until the ' +
+                'board is done.';
+  finally
+    Arr.Free;
+  end;
+end;
+
 function ArrayHasAction(Arr: TJsonArray; const Verb: string): Boolean;
 var
   I: Integer;
@@ -1893,19 +1932,10 @@ begin
       if Arr <> nil then Arr.Free;
       Exit;
     end;
-    (* Refuse BEFORE the command is published, not after the team is
-       running: publishing is the point of no return -- the connected
-       desktop acts on it immediately. *)
-    if (not GTeamActionsAllowed) and ArrayHasAction(Arr, 'team_up') then
-    begin
-      ErrMsg := 'team_up is off: firing up standing agents is what ' +
-                'agent_tools_enabled governs, and it is not enabled on ' +
-                'this gateway. Set {"agent_tools_enabled": true} in ' +
-                'config.json, or the operator can start a team from the ' +
-                'desktop (Start -> New Team...) or with `pasclaw team up`.';
-      Arr.Free;
-      Exit;
-    end;
+    { team_up is the operator's to allow, and was asked BEFORE this ran:
+      the tool loop's permission gate puts the question (DesktopConsent)
+      ahead of the publish, which is the point of no return -- the
+      connected desktop acts on it immediately. }
     N := Arr.Count;
     Body := Arr.ToJSON;
     Arr.Free;
@@ -1917,13 +1947,13 @@ begin
                    [N, DesktopSubscriberCount]);
 end;
 
-procedure RegisterProjectTools(R: TToolRegistry; AgentOnly: Boolean);
+procedure RegisterProjectTools(R: TToolRegistry; AskOutsideAgents: Boolean);
 var
   T: TTool;
 
   procedure Add(const T: TTool);
   begin
-    if AgentOnly then R.RegisterAgentOnly(T) else R.Register(T);
+    if AskOutsideAgents then R.RegisterAskOutsideAgents(T) else R.Register(T);
   end;
 
 begin
@@ -2042,12 +2072,10 @@ begin
     '{"do":...} objects, several at once when the user asks for several ' +
     'things. Actions: tile, cascade, minimize_all, close_all, refresh, ' +
     'open_app {project}, open_chat {project}, open_agent {agent}, ' +
-    'build_app {title,brief}, ' +
-    IfThenStr(GTeamActionsAllowed, 'team_up {template,brief|project}, ', '') +
+    'build_app {title,brief}, team_up {template,brief|project}, ' +
     'theme {id}. Use this when the user talks about the SCREEN -- tidying ' +
-    'windows, opening something, starting several apps at once' +
-    IfThenStr(GTeamActionsAllowed,
-              ' -- or asks to spin up an agent TEAM (team_up).', '.');
+    'windows, opening something, starting several apps at once -- or asks ' +
+    'to spin up an agent TEAM (team_up; the user is asked to allow it).';
   T.Schema      :=
     '{"type":"object","properties":{' +
     '"actions":{"type":"array","description":' +
@@ -2085,6 +2113,7 @@ initialization
   OnTaskAssigned := NotifyAssignee;
   OnTaskRejected := NoticeRepeatedCause;
   OnLaneCheck := LaneCheck;
+  ConsentProbe := DesktopConsent;
   AddDecisionAnsweredListener(RuleDecisionAnswered);
 
 end.

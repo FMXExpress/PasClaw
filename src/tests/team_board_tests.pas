@@ -40,6 +40,9 @@ uses
   PasClaw.Tools.Types,
   PasClaw.Providers.Types,
   PasClaw.Tools.Registry,
+  PasClaw.Tools.ToolLoop,
+  PasClaw.Agent.Mode,
+  PasClaw.Permissions,
   PasClaw.Tools.FS,
   PasClaw.Teams;
 
@@ -969,12 +972,30 @@ begin
   SaveTeamState(S, Err);
 end;
 
-(* A team is its board and agent tools, and starting one is the opt-in:
-   with the flags off the gateway registers them AgentOnly -- offered to
-   and callable from a standing agent's turn, invisible to and refused
-   from an ordinary chat's. Registered normally (flags on), everyone has
-   them. *)
-procedure TestAgentOnlyTools;
+(* A team is its board and agent tools, and starting one is the opt-in.
+   An ordinary chat gets them by asking: they are not in its tool list (no
+   schema bytes until wanted), tool_search finds them, and calling one asks
+   the operator -- allow once / for this session / deny -- with nobody to
+   ask, it is refused. A permissions "allow" rule answers yes in advance. A
+   standing agent's turn is offered them and is never asked. The desktop
+   tool's team_up is asked the same way; tiling windows is not. *)
+type
+  TConsentAsker = class
+  public
+    Answer: TAskAnswer;
+    Asked: Integer;
+    LastReason: string;
+    function Ask(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+  end;
+
+function TConsentAsker.Ask(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+begin
+  Inc(Asked);
+  LastReason := Reason;
+  Result := Answer;
+end;
+
+procedure TestAskOutsideAgents;
 
   function Offered(R: TToolRegistry; const Name: string): Boolean;
   var
@@ -987,33 +1008,102 @@ procedure TestAgentOnlyTools;
       if Defs[I].Name = Name then Exit(True);
   end;
 
+  function Searchable(R: TToolRegistry; const Name: string): Boolean;
+  var
+    N: TStringArray;
+    I: Integer;
+  begin
+    Result := False;
+    N := R.DeferredNames;
+    for I := 0 to High(N) do
+      if N[I] = Name then Exit(True);
+  end;
+
 var
   R, Open: TToolRegistry;
+  Cfg: TToolLoopConfig;
+  Disp: IToolDispatcher;
+  Asker: TConsentAsker;
+  Rules: TPermRuleArray;
   Err, Out_: string;
+const
+  List = '{"action":"list","project":"newwork"}';
+  TeamUp = '{"actions":[{"do":"team_up","template":"duo","brief":"a clock"}]}';
+  Tile = '{"actions":[{"do":"tile"}]}';
 begin
-  WriteLn('-- the board and agent tools: always a standing agent''s, a chat''s by flag');
+  WriteLn('-- the board and agent tools: a standing agent''s, a chat''s by asking');
   R := TToolRegistry.Create;
   Open := TToolRegistry.Create;
+  Asker := TConsentAsker.Create;
   try
     RegisterProjectTools(R, True);
     RegisterAgentTools(R, True);
+    RegisterDesktopTool(R);
     RegisterProjectTools(Open);
     RegisterAgentTools(Open);
     SetCallingAgent('');
     AssertTrue(not Offered(R, 'task') and not Offered(R, 'agent') and not Offered(R, 'rule'),
-               'an ordinary chat is not offered them');
-    Out_ := R.RunTool('task', '{"action":"list","project":"newwork"}', Err);
-    AssertContains(Err, 'for standing agents', 'and may not call them by name');
+               'an ordinary chat is not offered them up front');
+    AssertTrue(Searchable(R, 'task') and Searchable(R, 'agent'),
+               'but tool_search finds them');
     AssertTrue(Offered(Open, 'task') and Offered(Open, 'agent'),
-               'registered with the flags on, an ordinary chat has them');
+               'with the old flags on, an ordinary chat has them outright');
+
+    Cfg := Default(TToolLoopConfig);
+    Cfg.Registry := R; Cfg.Mode := pmBuild; Cfg.Model := 'fake'; Cfg.MaxIterations := 1;
+    Cfg.SteeringKey := 'sess-consent';
+    SetLength(Rules, 0); SetPermissionRules(Rules);
+    Disp := MakeLoopDispatcher(Cfg);
+    Out_ := Disp.Dispatch('task', List, Err);
+    AssertContains(Out_, 'no one is here to ask', 'with nobody to ask, a chat''s call is refused');
+
+    Cfg.OnAsk := Asker.Ask;
+    Disp := MakeLoopDispatcher(Cfg);
+    Asker.Answer := aaDeny; Asker.Asked := 0;
+    Out_ := Disp.Dispatch('task', List, Err);
+    AssertTrue(Asker.Asked = 1, 'a chat''s call asks the operator');
+    AssertContains(Asker.LastReason, 'manage the project board (task list)', 'saying what and why');
+    AssertContains(Out_, 'declined', 'and a no is a refusal');
+    Asker.Answer := aaAllowOnce;
+    Out_ := Disp.Dispatch('task', List, Err);
+    AssertContains(Out_, 'Tasks in newwork', 'a yes runs it');
+    Asker.Answer := aaDeny; Asker.Asked := 0;
+    Disp.Dispatch('agent', '{"action":"list"}', Err);
+    AssertContains(Asker.LastReason, 'work with standing agents (agent list)', 'the agent tool asks too');
+
+    SetLength(Rules, 1);
+    Rules[0].Tool := 'task'; Rules[0].Resource := ''; Rules[0].Effect := peAllow;
+    Rules[0].Source := 'config';
+    SetPermissionRules(Rules);
+    Asker.Asked := 0;
+    Out_ := Disp.Dispatch('task', List, Err);
+    AssertTrue((Asker.Asked = 0) and (Pos('Tasks in newwork', Out_) > 0),
+               'a permissions allow rule answers yes in advance');
+    SetLength(Rules, 0); SetPermissionRules(Rules);
+
+    Asker.Answer := aaDeny; Asker.Asked := 0;
+    Out_ := Disp.Dispatch('desktop', TeamUp, Err);
+    AssertTrue(Asker.Asked = 1, 'a chat''s team_up asks');
+    AssertContains(Asker.LastReason, 'start an agent team', 'naming what it starts');
+    Asker.Asked := 0;
+    Disp.Dispatch('desktop', Tile, Err);
+    AssertTrue(Asker.Asked = 0, 'tiling windows asks nothing');
+    SetTeamActionsAllowed(True);
+    Disp.Dispatch('desktop', TeamUp, Err);
+    AssertTrue(Asker.Asked = 0, 'agent_tools_enabled still says yes for good');
+    SetTeamActionsAllowed(False);
+
     SetCallingAgent('nw-dev');
     AssertTrue(Offered(R, 'task') and Offered(R, 'agent') and Offered(R, 'project') and
                Offered(R, 'rule'), 'a standing agent''s turn is offered all of them');
-    Out_ := R.RunTool('task', '{"action":"list","project":"newwork"}', Err);
-    AssertTrue((Err = '') and (Pos('Tasks in newwork', Out_) > 0),
-               'and can call them: ' + Err);
+    Asker.Asked := 0;
+    Out_ := Disp.Dispatch('task', List, Err);
+    AssertTrue((Asker.Asked = 0) and (Pos('Tasks in newwork', Out_) > 0),
+               'and is never asked');
     SetCallingAgent('');
+    ForgetSessionAllows('sess-consent');
   finally
+    Asker.Free;
     R.Free;
     Open.Free;
   end;
@@ -1053,7 +1143,7 @@ begin
   TestTool;
   TestHandoffs;
   TestNewWork;
-  TestAgentOnlyTools;
+  TestAskOutsideAgents;
   TestAgentToolShapes;
   TestDecisionStore;
   TestAskOperator;

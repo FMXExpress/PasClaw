@@ -109,8 +109,9 @@ pasclaw project show spam-filter
 ```
 
 A standing agent — a team's member — always has the board tools below. An
-ordinary chat's model has them only when you turn them on, **off by
-default**:
+ordinary chat's model finds them with `tool_search` and **asks you** before
+using them, in Needs you ([teams](./teams.md#flags-none--it-asks)); the old
+switch below says yes for every chat in advance:
 
 ```json
 { "desktop_tools_enabled": true }

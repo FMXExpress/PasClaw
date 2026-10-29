@@ -46,7 +46,7 @@ Run 0 is the first attempt; runs 1 and 2 are the measured pair.
 
 | # | what happened | why | fix |
 |---|---|---|---|
-| 1 | Run 0: the Foreman woke with no `task` tool; `tool_search` for it found only `desktop` and `spawn`. The team was "up". | the board tools sit behind `desktop_tools_enabled`; `pasclaw team up` never said so (the desktop's **New team…** did) | the CLI warned the same way at first; now a team's members always have the board and agent tools, and the flags govern only an ordinary chat ([teams](../../docs/teams.md#flags)) |
+| 1 | Run 0: the Foreman woke with no `task` tool; `tool_search` for it found only `desktop` and `spawn`. The team was "up". | the board tools sit behind `desktop_tools_enabled`; `pasclaw team up` never said so (the desktop's **New team…** did) | the CLI warned the same way at first; now a team's members always have the board and agent tools, and an ordinary chat asks you before using them ([teams](../../docs/teams.md#flags-none--it-asks)) |
 | 2 | The Foreman's first move was `agent list` | the kickoff named the goal and the project, not the team | the kickoff names the team by assignable names |
 | 3 | That one result was 8.25 KB, and stayed in the Foreman's history for every later call | `list` carried each agent's whole role prompt | `list` carries each role's first line; `get` has the rest |
 | 4 | The Foreman created both tasks with `"assignee":"dev"`; neither had an owner | `create` read the assignee and dropped it, silently — the result did not mention it (an existing test had the same call and worked round it) | `create` takes `assignee` and says `(assigned to dev)` |
