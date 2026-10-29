@@ -488,6 +488,135 @@ begin
   SaveTeamState(S, Err);
 end;
 
+(* The Software Factory reads a team as one timeline: what the operator
+   told the lead (its message record), what the lead said back (its reply
+   record, written when each turn ends), what happened on the board (the
+   activity log) -- merged by time. And writing to a team the finished
+   board parked puts it back to work. *)
+procedure TestFactoryRoutes;
+var
+  Info: TAgentInfo;
+  S: TTeamState;
+  Err, Delivered, Kinds: string;
+  R: TDesktopResponse;
+  Obj, It: TJsonObject;
+  Arr: TJsonArray;
+  I: Integer;
+  Replies: TAgentMessageArray;
+begin
+  WriteLn('-- the factory: a team as one timeline, and talking to it');
+  Info := Default(TAgentInfo);
+  Info.Name := 'fa-lead'; Info.Title := 'Lead'; Info.Role := 'r';
+  SaveAgent(Info, Err);
+  Info.Name := 'fa-dev'; Info.Title := 'Dev'; Info.Parent := 'fa-lead';
+  SaveAgent(Info, Err);
+  WriteFileText(JoinPath(WorkspaceSubdir('teams'), 'fa-team.json'),
+    '{"name":"fa-team","title":"Factory Team","agents":[' +
+    '{"name":"fa-lead","title":"Lead","role":"r"},' +
+    '{"name":"fa-dev","title":"Dev","role":"r","parent":"fa-lead"}]}');
+  CreateProject('Fact', 'fact', '', Err);
+  S := Default(TTeamState);
+  S.Name := 'fa-team';
+  S.Project := 'fact';
+  S.Goal := 'a todo app';
+  S.Enabled := True;
+  S.WakeMinutes := 15;
+  SetLength(S.WakeWho, 2);
+  S.WakeWho[0] := 'fa-lead';
+  S.WakeWho[1] := 'fa-dev';
+  SaveTeamState(S, Err);
+
+  { Made in a different order from the one the feed reads them in, a
+    second apart, so the order it returns is the merge's doing. }
+  CreateTask('fact', 'Build the list', '', Err);
+  Sleep(1100);
+  AgentSend('fa-lead', 'operator', 'Build a todo app', Delivered, Err);
+  AgentSend('fa-lead', 'team-tick', 'a stall report', Delivered, Err);
+  Sleep(1100);
+  MarkAgentRunFinished('fa-lead', 'done', 'Plan: T0001 builds the list.');
+  Replies := AgentReplies('fa-lead', 0);
+  ExpectTrue((Length(Replies) = 1) and (Replies[0].Text = 'Plan: T0001 builds the list.') and
+             (Replies[0].Delivered = 'done') and (Replies[0].At <> ''),
+             'a finished turn''s reply is recorded, with its time and state');
+
+  ExpectTrue(Req('GET', '/v1/teams/fa-team/feed', '', R) and (R.Status = 200),
+             'the feed route answers: ' + R.Body);
+  Obj := TJsonObject.Parse(R.Body);
+  try
+    ExpectStr(Obj.GetStr('title', ''), 'Factory Team', 'the feed names the team');
+    ExpectStr(Obj.GetStr('project', ''), 'fact', 'and its board');
+    ExpectTrue(Pos('"leads" : ["fa-lead"]', R.Body) > 0, 'and who to talk to');
+    ExpectTrue(Pos('"name" : "fa-dev"', R.Body) > 0, 'and each member');
+    Arr := Obj.ChildArray('feed');
+    try
+      Kinds := '';
+      for I := 0 to Arr.Count - 1 do
+      begin
+        It := Arr.ItemObject(I);
+        try
+          Kinds := Kinds + It.GetStr('kind', '') + ' ';
+          if It.GetStr('kind', '') = 'board' then
+            ExpectStr(It.GetStr('text', ''), 'operator created T0001: Build the list',
+                      'a board event reads as a sentence');
+        finally
+          It.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+    ExpectStr(Trim(Kinds), 'board you lead',
+              'oldest first across the three records; the tick''s mail is not the operator''s');
+  finally
+    Obj.Free;
+  end;
+
+  { One turn inside one second: the reply that ends it comes after the
+    board events it made. }
+  CreateTask('fact', 'Same second', '', Err);
+  MarkAgentRunFinished('fa-lead', 'done', 'Made the same-second task.');
+  ExpectTrue(Req('GET', '/v1/teams/fa-team/feed', '', R) and
+             (Pos('Same second', R.Body) > 0) and
+             (Pos('Same second', R.Body) < Pos('Made the same-second task.', R.Body)),
+             'a tie puts the board''s events before the reply that followed them');
+
+  ExpectTrue(Req2('GET', '/v1/teams/fa-team/feed', 'limit=1', '', R) and
+             (Pos('"kind" : "lead"', R.Body) > 0) and (Pos('"kind" : "board"', R.Body) = 0) and
+             (Pos('Made the same-second task.', R.Body) > 0), 'limit keeps the newest');
+  MarkAgentRunFinished('fa-lead', 'failed', 'provider timed out');
+  ExpectTrue(Req('GET', '/v1/teams/fa-team/feed', '', R) and
+             (Pos('"event" : "failed"', R.Body) > 0), 'a failed turn says so');
+  ExpectStatus('GET', '/v1/teams/nope/feed', '', 404, 'an unknown team is a 404');
+  ExpectBodyContains('GET', '/v1/teams/status', '', '"leads" : ["fa-lead"]',
+                     'the team list names each team''s leads');
+
+  { Talking to a finished team is new work; to a stopped one, it is not. }
+  LoadTeamState('fa-team', S);
+  S.Enabled := False; S.AutoParked := True;
+  SaveTeamState(S, Err);
+  ExpectTrue(Req('POST', '/v1/agents/fa-lead/send', '{"from":"fa-dev","text":"done?"}', R) and
+             (R.Status = 200), 'a colleague writes to the lead');
+  LoadTeamState('fa-team', S);
+  ExpectTrue(not S.Enabled, 'which does not wake a parked team');
+  ExpectTrue(Req('POST', '/v1/agents/fa-lead/send',
+                 '{"from":"operator","text":"also add dark mode"}', R) and (R.Status = 200),
+             'the operator writes to the lead');
+  LoadTeamState('fa-team', S);
+  ExpectTrue(S.Enabled and not S.AutoParked, 'which puts the board-parked team back on');
+  S.Enabled := False; S.AutoParked := False;
+  SaveTeamState(S, Err);
+  Req('POST', '/v1/agents/fa-lead/send', '{"from":"operator","text":"and more"}', R);
+  LoadTeamState('fa-team', S);
+  ExpectTrue(not S.Enabled, 'a team the operator parked stays parked');
+
+  Info := Default(TAgentInfo);
+  Info.Name := 'fa-gone'; Info.Role := 'r';
+  SaveAgent(Info, Err);
+  MarkAgentRunFinished('fa-gone', 'done', 'bye');
+  DeleteAgent('fa-gone', Err);
+  ExpectTrue(Length(AgentReplies('fa-gone', 0)) = 0, 'deleting an agent removes its replies');
+end;
+
 procedure TestDecisionRoutes;
 var
   Err, Id: string;
@@ -734,6 +863,7 @@ begin
   TestDecisionRoutes;
   TestTickReportsOnCadence;
   TestNewWorkRoutes;
+  TestFactoryRoutes;
 
   { ----------------------------------------------------------------- jobs -- }
   ExpectStatus('GET', '/v1/projects/spam-filter/tasks/T0001/jobs', '', 200, 'list jobs');

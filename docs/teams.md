@@ -9,9 +9,41 @@ pasclaw team up software-team --goal "an invoice tracker for my shop"
 pasclaw team up software-team --project invoice-desk   # work a board you already have
 ```
 
-Or in the desktop: **Start → New Team…**, or just type *"spin up a
-software team to build an invoice tracker"* into Ask PasClaw. All three
-drive `POST /v1/teams/up`.
+Or in the desktop: **Start → Software Factory**, **Ask PasClaw → Build with a
+team**, **Start → New Team…**, or just type *"spin up a software team to
+build an invoice tracker"* into Ask PasClaw. All of them drive
+`POST /v1/teams/up`, and all of them open the team's factory window.
+
+## The Software Factory
+
+One sentence in, a team building it, one window to watch and steer it from.
+
+- **Start it.** **Start → Software Factory** — say what to build, pick the
+  team (Software Team by default; Duo for small things), **Build it**. Or in
+  **Ask PasClaw**, choose **Build with a team** and type the sentence.
+- **The factory window** is the conversation with the team's lead beside its
+  live board. The left side is one timeline: what you told the lead, what
+  the lead said back at the end of each turn, and what happened on the board
+  ("dev submitted T0002 for review", "foreman rejected T0002: …"), each with
+  its time. The right side is the board — in review, working, to do, done —
+  with **Accept** / **Reject** on work waiting for a verdict and **Edit** /
+  **+ Task** for the rest. The header says whether the team is working,
+  waiting, parked or finished, who is busy, and what is in each mailbox; a
+  question the team asked you shows above the timeline with **Answer**.
+- **Steer it.** What you type in the factory goes to the lead, who plans it
+  into tasks and hands them out. After **Build with a team**, Ask switches
+  itself to **Tell the … team**, so what you type there next goes to the
+  same lead; every team at work has that entry. Writing to a team the
+  finished board parked puts it back to work; one you parked stays parked
+  (the factory's **Resume** puts it back on).
+- It repaints on the board's and the agents' events and does not poll. It
+  comes back after a reload, like the other windows.
+
+`GET /v1/teams/<name>/feed` is the window's data: the team's header
+(members, leads, status, open questions) and the merged timeline. The lead's
+side of it is a new record: each finished turn's reply is kept with its time
+(`replies.jsonl` beside the agent's message record), because a session holds
+the whole transcript but no times.
 
 ## What ships
 

@@ -128,6 +128,11 @@ PasClaw's behaviour should not change for someone who never opens a desktop,
 and two extra tools in the schema is two extra tools the model reads every
 turn. Same opt-in shape as `cron_tool_enabled`.
 
+**Software Factory** (Start menu, or **Build with a team** in Ask PasClaw)
+starts a team on a sentence and opens its factory window — the conversation
+with the team's lead beside the live board; see
+[teams](./teams.md#the-software-factory).
+
 **New task…** and each row's **Edit** open one form: title, notes (the
 brief), **owner**, **acceptance checks** (one per line — what the verdict is
 given against) and **waits on** (the board's other tasks, ticked). The same
@@ -939,6 +944,8 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | GET/PATCH/DELETE | `/v1/projects/<name>` | inspect / edit / remove |
 | GET | `/v1/projects/<name>/blueprint` | export |
 | POST | `/v1/projects/import` | import |
+| GET | `/v1/teams/status` | every team that is up: board, goal, leads, open tasks, parked or not |
+| GET | `/v1/teams/<name>/feed` | the Software Factory's view of a team: members, open questions, and one timeline of what the operator told the lead, what it replied, and the board's events (`?limit=`) |
 | GET | `/v1/decisions` | the operator's decisions (`?open=1` for the open ones) |
 | GET | `/v1/decisions/<id>` | one decision |
 | POST | `/v1/decisions/<id>/answer` | `{"answer":"yes"}` -- recorded as the operator's (409 when answered or not one of the choices) |
