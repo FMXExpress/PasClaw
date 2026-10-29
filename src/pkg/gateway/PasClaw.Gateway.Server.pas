@@ -7361,27 +7361,6 @@ begin
   Result := GDesktopGateway.RunDesktopTurn(SystemPrompt, Prompt, False, Reply, Err);
 end;
 
-(* What `team up` warns about: the flags a working team needs. The
-   board tools (project/task) sit behind desktop_tools_enabled and the
-   agent-to-agent messaging tool behind agent_tools_enabled, both off
-   by default -- a team seeded with either off half-works in ways that
-   look like model stupidity. Named here, where the config is. *)
-function DesktopTeamFlagsProbe: string;
-begin
-  Result := '';
-  if GDesktopGateway = nil then Exit;
-  if not GDesktopGateway.FCfg.DesktopToolsEnabled then
-    Result := 'desktop_tools_enabled is off: the team cannot manage its ' +
-              'task board. Set {"desktop_tools_enabled": true} in config.json.';
-  if not GDesktopGateway.FCfg.AgentToolsEnabled then
-  begin
-    if Result <> '' then Result := Result + ' ';
-    Result := Result + 'agent_tools_enabled is off: team members cannot ' +
-              'message each other. Set {"agent_tools_enabled": true} in ' +
-              'config.json.';
-  end;
-end;
-
 procedure TTeamTickThread.Execute;
 var
   LastClock: TDateTime;
@@ -7432,7 +7411,6 @@ begin
   SetJobRunner(DesktopJobRunner);
   SetTextGenerator(DesktopTextGenerator);
   SetAgentRunner(DesktopAgentRunner);
-  SetTeamFlagsProbe(DesktopTeamFlagsProbe);
   if GTeamTick = nil then
   begin
     GTeamTick := TTeamTickThread.Create(False);

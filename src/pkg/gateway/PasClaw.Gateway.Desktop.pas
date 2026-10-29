@@ -87,16 +87,6 @@ procedure SetPageGenerator(Gen: TPageGenerator);
 procedure SetTextGenerator(Gen: TTextGenerator);
 procedure SetAgentRunner(Runner: TAgentRunner);
 
-type
-  (* Answers "which agent-facing config flags are off", as a warning
-     string ('' = all on). Teams half-work confusingly without the
-     board tools and the agent tool, so `team up` names what is
-     missing instead of seeding a team that cannot reach its own
-     board. Lives behind a probe because this unit has no TConfig --
-     the gateway, which does, installs it at start. *)
-  TTeamFlagsProbe = function: string;
-
-procedure SetTeamFlagsProbe(Probe: TTeamFlagsProbe);
 
 (* One pass of the team wake loop, called by the gateway's tick thread
    (and by tests directly): for every enabled team that is due, sweep
@@ -162,7 +152,6 @@ uses
 var
   GJobRunner: TJobRunner = nil;
   GAgentRunner: TAgentRunner = nil;
-  GTeamFlagsProbe: TTeamFlagsProbe = nil;
   GPageGen: TPageGenerator = nil;
   GTextGen: TTextGenerator = nil;
   GAppsOrigin: string = '';
@@ -170,11 +159,6 @@ var
 procedure SetAgentRunner(Runner: TAgentRunner);
 begin
   GAgentRunner := Runner;
-end;
-
-procedure SetTeamFlagsProbe(Probe: TTeamFlagsProbe);
-begin
-  GTeamFlagsProbe := Probe;
 end;
 
 procedure SetJobRunner(Runner: TJobRunner);
@@ -918,7 +902,7 @@ var
   States: TTeamStateArray;
   Created, Skipped, Leads: TStringArray;
   Tasks: TTaskInfoArray;
-  Name_, Goal, Project, Err, Delivered, Warn, Kick: string;
+  Name_, Goal, Project, Err, Delivered, Kick: string;
   I, J, OpenN: Integer;
   Parked: Boolean;
 begin
@@ -1094,8 +1078,6 @@ begin
           LogInfo('team %s: lead %s not started (%s) -- the tick will ' +
                   'retry', [T.Name, Leads[I], Err]);
 
-    Warn := '';
-    if Assigned(GTeamFlagsProbe) then Warn := GTeamFlagsProbe();
 
     Root := TJsonObject.Create;
     try
@@ -1112,7 +1094,6 @@ begin
       Arr := TJsonArray.Create;
       for I := 0 to High(Skipped) do Arr.AddStr(Skipped[I]);
       Root.PutArray('skipped', Arr);
-      if Warn <> '' then Root.PutStr('warning', Warn);
       ReplyJSON(Resp, 200, Root.ToJSON);
     finally
       Root.Free;

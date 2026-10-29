@@ -69,7 +69,11 @@ procedure RegisterDesktopTool(R: TToolRegistry);
    already documents. *)
 procedure SetTeamActionsAllowed(Allowed: Boolean);
 
-procedure RegisterProjectTools(R: TToolRegistry);
+(* project / task / rule. AgentOnly registers them for standing agents'
+   turns only (TTool.AgentOnly) -- what the gateway does when
+   desktop_tools_enabled is off, so a team always has its board and an
+   ordinary chat's model does not. *)
+procedure RegisterProjectTools(R: TToolRegistry; AgentOnly: Boolean = False);
 
 { Handlers, exposed for tests. }
 function Tool_Project(const ArgsJSON: string; out ErrMsg: string): string;
@@ -1913,9 +1917,15 @@ begin
                    [N, DesktopSubscriberCount]);
 end;
 
-procedure RegisterProjectTools(R: TToolRegistry);
+procedure RegisterProjectTools(R: TToolRegistry; AgentOnly: Boolean);
 var
   T: TTool;
+
+  procedure Add(const T: TTool);
+  begin
+    if AgentOnly then R.RegisterAgentOnly(T) else R.Register(T);
+  end;
+
 begin
   if R = nil then Exit;
 
@@ -1941,7 +1951,7 @@ begin
   T.Category    := tcMutating;
   T.IsDeferred  := False;
   T.Hidden      := False;
-  R.Register(T);
+  Add(T);
 
   T.Name        := 'task';
   T.Description :=
@@ -1985,7 +1995,7 @@ begin
   T.Category    := tcMutating;
   T.IsDeferred  := False;
   T.Hidden      := False;
-  R.Register(T);
+  Add(T);
 
   T.Name        := 'rule';
   T.Description :=
@@ -2011,7 +2021,7 @@ begin
   T.Category    := tcMutating;
   T.IsDeferred  := False;
   T.Hidden      := False;
-  R.Register(T);
+  Add(T);
 
   { The board tools imply the screen tool -- an operator who asked for
     the model to manage the board gets the same set as before this

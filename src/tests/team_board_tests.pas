@@ -38,6 +38,7 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.Projects.Snapshots,
   PasClaw.Tools.Types,
+  PasClaw.Providers.Types,
   PasClaw.Tools.Registry,
   PasClaw.Tools.FS,
   PasClaw.Teams;
@@ -968,6 +969,56 @@ begin
   SaveTeamState(S, Err);
 end;
 
+(* A team is its board and agent tools, and starting one is the opt-in:
+   with the flags off the gateway registers them AgentOnly -- offered to
+   and callable from a standing agent's turn, invisible to and refused
+   from an ordinary chat's. Registered normally (flags on), everyone has
+   them. *)
+procedure TestAgentOnlyTools;
+
+  function Offered(R: TToolRegistry; const Name: string): Boolean;
+  var
+    Defs: TToolDefinitionArray;
+    I: Integer;
+  begin
+    Result := False;
+    Defs := R.ToProviderDefs;
+    for I := 0 to High(Defs) do
+      if Defs[I].Name = Name then Exit(True);
+  end;
+
+var
+  R, Open: TToolRegistry;
+  Err, Out_: string;
+begin
+  WriteLn('-- the board and agent tools: always a standing agent''s, a chat''s by flag');
+  R := TToolRegistry.Create;
+  Open := TToolRegistry.Create;
+  try
+    RegisterProjectTools(R, True);
+    RegisterAgentTools(R, True);
+    RegisterProjectTools(Open);
+    RegisterAgentTools(Open);
+    SetCallingAgent('');
+    AssertTrue(not Offered(R, 'task') and not Offered(R, 'agent') and not Offered(R, 'rule'),
+               'an ordinary chat is not offered them');
+    Out_ := R.RunTool('task', '{"action":"list","project":"newwork"}', Err);
+    AssertContains(Err, 'for standing agents', 'and may not call them by name');
+    AssertTrue(Offered(Open, 'task') and Offered(Open, 'agent'),
+               'registered with the flags on, an ordinary chat has them');
+    SetCallingAgent('nw-dev');
+    AssertTrue(Offered(R, 'task') and Offered(R, 'agent') and Offered(R, 'project') and
+               Offered(R, 'rule'), 'a standing agent''s turn is offered all of them');
+    Out_ := R.RunTool('task', '{"action":"list","project":"newwork"}', Err);
+    AssertTrue((Err = '') and (Pos('Tasks in newwork', Out_) > 0),
+               'and can call them: ' + Err);
+    SetCallingAgent('');
+  finally
+    R.Free;
+    Open.Free;
+  end;
+end;
+
 procedure TestAgentToolShapes;
 var
   Err, Out_: string;
@@ -1002,6 +1053,7 @@ begin
   TestTool;
   TestHandoffs;
   TestNewWork;
+  TestAgentOnlyTools;
   TestAgentToolShapes;
   TestDecisionStore;
   TestAskOperator;

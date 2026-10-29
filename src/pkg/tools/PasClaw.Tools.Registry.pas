@@ -90,6 +90,9 @@ type
     { Register a code-mode tool: dispatchable, never a provider schema,
       never surfaced by tool_search. See TTool.CodeMode. }
     procedure RegisterCodeMode(const T: TTool);
+    { Register a tool only standing agents' turns see and may call. See
+      TTool.AgentOnly and AgentTurnProbe. }
+    procedure RegisterAgentOnly(const T: TTool);
     { When True, any tool matching ToolIsLongTail registers DEFERRED no
       matter which entry point it came through. Set once, by the disclosure
       registration, instead of asking ~10 call sites to remember: the spawn
@@ -138,7 +141,21 @@ var
   { Installed by PasClaw.Tools.ToolLoop at initialization. See IToolDispatcher. }
   GCaptureDispatcher: TCaptureDispatcherFn = nil;
 
+type
+  TAgentTurnProbe = function: Boolean;
+
+var
+  (* Is the turn on this thread a standing agent's? Installed by
+     PasClaw.Agents.Tools (which knows the calling agent); unset, nothing
+     is an agent turn and AgentOnly tools stay hidden. *)
+  AgentTurnProbe: TAgentTurnProbe = nil;
+
 implementation
+
+function IsAgentTurn: Boolean;
+begin
+  Result := Assigned(AgentTurnProbe) and AgentTurnProbe();
+end;
 
 constructor TToolRegistry.Create;
 begin
@@ -216,6 +233,19 @@ begin
     from ToProviderDefs. Aliases go through RegisterHidden instead. }
   Modified.Hidden := False;
   Modified.CodeMode := False;
+  Modified.AgentOnly := False;
+  RegisterImpl(Modified);
+end;
+
+procedure TToolRegistry.RegisterAgentOnly(const T: TTool);
+var
+  Modified: TTool;
+begin
+  Modified := T;
+  Modified.IsDeferred := False;
+  Modified.Hidden     := False;
+  Modified.CodeMode   := False;
+  Modified.AgentOnly  := True;
   RegisterImpl(Modified);
 end;
 
@@ -229,6 +259,7 @@ begin
   Modified.IsDeferred := False;
   Modified.Hidden     := True;
   Modified.CodeMode   := False;
+  Modified.AgentOnly  := False;
   RegisterImpl(Modified);
 end;
 
@@ -239,6 +270,7 @@ begin
   Modified := T;
   Modified.IsDeferred := Deferred;
   Modified.CodeMode   := False;
+  Modified.AgentOnly  := False;
   RegisterImpl(Modified);
 end;
 
@@ -254,6 +286,7 @@ begin
   Modified.IsDeferred := True;
   Modified.Hidden     := False;
   Modified.CodeMode   := True;
+  Modified.AgentOnly  := False;
   RegisterImpl(Modified);
 end;
 
@@ -354,6 +387,9 @@ begin
         -- and a reveal recorded before a server flipped to code mode must
         not resurrect the schema. }
       if FTools[i].CodeMode then
+        Continue;
+      { A standing agent's tool, and this is not a standing agent's turn. }
+      if FTools[i].AgentOnly and not IsAgentTurn then
         Continue;
       Result[k].Name        := FTools[i].Name;
       Result[k].Description := FTools[i].Description;
@@ -563,6 +599,14 @@ begin
   if (not Assigned(T.Handler)) and (not Assigned(T.HandlerObj)) then
   begin
     ErrMsg := 'tool "' + Name + '" has no handler';
+    Exit('');
+  end;
+  { Not offered here, so not callable here either: a model can name a
+    tool it was never shown. }
+  if T.AgentOnly and not IsAgentTurn then
+  begin
+    ErrMsg := 'tool "' + Name + '" is for standing agents -- a team''s ' +
+              'members -- in this configuration';
     Exit('');
   end;
   try

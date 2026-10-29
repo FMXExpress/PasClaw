@@ -93,16 +93,19 @@ failure of the two.
 
 ## The `agent` tool
 
-Off by default, behind its own flag:
+A standing agent always has it — an agent with a mailbox and no way to
+answer is not one — and an ordinary chat has it behind its own flag:
 
 ```json
 { "agent_tools_enabled": true }
 ```
 
-Separate from `desktop_tools_enabled` rather than folded into it: that
-flag answers "may the model manage the project board", this one answers
-"may the model create colleagues and message them", and an operator can
-reasonably want either without the other.
+Off, the tool is registered for standing agents' turns only: offered to
+them, hidden from and refused to an ordinary chat. Separate from
+`desktop_tools_enabled` rather than folded into it: that flag answers "may a
+chat's model manage the project board", this one answers "may a chat's model
+create colleagues and message them", and an operator can reasonably want
+either without the other.
 
 Registered wherever the agent loop runs — `gateway`, `serve` and the CLI —
 so the flag means the same thing on all three.

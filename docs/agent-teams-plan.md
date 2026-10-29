@@ -257,12 +257,12 @@ text:
   only for the *showing* — opening the finished app on the operator's
   screen.
 
-One wiring consequence: the board tools (`project`/`task`) sit behind
+One wiring consequence: the board tools (`project`/`task`) sat behind
 `desktop_tools_enabled` and the messaging tool behind
-`agent_tools_enabled`, both off by default. A team with either flag off
-half-works in confusing ways, so `team up` checks both and says
-exactly what is missing and how to turn it on, instead of seeding a
-team that cannot reach its own board.
+`agent_tools_enabled`, both off by default, and a team with either flag
+off half-worked in confusing ways. `team up` first warned about it; now
+standing agents always have both, and the flags govern only an ordinary
+chat's model ([teams](./teams.md#flags)).
 
 ## Watching the team work — the supervisor runs the desktop
 

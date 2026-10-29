@@ -108,7 +108,8 @@ pasclaw project new "Spam Filter"
 pasclaw project show spam-filter
 ```
 
-The agent can manage the same board itself through two tools, **off by
+A standing agent — a team's member — always has the board tools below. An
+ordinary chat's model has them only when you turn them on, **off by
 default**:
 
 ```json

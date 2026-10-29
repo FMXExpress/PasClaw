@@ -33,7 +33,10 @@ interface
 uses
   PasClaw.Tools.Registry;
 
-procedure RegisterAgentTools(R: TToolRegistry);
+{ AgentOnly: offered to standing agents' turns only (TTool.AgentOnly) --
+  what the gateway does when agent_tools_enabled is off, so a team's
+  members can always message each other. }
+procedure RegisterAgentTools(R: TToolRegistry; AgentOnly: Boolean = False);
 
 (* Who is calling, for THIS thread.
 
@@ -500,7 +503,7 @@ begin
   end;
 end;
 
-procedure RegisterAgentTools(R: TToolRegistry);
+procedure RegisterAgentTools(R: TToolRegistry; AgentOnly: Boolean);
 var
   T: TTool;
 begin
@@ -519,10 +522,18 @@ begin
   T.Schema      := AgentSchema;
   T.Handler     := Tool_Agent;
   T.Category    := tcMutating;
-  R.Register(T);
+  if AgentOnly then R.RegisterAgentOnly(T) else R.Register(T);
+end;
+
+{ The registry's question -- is this turn a standing agent's? -- answered
+  by who is calling on this thread. }
+function CallerIsAgent: Boolean;
+begin
+  Result := CallingAgent <> '';
 end;
 
 initialization
+  AgentTurnProbe := CallerIsAgent;
   AddDecisionCreatedListener(NotifyDecisionChannel);
   AddDecisionAnsweredListener(DeliverDecisionAnswer);
 

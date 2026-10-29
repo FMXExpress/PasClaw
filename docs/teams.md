@@ -540,17 +540,25 @@ leaves the board without review.
 
 ## Flags
 
-Teams need two model-facing flags that are off by default:
+None to set. A team's members always have the board tools (`project`,
+`task`, `rule`) and the `agent` tool: a team *is* those tools, and starting
+one is the operator's opt-in to agents that manage a board and message each
+other. Until this, both sat behind two flags that are off by default, and a
+team started on a fresh install woke its lead with no `task` tool.
+
+The flags still decide one thing — whether an **ordinary chat's** model has
+those tools too:
 
 ```json
 { "desktop_tools_enabled": true, "agent_tools_enabled": true }
 ```
 
-The first lets the team manage its task board, the second lets members
-message each other. `team up` — **New team…** on the desktop and
-`pasclaw team up` alike — **warns** when either is off and names it,
-rather than seeding a team that cannot reach its own board — which
-looks like model stupidity and is not.
+Off (the default), the tools are registered for standing agents' turns
+only: a team member is offered them and may call them; an ordinary chat —
+the CLI, a project chat, Ask PasClaw — is not offered them, and calling one
+by name is refused. On, every chat has them, as before. Managing the board
+and creating colleagues on its own initiative is the autonomy step a chat's
+model should only take when you have said so.
 
 `agent_tools_enabled` also **gates the model's `team_up` action**. The
 `desktop` tool is registered always, because gating window management
