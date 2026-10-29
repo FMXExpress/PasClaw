@@ -3879,9 +3879,13 @@ function paintTree() {
         (t.status === "review" ? "  -- waiting for a verdict" : "") +
         (waiting ? "  -- waits on " + t.waiting_on.join(", ") : ""));
       if (waiting) lbl.style.opacity = ".6";
-      lbl.style.flex = "1 1 auto";
+      /* The title gives way, not the buttons: in a narrow pane a long row
+         used to push Edit off the edge and scroll every row sideways. The
+         whole line is on hover. */
+      lbl.style.cssText += ";flex:1 1 auto;min-width:0;overflow:hidden;" +
+                           "text-overflow:ellipsis";
       tr.appendChild(lbl);
-      tr.title = [t.notes, t.criteria ? "Criteria:\n" + t.criteria : ""]
+      tr.title = [lbl.textContent, t.notes, t.criteria ? "Criteria:\n" + t.criteria : ""]
         .filter(Boolean).join("\n\n");
 
       /* A task in review waits for a verdict, and you can give it: you
@@ -3950,6 +3954,14 @@ function paintTree() {
           }
         });
         tr.appendChild(run);
+      }
+
+      if (t.status !== "done") {
+        const edit = el("button", "btn", "Edit");
+        edit.title = "Owner, acceptance checks, what it waits on";
+        edit.style.cssText = "padding:0 6px;font-size:10px;line-height:14px";
+        edit.addEventListener("click", e => { e.stopPropagation(); taskForm(p.name, t); });
+        tr.appendChild(edit);
       }
 
       tr.addEventListener("click", async () => {
@@ -4070,12 +4082,161 @@ async function newProject() {
   } catch (e) { alert(e.message); }
 }
 
-async function newTask(project) {
-  const title = prompt("Task title:", "");
-  if (!title) return;
-  await api(`/v1/projects/${project}/tasks`, { method: "POST", body: { title } });
-  await loadTasks(project);
-  await loadProjects();
+/* New task / edit task: one form. A task is more than a title on a board
+   a team works -- who owns it, what the verdict checks, what it waits on --
+   and a title-only prompt meant the desktop could make tasks the team had
+   to be told about and could never say who should do them. Saving a task
+   with no owner on a team's board tells the team's lead; one with an owner
+   tells the owner; either puts a team the finished board parked back on. */
+function newTask(project) { return taskForm(project, null); }
+
+async function taskForm(project, task) {
+  const key = "taskform-" + project + "-" + (task ? task.id : "new");
+  const w = createWindow({ key, icon: "app", width: 440, height: 470,
+    title: task ? `Edit ${task.id}` : `New task -- ${project}` });
+  if (w.__wired) { restoreWindow(w); focusWindow(w); return; }
+  w.__wired = true;
+
+  /* A lookup that fails must not read as "nobody" and "nothing": the form
+     would show the task with no owner and no prerequisites, and Save would
+     send those as edits -- unassigning it and making waiting work ready.
+     So the task's own values are always offered, marked when they could
+     not be checked, and a failed lookup is said. */
+  let agents = [], tasks = [];
+  const unloaded = [];
+  try { agents = (await api("/v1/agents")).agents || []; }
+  catch { unloaded.push("the agent list"); }
+  try { tasks = (await api(`/v1/projects/${project}/tasks`)).tasks || []; }
+  catch { unloaded.push("the board"); }
+  const rosterOk = !unloaded.includes("the agent list");
+  const boardOk = !unloaded.includes("the board");
+
+  const wrap = el("div");
+  wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;padding:8px";
+  const label = text => wrap.appendChild(el("div", "muted", text));
+
+  label("Title");
+  const title = el("input", "fld");
+  title.value = task ? task.title : "";
+  wrap.appendChild(title);
+
+  label("Notes -- the brief: what it is, constraints, where it goes");
+  const notes = el("textarea", "fld");
+  notes.rows = 3;
+  notes.value = task ? (task.notes || "") : "";
+  wrap.appendChild(notes);
+
+  label("Owner");
+  const owner = el("select", "fld");
+  owner.appendChild(el("option", null, "(nobody -- the team's lead assigns it)"));
+  agents.forEach(a => {
+    const o = el("option", null, a.name + (a.title && a.title !== a.name ? " -- " + a.title : ""));
+    o.value = a.name;
+    owner.appendChild(o);
+  });
+  if (task && task.assignee) {
+    if (!agents.some(a => a.name === task.assignee)) {
+      const o = el("option", null, task.assignee +
+        (rosterOk ? "  (not on the roster)" : "  (roster not loaded)"));
+      o.value = task.assignee;
+      owner.appendChild(o);
+    }
+    owner.value = task.assignee;
+  }
+  wrap.appendChild(owner);
+
+  label("Acceptance checks -- one per line; the verdict is given against these");
+  const checks = el("textarea", "fld");
+  checks.rows = 3;
+  checks.value = task ? (task.criteria || "") : "";
+  if (task && task.status !== "todo")
+    checks.title = "Work has started: editing them here is recorded as yours";
+  wrap.appendChild(checks);
+
+  label("Waits on -- it is not offered to anyone until these are done");
+  const waits = el("div");
+  waits.style.cssText = "display:flex;flex-direction:column;max-height:90px;overflow:auto";
+  const had = new Set((task && task.waits_on) || []);
+  const boxes = [];
+  tasks.filter(t => !task || t.id !== task.id).forEach(t => {
+    const row = el("label");
+    row.style.cssText = "display:flex;gap:4px;align-items:center";
+    const cb = el("input");
+    cb.type = "checkbox";
+    cb.value = t.id;
+    cb.checked = had.has(t.id);
+    row.appendChild(cb);
+    row.appendChild(el("span", t.status === "done" ? "muted" : null,
+                       t.id + "  " + t.title + (t.status === "done" ? "  (done)" : "")));
+    boxes.push(cb);
+    waits.appendChild(row);
+  });
+  [...had].filter(id => !tasks.some(t => t.id === id)).forEach(id => {
+    const row = el("label");
+    row.style.cssText = "display:flex;gap:4px;align-items:center";
+    const cb = el("input");
+    cb.type = "checkbox";
+    cb.value = id;
+    cb.checked = true;
+    row.appendChild(cb);
+    row.appendChild(el("span", "muted",
+      id + (boardOk ? "  (not on the board)" : "  (board not loaded)")));
+    boxes.push(cb);
+    waits.appendChild(row);
+  });
+  if (!boxes.length)
+    waits.appendChild(el("span", "muted", boardOk ? "(no other tasks)" : "(board not loaded)"));
+  wrap.appendChild(waits);
+
+  const bar = el("div");
+  bar.style.cssText = "display:flex;gap:6px;justify-content:flex-end;align-items:center";
+  const status = el("span", "muted");
+  if (unloaded.length)
+    status.textContent = "could not load " + unloaded.join(" or ") + " -- " +
+                         "what the task has is kept";
+  const save = el("button", "btn", task ? "Save" : "Create");
+  bar.appendChild(status); bar.appendChild(save);
+  wrap.appendChild(bar);
+  w.body.appendChild(wrap);
+  title.focus();
+
+  save.addEventListener("click", async () => {
+    if (!title.value.trim()) { status.textContent = "give it a title"; return; }
+    const waitsOn = boxes.filter(b => b.checked).map(b => b.value);
+    let body;
+    if (!task) {
+      body = { title: title.value.trim(), notes: notes.value,
+               criteria: checks.value.trim(), waits_on: waitsOn };
+      if (owner.selectedIndex > 0) body.assignee = owner.value;
+    } else {
+      /* Only what changed: an unchanged field sent anyway would be an
+         edit in the record -- and criteria, once work starts, are frozen
+         to everyone but you. */
+      body = {};
+      if (title.value.trim() !== task.title) body.title = title.value.trim();
+      if (notes.value !== (task.notes || "")) body.notes = notes.value;
+      const who = owner.selectedIndex > 0 ? owner.value : "";
+      if (who !== (task.assignee || "")) body.assignee = who;
+      if (checks.value.trim() !== (task.criteria || "")) body.criteria = checks.value.trim();
+      const before = [...had].sort().join(","), after = [...waitsOn].sort().join(",");
+      if (before !== after) body.waits_on = waitsOn;
+      if (!Object.keys(body).length) { closeWindow(w); return; }
+    }
+    save.disabled = true;
+    status.textContent = "saving...";
+    try {
+      if (task)
+        await api(`/v1/projects/${project}/tasks/${task.id}`, { method: "PATCH", body });
+      else
+        await api(`/v1/projects/${project}/tasks`, { method: "POST", body });
+      closeWindow(w);
+      await loadTasks(project);
+      await loadProjects();
+    } catch (e) {
+      status.textContent = e.message;
+      save.disabled = false;
+    }
+  });
 }
 
 /* The agent keeps a working checklist through its todo_write tool, and the
@@ -4144,8 +4305,10 @@ function mirrorChecklist(project, argsStr) {
       const settled = await Promise.allSettled(wanted.map(async it => {
         const t = have.get(it.title);
         if (!t) {
+          /* source: the chat agent's own steps -- the board must not
+             hand them to a team as new work. */
           const made = await api(`/v1/projects/${project}/tasks`,
-            { method: "POST", body: { title: it.title } });
+            { method: "POST", body: { title: it.title, source: "checklist" } });
           have.set(it.title, { id: made.id, status: "todo" });
           if (it.done && !reviewed)
             await api(`/v1/projects/${project}/tasks/${made.id}`,

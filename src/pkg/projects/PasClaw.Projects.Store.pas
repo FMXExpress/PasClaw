@@ -429,6 +429,18 @@ var
   OnTaskClosed: TTaskClosedHook = nil;
 
 type
+  { Called after a task changes hands -- to Assignee, by Actor. }
+  TTaskAssignedHook = procedure(const Project, TaskId, Assignee, Actor: string);
+
+var
+  (* PasClaw.Projects.Tools installs one that tells the new owner, when
+     the task is theirs to start. Without it a handoff waited out the
+     team's cadence -- fifteen minutes by default -- for the wake loop
+     to notice an open assigned task. Not called when an agent takes a
+     task itself: nobody needs telling. *)
+  OnTaskAssigned: TTaskAssignedHook = nil;
+
+type
   (* Run before a submission is accepted. True = green (or nothing to
      run); False refuses the submit with Report. A hook rather than a
      call because what counts as green is the agent layer's business --
@@ -1884,6 +1896,9 @@ begin
   PublishTask(Project, Id, St);
   if StatusChange and (St = 'done') and Assigned(OnTaskClosed) then
     OnTaskClosed(Project, Id);
+  if AssigneeChange and (NewAssignee <> '') and (NewAssignee <> Actor) and
+     Assigned(OnTaskAssigned) then
+    OnTaskAssigned(Project, Id, NewAssignee, Actor);
   Result := True;
 end;
 

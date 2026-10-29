@@ -96,6 +96,10 @@ type
        loop parks the team by itself -- a finished team that keeps
        being woken is a bill, not a team. *)
     DoneTicks:   Integer;
+    (* True when the TICK parked it -- the board was done -- rather than
+       the operator (`team down`). New work on the board wakes a team the
+       board parked; a team someone stopped stays stopped. *)
+    AutoParked:  Boolean;
     Created:     string;
     Updated:     string;
     Exists:      Boolean;
@@ -162,6 +166,12 @@ function TeamStateDir: string;
 function LoadTeamState(const Name: string; out S: TTeamState): Boolean;
 function SaveTeamState(var S: TTeamState; out Err: string): Boolean;
 function ListTeamStates: TTeamStateArray;
+
+(* New work arrived on Project: every team the board itself parked (done
+   for two ticks) goes back on, due at once, and the tick is nudged so it
+   does not wait out its slice. A team the operator parked stays parked.
+   Returns the teams resumed. *)
+function ResumeParkedTeams(const Project: string): TStringArray;
 
 { --------------------------------------------------------- the tick -- }
 
@@ -304,9 +314,10 @@ const
     'requirements detail (the product manager does), or the verdict on ' +
     'quality (the test engineer does) -- you own that all of it happens.'#10 +
     'When given a goal: create the project if it does not exist, break ' +
-    'the goal into small concrete tasks with the task tool, set each ' +
-    'task''s assignee to the team member who owns it, and message each ' +
-    'assignee ONCE naming their task ids. When given an existing ' +
+    'the goal into small concrete tasks with the task tool, and set ' +
+    'each task''s assignee (on create) to the team member who owns it ' +
+    '-- the board tells them, so do not message them as well. When ' +
+    'given an existing ' +
     'board: read it first; assign and unblock what is there before ' +
     'inventing anything new.'#10 +
     'On each wake: read messages; walk the board; unblock or reassign ' +
@@ -508,8 +519,8 @@ const
     'When given a goal or question: create the project if needed, ' +
     'break the ask into tasks with the task tool, assign each to the ' +
     'RIGHT officer -- and only the officers the ask actually needs; ' +
-    'two is a normal number, eight means you did not think. Message ' +
-    'each assignee ONCE naming their task ids. A task that depends on ' +
+    'two is a normal number, eight means you did not think. The board ' +
+    'tells each assignee; do not message them as well. A task that depends on ' +
     'another gets waits_on=["T0002"]: the board wakes its owner only ' +
     'when what it waits on is done, and tells them.'#10 +
     'Officers submit their documents for YOUR verdict: read each ' +
@@ -1182,6 +1193,9 @@ end;
 
 function TeamKickoffText(const T: TTeamTemplate;
                          const Goal, Project: string): string;
+var
+  I: Integer;
+  Roster, Extra: string;
 begin
   Result := T.Kickoff;
   if Result = '' then
@@ -1189,6 +1203,25 @@ begin
               'Goal: {{goal}}'#10'Project: {{project}}';
   Result := StringReplace(Result, '{{goal}}', Goal, [rfReplaceAll]);
   Result := StringReplace(Result, '{{project}}', Project, [rfReplaceAll]);
+  (* Who is on the team, by the names the board takes. A lead told to
+     "set each task's assignee" otherwise spends its first call listing
+     every agent in the workspace -- role prompts and all -- to find out. *)
+  Roster := '';
+  for I := 0 to High(T.Agents) do
+  begin
+    if Roster <> '' then Roster := Roster + ', ';
+    Roster := Roster + T.Agents[I].Name;
+    Extra := T.Agents[I].Title;
+    if T.Agents[I].Parent <> '' then
+    begin
+      if Extra <> '' then Extra := Extra + ', ';
+      Extra := Extra + 'reports to ' + T.Agents[I].Parent;
+    end;
+    if Extra <> '' then Roster := Roster + ' (' + Extra + ')';
+  end;
+  if Roster <> '' then
+    Result := Result + #10'The team, by the names tasks are assigned to: ' +
+              Roster + '.';
 end;
 
 function TeamLeads(const T: TTeamTemplate): TStringArray;
@@ -1328,6 +1361,7 @@ begin
     S.WakeMinutes := Obj.GetInt('wake_minutes', 0);
     S.LastTick    := Obj.GetStr('last_tick', '');
     S.DoneTicks   := Obj.GetInt('done_ticks', 0);
+    S.AutoParked  := Obj.GetBool('auto_parked', False);
     S.Created     := Obj.GetStr('created', '');
     S.Updated     := Obj.GetStr('updated', '');
     Who := Obj.ChildArray('wake_who');
@@ -1381,6 +1415,7 @@ begin
     Obj.PutArray('wake_who', Who);
     Obj.PutStr('last_tick', S.LastTick);
     Obj.PutInt('done_ticks', S.DoneTicks);
+    if S.AutoParked then Obj.PutBool('auto_parked', True);
     Obj.PutStr('created', S.Created);
     Obj.PutStr('updated', S.Updated);
     WriteFileText(Path, Obj.ToJSON);
@@ -1389,6 +1424,36 @@ begin
   end;
   S.Exists := True;
   Result := True;
+end;
+
+function ResumeParkedTeams(const Project: string): TStringArray;
+var
+  States: TTeamStateArray;
+  S: TTeamState;
+  I, N: Integer;
+  Err: string;
+begin
+  SetLength(Result, 0);
+  N := 0;
+  if Project = '' then Exit;
+  States := ListTeamStates;
+  for I := 0 to High(States) do
+  begin
+    S := States[I];
+    if (S.Project <> Project) or S.Enabled or not S.AutoParked then Continue;
+    S.Enabled := True;
+    S.AutoParked := False;
+    S.DoneTicks := 0;
+    S.LastTick := '';   { due on the next pass }
+    if SaveTeamState(S, Err) then
+    begin
+      LogInfo('team %s: new work on %s -- back on', [S.Name, Project]);
+      SetLength(Result, N + 1);
+      Result[N] := S.Name;
+      Inc(N);
+    end;
+  end;
+  if N > 0 then WakeTeamTick;
 end;
 
 function ListTeamStates: TTeamStateArray;
@@ -1618,6 +1683,7 @@ var
   Leads: TStringArray;
   I, L, N: Integer;
   Updated: TDateTime;
+  Pool: Boolean;
   Text, Delivered, Err: string;
 begin
   SetLength(Result, 0);
@@ -1626,8 +1692,36 @@ begin
   Leads := TeamLeads(T);
   if Length(Leads) = 0 then Exit;
   Tasks := ListTasks(S.Project);
+  Pool := Length(ProjectTakers(S.Project)) > 0;
   for I := 0 to High(Tasks) do
   begin
+    (* Ready work nobody owns, on a board where nobody takes unassigned
+       work, is stalled just as surely as a stuck active task -- and
+       more quietly: no owner is idle on it, so nothing else here would
+       ever say so. After one cadence the leads hear; handing it out is
+       theirs. *)
+    if (Tasks[I].Status = tsTodo) and (Tasks[I].Assignee = '') and not Pool and
+       TaskReady(Tasks[I], Tasks) then
+    begin
+      Updated := IsoToLocal(Tasks[I].Updated);
+      if (Updated = 0) or (MinutesBetween(Now, Updated) < S.WakeMinutes) then
+        Continue;
+      Text := Format('Task %s ("%s") on %s is ready and nobody owns it, and ' +
+                     'no one on this team takes unassigned work. Assign it: ' +
+                     'task action="update" project="%s" id="%s" ' +
+                     'assignee="<agent>" -- or mark it blocked with a note ' +
+                     'if it waits on something outside the board.',
+                     [Tasks[I].Id, Tasks[I].Title, S.Project, S.Project,
+                      Tasks[I].Id]);
+      for L := 0 to High(Leads) do
+        if AgentSend(Leads[L], 'team-tick', Text, Delivered, Err) then
+        begin
+          SetLength(Result, N + 1);
+          Result[N] := Tasks[I].Id + ' (unowned) -> ' + Leads[L];
+          Inc(N);
+        end;
+      Continue;
+    end;
     if Tasks[I].Status <> tsActive then Continue;
     if Tasks[I].Assignee = '' then Continue;
     { A busy owner is working, whatever the clock says. }

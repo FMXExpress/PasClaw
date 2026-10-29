@@ -31,6 +31,7 @@ uses
   PasClaw.Utils,
   PasClaw.CliUI,
   PasClaw.Workspaces,
+  PasClaw.Config,
   PasClaw.Projects.Store,
   PasClaw.Agents,
   PasClaw.Teams;
@@ -76,6 +77,7 @@ var
   Name_, Goal, Project, Err, Delivered, Kick: string;
   I: Integer;
   Parked: Boolean;
+  Cfg: TConfig;
 begin
   Result := 1;
   if Length(Argv) < 2 then
@@ -172,6 +174,23 @@ begin
     Exit;
   end;
 
+  (* The flags a working team needs, said here as POST /v1/teams/up says
+     them: with the board tools off the lead is woken with no task tool,
+     and the team "is up" while nothing on its board can move. *)
+  Cfg := LoadConfig;
+  try
+    if not Cfg.DesktopToolsEnabled then
+      PrintLn('  warning  desktop_tools_enabled is off: the team cannot ' +
+              'manage its task board. Set {"desktop_tools_enabled": true} ' +
+              'in config.json.');
+    if not Cfg.AgentToolsEnabled then
+      PrintLn('  warning  agent_tools_enabled is off: team members cannot ' +
+              'message each other. Set {"agent_tools_enabled": true} in ' +
+              'config.json.');
+  finally
+    Cfg.Free;
+  end;
+
   Kick := TeamKickoffText(T, Goal, Project);
   Leads := TeamLeads(T);
   for I := 0 to High(Leads) do
@@ -266,6 +285,7 @@ begin
       Exit(1);
     end;
     S.Enabled := False;
+    S.AutoParked := False;   { the operator's park: new work does not undo it }
     if not SaveTeamState(S, Err) then
     begin
       PrintLn('error: ' + Err);

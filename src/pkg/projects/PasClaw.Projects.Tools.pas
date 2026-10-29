@@ -95,6 +95,15 @@ function RulesJSON(const Project: string): string;
    '**' is any run of whole segments (including none), '*' any run within
    one segment, '?' one character that is not '/'. Exposed for tests. *)
 function LaneMatches(const Glob, RelPath: string): Boolean;
+
+(* A task was just created on Project by Actor -- assignee and waits_on
+   already applied. Tells the team working the board what it has to do
+   about it: a board-parked team goes back on, and ready work nobody owns
+   reaches the board's takers, or its leads when nobody takes. Assigned
+   work has already told its owner (OnTaskAssigned); work that waits is
+   news when what it waits on is done (NotifyDependents). The leads are
+   not told about tasks they made themselves. *)
+procedure AnnounceNewTask(const Project, TaskId, Actor: string);
 function Tool_Desktop(const ArgsJSON: string; out ErrMsg: string): string;
 
 (* Exposed for tests: what a `desktop` call is READ as, before anything
@@ -416,6 +425,21 @@ begin
     Result := JoinList(Reviewers);
 end;
 
+(* Notes grow -- agents add to them -- and the board listing is read on
+   every wake, every task at once. Past a page, the listing keeps the
+   start (the brief) and the end (the latest word); the cut says how
+   much it left out. *)
+function ListedNotes(const Notes: string): string;
+const
+  Keep = 300;
+begin
+  Result := Notes;
+  if Length(Result) > 3 * Keep then
+    Result := Copy(Result, 1, Keep) + ' [... ' +
+              IntToStr(Length(Result) - 2 * Keep) + ' chars ...] ' +
+              Copy(Result, Length(Result) - Keep + 1, Keep);
+end;
+
 function TaskList(const Project: string; out Err: string): string;
 var
   Rows: TTaskInfoArray;
@@ -449,7 +473,7 @@ begin
       S := S + '  (jobs: ' + IntToStr(Rows[I].JobCount) + ')';
     S := S + #10;
     if Rows[I].Notes <> '' then
-      S := S + '      ' + Rows[I].Notes + #10;
+      S := S + '      ' + ListedNotes(Rows[I].Notes) + #10;
     if Rows[I].Criteria <> '' then
       S := S + '      criteria:'#10 + PrefixLines(Rows[I].Criteria, '        - ');
     if Rows[I].Status = tsReview then
@@ -552,33 +576,134 @@ begin
               'are your lead''s to hand out.';
 end;
 
+{ The leads of the team(s) working this board -- who a repeated cause is
+  reported to, and who hands out a task nobody owns. }
+function LeadsFor(const Project: string): TStringArray;
+var
+  States: TTeamStateArray;
+  T: TTeamTemplate;
+  Leads: TStringArray;
+  I, J: Integer;
+begin
+  SetLength(Result, 0);
+  States := ListTeamStates;
+  for I := 0 to High(States) do
+    if (States[I].Project = Project) and FindTeamTemplate(States[I].Name, T) then
+    begin
+      Leads := TeamLeads(T);
+      for J := 0 to High(Leads) do
+        if not InList(Leads[J], Result) then
+        begin
+          SetLength(Result, Length(Result) + 1);
+          Result[High(Result)] := Leads[J];
+        end;
+    end;
+end;
+
 (* OnTaskClosed: a task reached done, so tasks that waited on it may be
    ready now. Their owners are told -- which is also what makes their
-   team due on the next tick instead of at the next cadence. Unassigned
-   ones are left to the wake loop, which offers them to the board's
-   takers. *)
+   team due on the next tick instead of at the next cadence. An unowned
+   one is offered to the board's takers by the wake loop; on a board
+   with no takers nobody would ever claim it, so the leads are told
+   instead -- handing work out is theirs. *)
 procedure NotifyDependents(const Project, TaskId: string);
 var
   Board: TTaskInfoArray;
+  Leads: TStringArray;
   I, K: Integer;
-  Waited: Boolean;
+  Waited, LeadsKnown: Boolean;
   Delivered, Err: string;
 begin
   Board := ListTasks(Project);
+  LeadsKnown := False;
   for I := 0 to High(Board) do
   begin
-    if (Board[I].Status <> tsTodo) or (Board[I].Assignee = '') then Continue;
+    if Board[I].Status <> tsTodo then Continue;
     Waited := False;
     for K := 0 to High(Board[I].WaitsOn) do
       if Board[I].WaitsOn[K] = UpperCase(TaskId) then Waited := True;
     if not Waited or not TaskReady(Board[I], Board) then Continue;
-    AgentSend(Board[I].Assignee, 'board',
-              Format('%s ("%s") on %s is ready: %s, the last thing it waited ' +
-                     'on, is done. Claim it with task action="next" ' +
-                     'project="%s".',
-                     [Board[I].Id, Board[I].Title, Project, UpperCase(TaskId),
-                      Project]), Delivered, Err);
+    if Board[I].Assignee <> '' then
+      AgentSend(Board[I].Assignee, 'board',
+                Format('%s ("%s") on %s is ready: %s, the last thing it waited ' +
+                       'on, is done. Claim it with task action="next" ' +
+                       'project="%s".',
+                       [Board[I].Id, Board[I].Title, Project, UpperCase(TaskId),
+                        Project]), Delivered, Err)
+    else if Length(ProjectTakers(Project)) = 0 then
+    begin
+      if not LeadsKnown then
+      begin
+        Leads := LeadsFor(Project);
+        LeadsKnown := True;
+      end;
+      for K := 0 to High(Leads) do
+        AgentSend(Leads[K], 'board',
+                  Format('%s ("%s") on %s is ready -- %s, the last thing it ' +
+                         'waited on, is done -- and nobody owns it. Assign it: ' +
+                         'task action="update" project="%s" id="%s" ' +
+                         'assignee="<agent>".',
+                         [Board[I].Id, Board[I].Title, Project, UpperCase(TaskId),
+                          Project, Board[I].Id]), Delivered, Err);
+    end;
   end;
+end;
+
+procedure AnnounceNewTask(const Project, TaskId, Actor: string);
+var
+  Board: TTaskInfoArray;
+  T: TTaskInfo;
+  Leads, Takers: TStringArray;
+  I: Integer;
+  Text, Delivered, Err: string;
+begin
+  ResumeParkedTeams(Project);
+  if not GetTask(Project, TaskId, T) then Exit;
+  if (T.Status <> tsTodo) or (T.Assignee <> '') then Exit;
+  Board := ListTasks(Project);
+  if not TaskReady(T, Board) then Exit;
+  Leads := LeadsFor(Project);
+  if Length(Leads) = 0 then Exit;   { no team works this board }
+  if InList(Actor, Leads) then Exit;
+  Takers := ProjectTakers(Project);
+  if Length(Takers) > 0 then
+  begin
+    Text := Format('%s added %s ("%s") on %s; it is ready and nobody owns ' +
+                   'it. Claim it with task action="next" project="%s".',
+                   [ActorLabel(Actor), T.Id, T.Title, Project, Project]);
+    for I := 0 to High(Takers) do
+      if Takers[I] <> Actor then
+        AgentSend(Takers[I], 'board', Text, Delivered, Err);
+    Exit;
+  end;
+  Text := Format('%s added %s ("%s") on %s and nobody owns it. Assign it: ' +
+                 'task action="update" project="%s" id="%s" assignee="<agent>".',
+                 [ActorLabel(Actor), T.Id, T.Title, Project, Project, T.Id]);
+  for I := 0 to High(Leads) do
+    AgentSend(Leads[I], 'board', Text, Delivered, Err);
+end;
+
+(* OnTaskAssigned: the task changed hands, so its new owner hears -- if
+   it can start it now. One still waiting on other work is not news yet:
+   NotifyDependents tells the owner when the last of it is done. *)
+procedure NotifyAssignee(const Project, TaskId, Assignee, Actor: string);
+var
+  Board: TTaskInfoArray;
+  T: TTaskInfo;
+  Delivered, Err: string;
+begin
+  if not GetTask(Project, TaskId, T) then Exit;
+  if not (T.Status in [tsTodo, tsActive]) then Exit;
+  if T.Status = tsTodo then
+  begin
+    Board := ListTasks(Project);
+    if not TaskReady(T, Board) then Exit;
+  end;
+  AgentSend(Assignee, ActorLabel(Actor),
+            Format('%s ("%s") on %s is assigned to you by %s. Take it with ' +
+                   'task action="next" project="%s".',
+                   [T.Id, T.Title, Project, ActorLabel(Actor), Project]),
+            Delivered, Err);
 end;
 
 function Tool_Task(const ArgsJSON: string; out ErrMsg: string): string;
@@ -635,6 +760,23 @@ begin
             rather than failing a create that succeeded. }
           Result := Result + '. Its waits_on was NOT set: ' + Err;
       end;
+      (* Creating a task and handing it out are one move for a lead, and
+         an assignee dropped here was silent: the task sat unowned while
+         its intended owner was told it had nothing ready. After the
+         edge, so the owner is told "it is yours" only when it is ready
+         to start (NotifyAssignee reads waits_on). *)
+      Assignee := Trim(Obj.GetStr('assignee', ''));
+      if Assignee <> '' then
+      begin
+        if UpdateTask(Project, Id, '', '-', '', Err, Assignee, '-', Actor) then
+        begin
+          if GetTask(Project, Id, T) then Assignee := T.Assignee;
+          Result := Result + ' (assigned to ' + Assignee + ')';
+        end
+        else
+          Result := Result + '. Its assignee was NOT set: ' + Err;
+      end;
+      AnnounceNewTask(Project, Id, Actor);
       Exit;
     end;
 
@@ -678,6 +820,15 @@ begin
         Exit;
       end;
       if Obj.Has('notes') then Notes := Obj.GetStr('notes', '') else Notes := '-';
+      (* An agent's note is ADDED to the task's notes. Every role is told
+         to "describe what changed in the task notes", and replacing
+         meant the first progress note erased the brief the lead wrote --
+         the output format, the constraints -- with nothing to say so.
+         The operator's edit (PATCH) still replaces: that is an editor. *)
+      if (Notes <> '-') and (Trim(Notes) <> '') and IsAgentCaller(Actor) and
+         GetTask(Project, Id, T) and (Trim(T.Notes) <> '') and
+         (Pos(Trim(T.Notes), Notes) = 0) then
+        Notes := TrimRight(T.Notes) + #10'[' + Actor + '] ' + Trim(Notes);
       { Absent key = leave alone; "assignee":"" = explicitly unassign. }
       if Obj.Has('assignee') then Assignee := Obj.GetStr('assignee', '')
                               else Assignee := '-';
@@ -1244,30 +1395,6 @@ begin
   end;
 end;
 
-{ The leads of the team(s) working this board -- who a repeated cause is
-  reported to. }
-function LeadsFor(const Project: string): TStringArray;
-var
-  States: TTeamStateArray;
-  T: TTeamTemplate;
-  Leads: TStringArray;
-  I, J: Integer;
-begin
-  SetLength(Result, 0);
-  States := ListTeamStates;
-  for I := 0 to High(States) do
-    if (States[I].Project = Project) and FindTeamTemplate(States[I].Name, T) then
-    begin
-      Leads := TeamLeads(T);
-      for J := 0 to High(Leads) do
-        if not InList(Leads[J], Result) then
-        begin
-          SetLength(Result, Length(Result) + 1);
-          Result[High(Result)] := Leads[J];
-        end;
-    end;
-end;
-
 (* OnTaskRejected: the second time one cause rejects work on a board, the
    lead hears -- the cause, the tasks, and the call that turns it into a
    proven rule. Not again once a rule exists, the operator declined one,
@@ -1820,7 +1947,8 @@ begin
   T.Description :=
     'Manage tasks inside a project, and report on the job you are running. ' +
     'action="list" shows the board; action="create" needs "project" and ' +
-    '"title"; action="update" needs "id" and can set status ' +
+    '"title" (and takes assignee, criteria and waits_on too); ' +
+    'action="update" needs "id" and can set status ' +
     '(todo/active/done/blocked), assignee, "criteria" (acceptance ' +
     'checks, one per line -- frozen once work starts) and "waits_on" ' +
     '(task ids this one needs done first); action="next" claims your ' +
@@ -1838,9 +1966,9 @@ begin
     '"action":{"type":"string","enum":["list","create","update","next","job","submit","verdict"]},' +
     '"project":{"type":"string","description":"Project slug (always required)."},' +
     '"id":{"type":"string","description":"Task id, e.g. T0001 (update/job/submit/verdict)."},' +
-    '"assignee":{"type":"string","description":"Agent slug that owns the task (update)."},' +
+    '"assignee":{"type":"string","description":"Agent slug that owns the task (create/update)."},' +
     '"title":{"type":"string","description":"Task title (create/update)."},' +
-    '"notes":{"type":"string","description":"Free-text notes on the task."},' +
+    '"notes":{"type":"string","description":"Free-text notes on the task. An agent''s notes on update are added under its name; the earlier notes stay."},' +
     '"criteria":{"type":"string","description":"Acceptance checks, one per line (create/update; frozen once the task starts)."},' +
     '"waits_on":{"type":"array","items":{"type":"string"},"description":"Task ids that must be done before this one is ready (create/update; [] clears)."},' +
     '"status":{"type":"string","description":"todo|active|done|blocked for a task; done|failed for a job."},' +
@@ -1944,6 +2072,7 @@ initialization
     the shell backend to get it. }
   OnSubmitGate := ProjectScenarioGate;
   OnTaskClosed := NotifyDependents;
+  OnTaskAssigned := NotifyAssignee;
   OnTaskRejected := NoticeRepeatedCause;
   OnLaneCheck := LaneCheck;
   AddDecisionAnsweredListener(RuleDecisionAnswered);

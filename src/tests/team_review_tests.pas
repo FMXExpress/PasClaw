@@ -454,7 +454,8 @@ begin
   CreateProject('Wake Board', 'wake-board', '', Err);
   SetProjectReview('wake-board', True, Names(['w-qa']), Err);
   CreateTask('wake-board', 'The thing', '', Err);
-  UpdateTask('wake-board', 'T0001', '', '-', 'active', Err, 'w-dev');
+  { w-dev takes it itself, so nobody mails it that it is assigned. }
+  UpdateTask('wake-board', 'T0001', '', '-', 'active', Err, 'w-dev', '-', 'w-dev');
   SubmitTask('wake-board', 'T0001', 'w-dev', 'it runs', '', Err);
   S := Default(TTeamState);
   S.Name := 'wake-team';

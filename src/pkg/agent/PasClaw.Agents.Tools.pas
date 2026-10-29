@@ -184,6 +184,18 @@ begin
   Result.PutInt ('idle_minutes', AgentIdleMinutes(Info.Name));
 end;
 
+{ A role's first line, capped: "You are the 10x Developer of a small
+  software team, reporting to the Foreman." }
+function RoleSummary(const Role: string): string;
+var
+  P: Integer;
+begin
+  Result := Trim(Role);
+  P := Pos(#10, Result);
+  if P > 0 then Result := TrimRight(Copy(Result, 1, P - 1));
+  if Length(Result) > 200 then Result := Copy(Result, 1, 197) + '...';
+end;
+
 (* ask_operator: a question only a person can answer.
 
    Only the top of a reporting chain asks. An agent with a parent has its
@@ -310,7 +322,7 @@ function Tool_Agent(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Args, Root, Item: TJsonObject;
   Arr: TJsonArray;
-  Action, Name, Delivered, Err: string;
+  Action, Name, Text, Delivered, Err: string;
   Info: TAgentInfo;
   Rows: TAgentInfoArray;
   Msgs: TAgentMessageArray;
@@ -337,6 +349,11 @@ begin
         for I := 0 to High(Rows) do
         begin
           Item := AgentJSON(Rows[I]);
+          (* The roster is read to find out who is who; a role prompt is
+             kilobytes, and nine of them made one list call the size of
+             a source file. Its first line says who the agent is --
+             action=get has the rest. *)
+          Item.PutStr('role', RoleSummary(Rows[I].Role));
           Arr.AddObject(Item);
         end;
         Root.PutArray('agents', Arr);
@@ -432,8 +449,20 @@ begin
 
     if Action = 'send' then
     begin
-      if not AgentSend(Name, Args.GetStr('from', GCallerAgent),
-                       Args.GetStr('text', ''), Delivered, Err) then
+      (* "to" and "message" are what a model reaches for -- the result
+         below even answers with "to" -- so they mean name and text
+         rather than failing as "nothing to send". *)
+      if Name = '' then Name := Trim(Args.GetStr('to', ''));
+      Text := Args.GetStr('text', '');
+      if Text = '' then Text := Args.GetStr('message', '');
+      if (Name = '') or (Trim(Text) = '') then
+      begin
+        ErrMsg := 'agent send needs "name" (the agent to message) and ' +
+                  '"text" (the message)';
+        Exit;
+      end;
+      if not AgentSend(Name, Args.GetStr('from', GCallerAgent), Text,
+                       Delivered, Err) then
       begin
         ErrMsg := 'agent send: ' + Err;
         Exit;

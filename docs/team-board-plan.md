@@ -356,6 +356,18 @@ scripted developer submits work that misses one criterion.
 The cost to report is the extra turns and bytes of the review loop, the
 same way `VERIFY.md` reported #618's.
 
+**Measured** ([bench/teamboard/LIVE.md](../bench/teamboard/LIVE.md)): the
+`duo` run live through the relay, the model played by hand, the second
+task's work rejected once for a missed criterion and accepted after the
+fix. The review loop worked as planned. What did not was around it:
+`task create` dropped the assignee, ready work nobody owned stalled the
+team with nobody woken, a handoff waited out a cadence, a progress note
+erased the lead's brief, and every mail-driven handoff still sat out the
+tick's 30-second sleep. With those fixed, the same decisions cost 29
+provider calls instead of 36 and 0.96 MB of requests instead of 1.32 MB,
+and replayed without think time (`make bench-teamboard`) the run takes
+about 5 s of harness time instead of 180 s.
+
 ## Phases
 
 1. **Verdicts, frozen criteria, receipts** -- `review` state, `submit` /

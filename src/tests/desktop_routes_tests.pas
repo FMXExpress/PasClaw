@@ -30,6 +30,8 @@ uses
   PasClaw.Apps.Runner,
   PasClaw.Desktop.Events,
   PasClaw.Decisions,
+  PasClaw.Agents,
+  PasClaw.Teams,
   PasClaw.Gateway.Desktop;
 
 var
@@ -338,6 +340,154 @@ end;
 (* The operator's queue over HTTP: decisions listed and answered, and
    /v1/needs-you gathering open decisions with the reviews no agent can
    give. *)
+(* The tick's reports ride the cadence, not the mail. A stall report is
+   itself mail, and mail makes a team due -- so a report sent on every
+   due pass was sent again on the next one, and the next, for as long as
+   the lead had not acted: every 30 seconds, and every second once mail
+   ends the tick's sleep. *)
+procedure TestTickReportsOnCadence;
+var
+  Info: TAgentInfo;
+  S: TTeamState;
+  Err, Path: string;
+  Obj: TJsonObject;
+  First, Second: Integer;
+  Stamp: string;
+begin
+  WriteLn('-- the tick reports a stall once per cadence, not once per pass');
+  Info := Default(TAgentInfo);
+  Info.Name := 'tp-lead'; Info.Role := 'r';
+  SaveAgent(Info, Err);
+  Info.Name := 'tp-dev'; Info.Parent := 'tp-lead';
+  SaveAgent(Info, Err);
+  ForceDirectories(WorkspaceSubdir('teams'));
+  WriteFileText(JoinPath(WorkspaceSubdir('teams'), 'tick-team.json'),
+    '{"name":"tick-team","agents":[{"name":"tp-lead","role":"r"},' +
+    '{"name":"tp-dev","role":"r","parent":"tp-lead"}]}');
+  CreateProject('Tick Board', 'tick-board', '', Err);
+  CreateTask('tick-board', 'Nobody owns this', '', Err);
+  Path := JoinPath(TaskDir('tick-board', 'T0001'), 'task.json');
+  Obj := TJsonObject.Parse(ReadFileText(Path));
+  try
+    Obj.PutStr('updated', '2000-01-01T00:00:00Z');
+    WriteFileText(Path, Obj.ToJSON);
+  finally
+    Obj.Free;
+  end;
+  S := Default(TTeamState);
+  S.Name := 'tick-team';
+  S.Project := 'tick-board';
+  S.Enabled := True;
+  S.WakeMinutes := 15;
+  SetLength(S.WakeWho, 2);
+  S.WakeWho[0] := 'tp-lead';
+  S.WakeWho[1] := 'tp-dev';
+  ExpectTrue(SaveTeamState(S, Err), 'the tick team is up: ' + Err);
+  while WaitForAgentMail(0) do ;   { whatever earlier tests sent }
+
+  TeamTickPass;
+  First := AgentPending('tp-lead');
+  ExpectTrue(First = 1, Format('the due pass reports the unowned task to the lead ' +
+                               '(pending %d)', [First]));
+  LoadTeamState('tick-team', S);
+  Stamp := S.LastTick;
+  ExpectTrue(Stamp <> '', 'the cadence pass stamps the clock');
+  ExpectTrue(WaitForAgentMail(0), 'the report signalled the tick: mail for an idle agent');
+  ExpectTrue(not WaitForAgentMail(0), 'one burst of mail, one signal');
+  Sleep(1100);   { second-resolution stamps: a re-stamp would now differ }
+  TeamTickPass;
+  Second := AgentPending('tp-lead');
+  ExpectTrue(Second = First, Format('a pass the waiting report made due does not ' +
+                                    'send it again (pending %d, was %d)', [Second, First]));
+  LoadTeamState('tick-team', S);
+  ExpectStr(S.LastTick, Stamp, 'and does not move the cadence clock');
+  S.Enabled := False;
+  SaveTeamState(S, Err);
+end;
+
+(* The desktop adds work to a team's board: the board parks a finished
+   team by itself, and a task created from the desktop -- with an owner,
+   or without one -- brings it back and reaches the right agent. The
+   desktop's checklist mirror is the chat agent's own steps and does not. *)
+procedure TestNewWorkRoutes;
+var
+  Info: TAgentInfo;
+  S: TTeamState;
+  Err: string;
+  R: TDesktopResponse;
+  LeadMail, DevMail: Integer;
+  T: TTaskInfo;
+begin
+  WriteLn('-- desktop tasks reach a team, and wake one the board parked');
+  Info := Default(TAgentInfo);
+  Info.Name := 'nr-lead'; Info.Role := 'r';
+  SaveAgent(Info, Err);
+  Info.Name := 'nr-dev'; Info.Parent := 'nr-lead';
+  SaveAgent(Info, Err);
+  WriteFileText(JoinPath(WorkspaceSubdir('teams'), 'nr-team.json'),
+    '{"name":"nr-team","agents":[{"name":"nr-lead","role":"r"},' +
+    '{"name":"nr-dev","role":"r","parent":"nr-lead"}]}');
+  CreateProject('Done Board', 'done-board', '', Err);
+  CreateTask('done-board', 'The only thing', '', Err);
+  UpdateTask('done-board', 'T0001', '', '-', 'done', Err);
+  S := Default(TTeamState);
+  S.Name := 'nr-team';
+  S.Project := 'done-board';
+  S.Enabled := True;
+  S.WakeMinutes := 15;
+  SetLength(S.WakeWho, 2);
+  S.WakeWho[0] := 'nr-lead';
+  S.WakeWho[1] := 'nr-dev';
+  SaveTeamState(S, Err);
+
+  TeamTickPass;                       { done once }
+  LoadTeamState('nr-team', S);
+  S.LastTick := '2000-01-01T00:00:00Z';
+  SaveTeamState(S, Err);
+  TeamTickPass;                       { done twice: parks }
+  LoadTeamState('nr-team', S);
+  ExpectTrue(not S.Enabled and S.AutoParked,
+             'a board done for two ticks parks its team, marked as the board''s doing');
+
+  LeadMail := AgentPending('nr-lead');
+  ExpectTrue(Req('POST', '/v1/projects/done-board/tasks',
+                 '{"title":"Step one","source":"checklist"}', R) and (R.Status = 200),
+             'the checklist mirror creates a task');
+  LoadTeamState('nr-team', S);
+  ExpectTrue(not S.Enabled, 'its steps do not wake the team');
+  ExpectTrue(AgentPending('nr-lead') = LeadMail, 'nor reach the lead');
+
+  ExpectTrue(Req('POST', '/v1/projects/done-board/tasks', '{"title":"Add search"}', R) and
+             (R.Status = 200), 'the operator adds a task');
+  LoadTeamState('nr-team', S);
+  ExpectTrue(S.Enabled and not S.AutoParked, 'new work puts the parked team back on');
+  ExpectTrue(AgentPending('nr-lead') = LeadMail + 1, 'and the lead is told it needs an owner');
+
+  DevMail := AgentPending('nr-dev');
+  ExpectTrue(Req('POST', '/v1/projects/done-board/tasks',
+                 '{"title":"Add filters","assignee":"nr-dev","criteria":"filters narrow the list"}', R) and
+             (R.Status = 200), 'a task created with an owner and checks');
+  ExpectTrue(GetTask('done-board', 'T0004', T) and (T.Assignee = 'nr-dev') and
+             (T.Criteria = 'filters narrow the list'), 'keeps both');
+  ExpectTrue(AgentPending('nr-dev') = DevMail + 1, 'and its owner is told');
+  ExpectTrue(AgentPending('nr-lead') = LeadMail + 1, 'the lead is not: it has an owner');
+
+  { The operator's park outlasts new work: team down clears the board's
+    mark, so the next task does not undo it. }
+  LoadTeamState('nr-team', S);
+  S.Enabled := True; S.AutoParked := True;   { as if the board had parked it }
+  SaveTeamState(S, Err);
+  ExpectTrue(Req('POST', '/v1/teams/down', '{"team":"nr-team"}', R) and (R.Status = 200),
+             'the operator parks the team: ' + R.Body);
+  ExpectTrue(Req('POST', '/v1/projects/done-board/tasks', '{"title":"Later"}', R) and
+             (R.Status = 200), 'and adds a task');
+  LoadTeamState('nr-team', S);
+  ExpectTrue(not S.Enabled, 'a team the operator parked stays parked');
+
+  S.Enabled := False;
+  SaveTeamState(S, Err);
+end;
+
 procedure TestDecisionRoutes;
 var
   Err, Id: string;
@@ -582,6 +732,8 @@ begin
 
   TestReviewRoutes;
   TestDecisionRoutes;
+  TestTickReportsOnCadence;
+  TestNewWorkRoutes;
 
   { ----------------------------------------------------------------- jobs -- }
   ExpectStatus('GET', '/v1/projects/spam-filter/tasks/T0001/jobs', '', 200, 'list jobs');
