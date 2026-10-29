@@ -95,6 +95,15 @@ function RulesJSON(const Project: string): string;
    '**' is any run of whole segments (including none), '*' any run within
    one segment, '?' one character that is not '/'. Exposed for tests. *)
 function LaneMatches(const Glob, RelPath: string): Boolean;
+
+(* A task was just created on Project by Actor -- assignee and waits_on
+   already applied. Tells the team working the board what it has to do
+   about it: a board-parked team goes back on, and ready work nobody owns
+   reaches the board's takers, or its leads when nobody takes. Assigned
+   work has already told its owner (OnTaskAssigned); work that waits is
+   news when what it waits on is done (NotifyDependents). The leads are
+   not told about tasks they made themselves. *)
+procedure AnnounceNewTask(const Project, TaskId, Actor: string);
 function Tool_Desktop(const ArgsJSON: string; out ErrMsg: string): string;
 
 (* Exposed for tests: what a `desktop` call is READ as, before anything
@@ -640,6 +649,40 @@ begin
   end;
 end;
 
+procedure AnnounceNewTask(const Project, TaskId, Actor: string);
+var
+  Board: TTaskInfoArray;
+  T: TTaskInfo;
+  Leads, Takers: TStringArray;
+  I: Integer;
+  Text, Delivered, Err: string;
+begin
+  ResumeParkedTeams(Project);
+  if not GetTask(Project, TaskId, T) then Exit;
+  if (T.Status <> tsTodo) or (T.Assignee <> '') then Exit;
+  Board := ListTasks(Project);
+  if not TaskReady(T, Board) then Exit;
+  Leads := LeadsFor(Project);
+  if Length(Leads) = 0 then Exit;   { no team works this board }
+  if InList(Actor, Leads) then Exit;
+  Takers := ProjectTakers(Project);
+  if Length(Takers) > 0 then
+  begin
+    Text := Format('%s added %s ("%s") on %s; it is ready and nobody owns ' +
+                   'it. Claim it with task action="next" project="%s".',
+                   [ActorLabel(Actor), T.Id, T.Title, Project, Project]);
+    for I := 0 to High(Takers) do
+      if Takers[I] <> Actor then
+        AgentSend(Takers[I], 'board', Text, Delivered, Err);
+    Exit;
+  end;
+  Text := Format('%s added %s ("%s") on %s and nobody owns it. Assign it: ' +
+                 'task action="update" project="%s" id="%s" assignee="<agent>".',
+                 [ActorLabel(Actor), T.Id, T.Title, Project, Project, T.Id]);
+  for I := 0 to High(Leads) do
+    AgentSend(Leads[I], 'board', Text, Delivered, Err);
+end;
+
 (* OnTaskAssigned: the task changed hands, so its new owner hears -- if
    it can start it now. One still waiting on other work is not news yet:
    NotifyDependents tells the owner when the last of it is done. *)
@@ -733,6 +776,7 @@ begin
         else
           Result := Result + '. Its assignee was NOT set: ' + Err;
       end;
+      AnnounceNewTask(Project, Id, Actor);
       Exit;
     end;
 

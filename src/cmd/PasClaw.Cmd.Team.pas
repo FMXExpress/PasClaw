@@ -285,6 +285,7 @@ begin
       Exit(1);
     end;
     S.Enabled := False;
+    S.AutoParked := False;   { the operator's park: new work does not undo it }
     if not SaveTeamState(S, Err) then
     begin
       PrintLn('error: ' + Err);

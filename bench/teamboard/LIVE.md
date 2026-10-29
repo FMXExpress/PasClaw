@@ -107,6 +107,11 @@ only in the tick (finding 9):
 | provider calls / request bytes | 29 / 947,030 | 29 / 947,030 |
 | the board's own tests afterwards | pass | pass |
 
+Request bytes are not quite deterministic: 947,030 on most runs and
+949,783 (+0.3%) on about one in six, on the same binary — timing-dependent,
+not yet traced. Compare runs on calls and waits; treat a byte delta under
+0.5% as noise.
+
 The 30-second figure is the worst case: answers that arrive instantly
 phase-lock to the tick, so each handoff waits nearly a full slice. With a
 real model's turn lengths the wait averages half a slice — run 2 measured

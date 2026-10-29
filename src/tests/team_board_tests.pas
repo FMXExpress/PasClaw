@@ -875,6 +875,99 @@ begin
   SetProjectTakers('handoff', nil, Err);
 end;
 
+(* Work the operator adds after kickoff. Nothing used to tell the team:
+   the task had no owner, the built-in teams take no unassigned work, and
+   it sat until the lead happened to look -- or, once the stall report
+   existed, a cadence or two later. And a team the finished board had
+   parked never looked at all. *)
+procedure TestNewWork;
+var
+  Err, Id, Out_: string;
+  T: TTeamTemplate;
+  S: TTeamState;
+  LeadMail, DevMail: Integer;
+  Msgs: TAgentMessageArray;
+begin
+  WriteLn('-- new work reaches the team: the lead, the takers, a parked team');
+  MakeAgent('nw-lead', '');
+  MakeAgent('nw-dev', 'nw-lead');
+  CreateProject('New Work', 'newwork', '', Err);
+  WriteFileText(JoinPath(WorkspaceSubdir('teams'), 'nw-team.json'),
+    '{"name":"nw-team","agents":[{"name":"nw-lead","role":"r"},' +
+    '{"name":"nw-dev","role":"r","parent":"nw-lead"}]}');
+  AssertTrue(FindTeamTemplate('nw-team', T), 'the new-work team template is found');
+  S := Default(TTeamState);
+  S.Name := 'nw-team';
+  S.Project := 'newwork';
+  S.Enabled := True;
+  S.WakeMinutes := 15;
+  S.WakeWho := Names(['nw-lead', 'nw-dev']);
+  SaveTeamState(S, Err);
+
+  LeadMail := AgentPending('nw-lead');
+  Id := CreateTask('newwork', 'Add a dark mode', '', Err);
+  AnnounceNewTask('newwork', Id, ActorOperator);
+  AssertTrue(AgentPending('nw-lead') = LeadMail + 1, 'the operator''s new task reaches the lead');
+  Msgs := AgentMessages('nw-lead', 1);
+  AssertTrue((Length(Msgs) = 1) and (Pos('operator added ' + Id, Msgs[0].Text) > 0) and
+             (Pos('nobody owns it', Msgs[0].Text) > 0), 'saying who added it and that it needs an owner');
+
+  LeadMail := AgentPending('nw-lead');
+  SetCallingAgent('nw-lead');
+  Tool_Task('{"action":"create","project":"newwork","title":"Lead''s own"}', Err);
+  SetCallingAgent('');
+  AssertTrue(AgentPending('nw-lead') = LeadMail, 'not a task the lead made itself');
+
+  LeadMail := AgentPending('nw-lead');
+  Out_ := Tool_Task('{"action":"create","project":"newwork","title":"After dark mode",' +
+                    '"waits_on":["' + Id + '"]}', Err);
+  AssertTrue(AgentPending('nw-lead') = LeadMail, 'not work that still waits on other work');
+  Out_ := Tool_Task('{"action":"create","project":"newwork","title":"Settings page",' +
+                    '"assignee":"nw-dev"}', Err);
+  AssertTrue(AgentPending('nw-lead') = LeadMail, 'not work that already has an owner');
+
+  LeadMail := AgentPending('nw-lead');
+  SetCallingAgent('nw-dev');
+  Tool_Task('{"action":"create","project":"newwork","title":"Split out the API"}', Err);
+  SetCallingAgent('');
+  AssertTrue(AgentPending('nw-lead') = LeadMail + 1,
+             'a worker''s unowned task, made with the tool, reaches the lead');
+
+  { A board with takers offers it to them, not the lead. }
+  SetProjectTakers('newwork', Names(['nw-dev']), Err);
+  LeadMail := AgentPending('nw-lead');
+  DevMail := AgentPending('nw-dev');
+  Id := CreateTask('newwork', 'Export to CSV', '', Err);
+  AnnounceNewTask('newwork', Id, ActorOperator);
+  AssertTrue(AgentPending('nw-dev') = DevMail + 1, 'a taker hears about ready unowned work');
+  AssertTrue(AgentPending('nw-lead') = LeadMail, 'and the lead does not');
+  Msgs := AgentMessages('nw-dev', 1);
+  AssertTrue((Length(Msgs) = 1) and (Pos('action="next"', Msgs[0].Text) > 0), 'told how to claim it');
+  SetProjectTakers('newwork', nil, Err);
+
+  { A team the board parked goes back on; one the operator parked does not. }
+  LoadTeamState('nw-team', S);
+  S.Enabled := False;
+  S.AutoParked := True;
+  S.DoneTicks := 2;
+  SaveTeamState(S, Err);
+  Id := CreateTask('newwork', 'One more thing', '', Err);
+  AnnounceNewTask('newwork', Id, ActorOperator);
+  LoadTeamState('nw-team', S);
+  AssertTrue(S.Enabled and not S.AutoParked, 'new work puts a board-parked team back on');
+  AssertTrue((S.DoneTicks = 0) and (S.LastTick = ''), 'due at once, its done count cleared');
+
+  S.Enabled := False;
+  S.AutoParked := False;
+  SaveTeamState(S, Err);
+  Id := CreateTask('newwork', 'And another', '', Err);
+  AnnounceNewTask('newwork', Id, ActorOperator);
+  LoadTeamState('nw-team', S);
+  AssertTrue(not S.Enabled, 'a team the operator parked stays parked');
+  S.Enabled := False;
+  SaveTeamState(S, Err);
+end;
+
 procedure TestAgentToolShapes;
 var
   Err, Out_: string;
@@ -908,6 +1001,7 @@ begin
   TestNotifyAndWake;
   TestTool;
   TestHandoffs;
+  TestNewWork;
   TestAgentToolShapes;
   TestDecisionStore;
   TestAskOperator;

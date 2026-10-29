@@ -918,8 +918,10 @@ begin
       Exit;
     end;
     { Parking, not deleting: agents, conversations and the board all
-      stay; only the clock stops. }
+      stay; only the clock stops. The operator's park: new work on the
+      board does not undo it. }
     S.Enabled := False;
+    S.AutoParked := False;
     if not SaveTeamState(S, Err) then
     begin
       ReplyErr(Resp, 500, Err);
@@ -1023,6 +1025,7 @@ begin
         begin
           LogInfo('team %s: board done for %d ticks -- parking', [S.Name, S.DoneTicks]);
           S.Enabled := False;
+          S.AutoParked := True;   { new work on the board puts it back on }
         end;
       end
       else
@@ -2036,6 +2039,23 @@ begin
                    'refused: ' + Err);
           Exit;
         end;
+        { After the edge, so an owner is told "it is yours" only when it can
+          start (NotifyAssignee reads waits_on). }
+        Assignee := Trim(Obj.GetStr('assignee', ''));
+        if (Assignee <> '') and
+           not UpdateTask(Project, TaskId, '', '-', '', Err, Assignee, '-',
+                          ActorOperator) then
+        begin
+          ReplyErr(Resp, 400, 'created ' + TaskId + ', but its assignee was ' +
+                   'refused: ' + Err);
+          Exit;
+        end;
+        (* A task the operator adds is work for the team on this board --
+           now, not at the next stall report. Except the desktop's own
+           checklist mirror: those are the chat agent's steps, already being
+           done, and handing them to a team would do them twice. *)
+        if Obj.GetStr('source', '') <> 'checklist' then
+          AnnounceNewTask(Project, TaskId, ActorOperator);
         Root := TJsonObject.Create;
         try
           Root.PutStr('id', TaskId);

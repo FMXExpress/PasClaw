@@ -114,6 +114,16 @@ the row. This is not decoration — it is how the wake loop knows who has
 work, and how two workers avoid grabbing the same task. A handover said
 only in a message is invisible to everything else.
 
+**Work you add reaches the team.** A task created after kickoff — from the
+desktop's **New task…**, `POST /v1/projects/<p>/tasks`, or the `task` tool
+by anyone but the lead — is news at once: with an owner, the owner hears
+(below); without one, the lead hears "operator added T0005 … nobody owns it"
+(or, on a board with takers, the takers hear it is theirs to claim); if it
+waits on unfinished work, nobody hears until that is done. Before, the task
+sat until the lead happened to look. The desktop's checklist mirror — the
+chat agent's own steps — is the one exception: handing those to a team
+would do them twice.
+
 **The board tells the new owner.** Assigning a task someone can start
 messages them ("T0003 … is assigned to you by foreman"), so the handoff
 is mail and the team is due on the next tick. A task that still waits
@@ -327,7 +337,10 @@ default 15) or that has mail waiting:
   provider call per agent per tick to be told "no news" is a bill, not
   a team;
 - **parks a finished team** — a board fully done for two ticks stops
-  being woken.
+  being woken. New work on that board puts it back on, due at once: the
+  park was the board's, and the board has work again. A team *you* parked
+  (`pasclaw team down`, `POST /v1/teams/down`) stays parked whatever
+  arrives.
 
 The wake list defaults to **every agent in the team**, not just the
 lead. That was a real bug before it was a default: with only the lead

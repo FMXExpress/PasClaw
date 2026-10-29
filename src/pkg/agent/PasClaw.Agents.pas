@@ -167,6 +167,10 @@ function AgentPending(const Name: string): Integer;
    every handoff (bench/teamboard/LIVE.md). *)
 function WaitForAgentMail(TimeoutMs: Cardinal): Boolean;
 
+{ Wake the team tick now, as mail would: something made a team due that
+  no message says -- a parked team put back on. }
+procedure WakeTeamTick;
+
 { ---- run state (Phase 3) ---- }
 
 (* Record that a run began / ended. Written to the manifest so it
@@ -671,6 +675,11 @@ begin
      caller someone adds. *)
   PublishAgent(Info.Name);
   Result := True;
+end;
+
+procedure WakeTeamTick;
+begin
+  if MailEvent <> nil then MailEvent.SetEvent;
 end;
 
 function WaitForAgentMail(TimeoutMs: Cardinal): Boolean;

@@ -128,6 +128,18 @@ PasClaw's behaviour should not change for someone who never opens a desktop,
 and two extra tools in the schema is two extra tools the model reads every
 turn. Same opt-in shape as `cron_tool_enabled`.
 
+**New task…** and each row's **Edit** open one form: title, notes (the
+brief), **owner**, **acceptance checks** (one per line — what the verdict is
+given against) and **waits on** (the board's other tasks, ticked). The same
+fields the `task` tool takes, so a task made by hand is not a lesser task.
+On a board a [team](./teams.md) works, saving it is news to the team at once:
+a task with an owner tells the owner (when it can start), one without tells
+the team's lead — or the agents that take unassigned work — and either puts a
+team the finished board had parked back on. Edits send only what changed;
+checks are frozen once work starts, except to you, and changing them then is
+recorded as yours. Titles too long for the pane end in "…"; the row's
+tooltip has the whole line, the notes and the checks.
+
 Jobs are opened by the runtime when a turn starts working a task, so the
 model only has to close them. Opening a job marks its task **active**;
 reporting a job **done** closes the task. The desktop tree shows this live.

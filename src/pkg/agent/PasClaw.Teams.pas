@@ -96,6 +96,10 @@ type
        loop parks the team by itself -- a finished team that keeps
        being woken is a bill, not a team. *)
     DoneTicks:   Integer;
+    (* True when the TICK parked it -- the board was done -- rather than
+       the operator (`team down`). New work on the board wakes a team the
+       board parked; a team someone stopped stays stopped. *)
+    AutoParked:  Boolean;
     Created:     string;
     Updated:     string;
     Exists:      Boolean;
@@ -162,6 +166,12 @@ function TeamStateDir: string;
 function LoadTeamState(const Name: string; out S: TTeamState): Boolean;
 function SaveTeamState(var S: TTeamState; out Err: string): Boolean;
 function ListTeamStates: TTeamStateArray;
+
+(* New work arrived on Project: every team the board itself parked (done
+   for two ticks) goes back on, due at once, and the tick is nudged so it
+   does not wait out its slice. A team the operator parked stays parked.
+   Returns the teams resumed. *)
+function ResumeParkedTeams(const Project: string): TStringArray;
 
 { --------------------------------------------------------- the tick -- }
 
@@ -1351,6 +1361,7 @@ begin
     S.WakeMinutes := Obj.GetInt('wake_minutes', 0);
     S.LastTick    := Obj.GetStr('last_tick', '');
     S.DoneTicks   := Obj.GetInt('done_ticks', 0);
+    S.AutoParked  := Obj.GetBool('auto_parked', False);
     S.Created     := Obj.GetStr('created', '');
     S.Updated     := Obj.GetStr('updated', '');
     Who := Obj.ChildArray('wake_who');
@@ -1404,6 +1415,7 @@ begin
     Obj.PutArray('wake_who', Who);
     Obj.PutStr('last_tick', S.LastTick);
     Obj.PutInt('done_ticks', S.DoneTicks);
+    if S.AutoParked then Obj.PutBool('auto_parked', True);
     Obj.PutStr('created', S.Created);
     Obj.PutStr('updated', S.Updated);
     WriteFileText(Path, Obj.ToJSON);
@@ -1412,6 +1424,36 @@ begin
   end;
   S.Exists := True;
   Result := True;
+end;
+
+function ResumeParkedTeams(const Project: string): TStringArray;
+var
+  States: TTeamStateArray;
+  S: TTeamState;
+  I, N: Integer;
+  Err: string;
+begin
+  SetLength(Result, 0);
+  N := 0;
+  if Project = '' then Exit;
+  States := ListTeamStates;
+  for I := 0 to High(States) do
+  begin
+    S := States[I];
+    if (S.Project <> Project) or S.Enabled or not S.AutoParked then Continue;
+    S.Enabled := True;
+    S.AutoParked := False;
+    S.DoneTicks := 0;
+    S.LastTick := '';   { due on the next pass }
+    if SaveTeamState(S, Err) then
+    begin
+      LogInfo('team %s: new work on %s -- back on', [S.Name, Project]);
+      SetLength(Result, N + 1);
+      Result[N] := S.Name;
+      Inc(N);
+    end;
+  end;
+  if N > 0 then WakeTeamTick;
 end;
 
 function ListTeamStates: TTeamStateArray;
