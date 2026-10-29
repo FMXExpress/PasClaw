@@ -65,6 +65,23 @@ Patterns: exact ids or `<platform>:*` wildcards. `*` allows anyone (escape hatch
 
 Each channel calls `IsAllowedSender` before invoking the agent — non-matching senders are dropped at the boundary with a log line, the model never sees them.
 
+## Answering the operator's decisions
+
+When an agent team asks for a decision only a person can make
+([teams](./teams.md#needs-you-one-queue-for-your-calls)), a reply of
+`D12 yes` (or `d12: ship it`, `D0012 - no`) to any of the bidirectional
+bots answers it instead of starting a turn — but only from a sender
+listed in `decisions.answer_from`:
+
+```json
+"decisions": { "channel": "ops", "answer_from": ["telegram:12345"] }
+```
+
+Anyone else gets a refusal naming the setting. `decisions.channel` is
+where a new decision is announced (any configured outbound channel). In
+email only the first line of the body is read, so the quoted
+announcement under a reply is not taken as the answer.
+
 ## Per-channel notes
 
 ### Telegram

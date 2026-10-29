@@ -70,7 +70,8 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Providers.HTTP,
   PasClaw.Tools.ToolLoop,
-  PasClaw.Identity;
+  PasClaw.Identity,
+  PasClaw.Decisions;  { HandleDecisionReply -- "D12 yes" }
 
 constructor TTelegramChannel.Create(const Token: string; Cfg: TConfig;
                                     Provider: ILLMProvider; Registry: TToolRegistry);
@@ -135,7 +136,7 @@ end;
 procedure TTelegramChannel.ProcessUpdate(const UpdateJSON: string);
 var
   Obj, Msg, Chat, From: TJsonObject;
-  Text, FromId, FromName: string;
+  Text, FromId, FromName, DecisionReply: string;
   ChatId, UpdateId: Int64;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
@@ -198,6 +199,16 @@ begin
   begin
     LogInfo('telegram: sender %s rejected by allow_senders',
             [FormatIdentity(LoopCfg.Identity)]);
+    Exit;
+  end;
+
+  { "D12 yes" answers the operator's decision (PasClaw.Decisions) rather
+    than starting a turn -- and only from a sender decisions.answer_from
+    names, which HandleDecisionReply checks. }
+  if HandleDecisionReply(Text, CanonicalOf(LoopCfg.Identity),
+                         FCfg.DecisionsAnswerFrom, DecisionReply) then
+  begin
+    SendMessage(ChatId, DecisionReply);
     Exit;
   end;
 

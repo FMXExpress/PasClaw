@@ -83,6 +83,16 @@ procedure ConfigureSandbox(const Policy: TSandboxPolicy; const Workspace: string
 
 function CanReadPath (const Path: string; out Reason: string): Boolean;
 function CanWritePath(const Path: string; out Reason: string): Boolean;
+
+type
+  (* Consulted by CanWritePath for every model-driven write, with the
+     canonical path. False refuses with Reason. Installed by
+     PasClaw.Projects.Tools, which knows the calling agent and the lanes
+     its team gave it; nil (the default) checks nothing. *)
+  TLaneCheck = function(const CanonPath: string; out Reason: string): Boolean;
+
+var
+  OnLaneCheck: TLaneCheck = nil;
 function ShellAllowed(const Cmd:  string; out Reason: string): Boolean;
 
 { Like CanReadPath, but the workspace boundary is ALWAYS enforced regardless of
@@ -358,11 +368,92 @@ begin
   Result := False;
 end;
 
+(* The task board's own records: written by PasClaw.Projects.Store and
+   nothing else, whatever the sandbox policy says.
+
+   The board's review rules -- an agent cannot close its own task, a task
+   in review moves only by a verdict, criteria freeze once work starts --
+   are held in the store, at the `task` tool and the HTTP routes. A file
+   tool that could rewrite task.json would walk straight past all of
+   them, and leave no receipt. So the records are refused here, for every
+   model-driven write, regardless of restrict_to_workspace: this is not a
+   boundary question (the file is inside the workspace), it is "this file
+   has an owner". The app the team builds (projects/<p>/app/) and a job's
+   artifacts/ stay writable.
+
+   What this does NOT reach: shell_exec. A shell command's writes cannot
+   be path-checked reliably, and docs/team-board-plan.md says so. *)
+function IsBoardRecord(const Canon: string): Boolean;
+var
+  Root, Rel, Seg: string;
+  Segs: array of string;
+  P: Integer;
+begin
+  Result := False;
+  { The operator's decisions are the same kind of record: an agent that
+    could write one could answer its own question. }
+  if PathInsideDirectory(Canon, Canonicalize(WorkspacePath('decisions'))) then
+    Exit(True);
+  (* And what the board's rules are judged with, which live outside the
+     workspace so a builder cannot see them -- but with the sandbox off
+     (the default) the file tools reach anywhere, so outside is not enough:
+     the operator's held-out checks, the drafts waiting for approval, and
+     the snapshots a rule is proven against. *)
+  if PathInsideDirectory(Canon, Canonicalize(IncludeTrailingPathDelimiter(GetHome) + 'scenarios')) or
+     PathInsideDirectory(Canon, Canonicalize(IncludeTrailingPathDelimiter(GetHome) + 'scenario-drafts')) or
+     PathInsideDirectory(Canon, Canonicalize(IncludeTrailingPathDelimiter(GetHome) + 'snapshots')) then
+    Exit(True);
+  Root := ExcludeTrailingPathDelimiter(Canonicalize(WorkspacePath('projects')));
+  if not PathInsideDirectory(Canon, Root) then Exit;
+  if PathsEqual(Canon, Root) then Exit(True);
+  Rel := Copy(Canon, Length(Root) + 2, MaxInt);
+  SetLength(Segs, 0);
+  { Canonicalize has already turned every separator into PathDelim. }
+  while Rel <> '' do
+  begin
+    P := Pos(PathDelim, Rel);
+    if P = 0 then begin Seg := Rel; Rel := ''; end
+    else begin Seg := Copy(Rel, 1, P - 1); Rel := Copy(Rel, P + 1, MaxInt); end;
+    if Seg = '' then Continue;
+    SetLength(Segs, Length(Segs) + 1);
+    Segs[High(Segs)] := LowerCase(Seg);
+  end;
+  case Length(Segs) of
+    0: Result := True;
+    { the project directory itself, its manifest, its receipts }
+    1: Result := True;
+    2: Result := (Segs[1] = 'project.json') or (Segs[1] = 'activity.jsonl') or
+                 (Segs[1] = 'tasks');
+  else
+    { everything under tasks/ except what is inside a job's artifacts/
+      (<p>/tasks/<T>/jobs/<J>/artifacts/...) }
+    Result := (Segs[1] = 'tasks') and
+              not ((Length(Segs) > 6) and (Segs[3] = 'jobs') and
+                   (Segs[5] = 'artifacts'));
+  end;
+end;
+
 function CanWritePath(const Path: string; out Reason: string): Boolean;
 var
   Canon: string;
 begin
   Reason := '';
+  (* Lanes (docs/team-board-plan.md, Phase 5): a team agent with a lane
+     writes only inside it. Asked first, so the refusal a laned agent sees
+     names whose lane the path is in, which is the useful thing to know. *)
+  if Assigned(OnLaneCheck) and not OnLaneCheck(Canonicalize(Path), Reason) then
+    Exit(False);
+  Reason := '';
+  if IsBoardRecord(Canonicalize(Path)) then
+  begin
+    Reason := 'refused: "' + Canonicalize(Path) + '" is one of the task ' +
+              'board''s records (tasks, jobs, the activity log, the ' +
+              'operator''s decisions), which only the task, project and ' +
+              'agent tools write -- the board''s rules live there. Use the ' +
+              'task tool (action=update, submit, verdict) or agent ' +
+              'action=ask_operator instead.';
+    Exit(False);
+  end;
   if not GPolicy.RestrictToWorkspace then Exit(True);
   Canon := Canonicalize(Path);
   if PathInsideDirectory(Canon, CurrentWorkspace) then Exit(True);

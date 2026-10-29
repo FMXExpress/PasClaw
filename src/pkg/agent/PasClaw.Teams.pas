@@ -27,7 +27,8 @@ interface
 
 uses
   PasClaw.Utils,
-  PasClaw.Agents;
+  PasClaw.Agents,
+  PasClaw.Projects.Store;   { TTaskInfo -- TaskReviewers judges a task }
 
 type
   TTeamAgent = record
@@ -39,6 +40,13 @@ type
        a template outlives any model id it could have pinned. *)
     Model:  string;
     Parent: string;   { must name another agent in the SAME template }
+    (* 'routed' (or '') takes only tasks assigned to it; 'any' may also
+       claim unassigned ready work with `task action=next`. *)
+    Takes:  string;
+    (* Path globs, relative to the workspace, this agent may write in
+       ("projects/{{project}}/app/**"); empty = no lane, writes anywhere
+       the sandbox allows. {{project}} is filled in at up-time. *)
+    Lane:   TStringArray;
   end;
   TTeamAgentArray = array of TTeamAgent;
 
@@ -61,6 +69,14 @@ type
        was looking. Being on the list costs nothing; each agent is
        still gated on having a reason to run. *)
     WakeWho:     TStringArray;
+    (* Who gives the verdict on submitted work (template review.by).
+       Empty = each submitter's parent. A submitter is never its own
+       reviewer, even when it is listed here. *)
+    ReviewBy:    TStringArray;
+    (* False -- the default, and the zero value on purpose -- means the
+       team's board requires review: no agent closes its own task. A
+       template opts out with "review": false. *)
+    SkipReview:  Boolean;
     Exists:      Boolean;
   end;
   TTeamTemplateArray = array of TTeamTemplate;
@@ -126,6 +142,20 @@ function TeamLeads(const T: TTeamTemplate): TStringArray;
    whole team is eligible to be woken. *)
 function TeamWakeList(const T: TTeamTemplate): TStringArray;
 
+(* Point the team's rules at its board: unless the template opts out, the
+   project requires review, with the template's reviewers. Called by both
+   `team up` paths (the CLI and POST /v1/teams/up) once the project is
+   known, whether the team created it or was bound to it. *)
+function BindTeamBoard(const T: TTeamTemplate; const Project: string;
+                       out Err: string): Boolean;
+
+(* Who gives the verdict on this task: the project's reviewers when the
+   team named them, else the submitter's parent (else the owner's) --
+   never the submitter or the owner themselves. Empty means no agent can,
+   and the verdict waits for the operator. The task tool checks a verdict
+   against this list and names it in a refusal; the wake loop wakes it. *)
+function TaskReviewers(const Project: string; const T: TTaskInfo): TStringArray;
+
 { ------------------------------------------------------------- state -- }
 
 function TeamStateDir: string;
@@ -168,6 +198,13 @@ function TeamWakeDecisions(const S: TTeamState): TWakeReasonArray;
    stall; telling its manager is what unsticks it. Returns the message
    texts it sent (for the tick's log) and sends them via AgentSend. *)
 function TeamStallMessages(const T: TTeamTemplate; const S: TTeamState): TStringArray;
+
+(* Hand back what dead runs were holding: active tasks on the team's board
+   whose lease ran out while the holder runs no turn go back to todo
+   (ExpireLeases), and each lead is told which and whose. Today's stall
+   report waits two cadences and then needs the lead to act; this frees
+   the task on the tick that finds it. Returns "T0003 dev -> foreman". *)
+function TeamExpireLeases(const T: TTeamTemplate; const S: TTeamState): TStringArray;
 
 (* True when every task on the team's board is done (and there is at
    least one task -- an empty board is "not started", not "finished"). *)
@@ -214,8 +251,7 @@ uses
   SysUtils, Classes, DateUtils,
   PasClaw.JSON,
   PasClaw.Logger,
-  PasClaw.Workspaces,
-  PasClaw.Projects.Store;
+  PasClaw.Workspaces;
 
 (* ====================================================================
    The built-in catalogue.
@@ -242,10 +278,23 @@ const
     'update status and notes, set assignee when handing work over. ' +
     'Messages (the agent tool, action=send) are for exceptions only: ' +
     'blocked, done, need a decision. Never idle-chat another agent, ' +
-    'and never message someone just to say you will message them.'#10 +
+    'and never message someone just to say you will message them. A ' +
+    'decision only a person can make goes through agent ' +
+    'action=ask_operator: it reaches your manager first, and the ' +
+    'operator only if your manager cannot decide it. If your team gave ' +
+    'you a lane, you write files only inside it; a file in someone ' +
+    'else''s lane is theirs -- message them rather than editing it.'#10 +
     'Done means: it actually ran or was actually checked, the board ' +
     'says so, and your manager heard about it if it closes their ' +
-    'request. Claiming done without evidence is the one prohibited move.';
+    'request. Claiming done without evidence is the one prohibited move.'#10 +
+    'The team''s board requires review, and the board enforces it: you ' +
+    'never mark your own work done. When it works, SUBMIT it -- task ' +
+    'action=submit with "evidence": what you ran and what it printed -- ' +
+    'and another agent gives the verdict against the task''s criteria. ' +
+    'A rejection comes back with its reason in the task notes: fix that ' +
+    'and submit again. When a task waits for YOUR verdict, run its ' +
+    'criteria yourself, then task action=verdict with verdict=accept, or ' +
+    'verdict=reject and a "reason" the builder can act on.';
 
   ROLE_FOREMAN =
     'You are the Foreman: the working lead of a small software team, ' +
@@ -261,23 +310,34 @@ const
     'board: read it first; assign and unblock what is there before ' +
     'inventing anything new.'#10 +
     'On each wake: read messages; walk the board; unblock or reassign ' +
-    'anything stalled; if a worker reported done, have the test ' +
-    'engineer verify before you close it; when the whole board is ' +
-    'done, tell the operator plainly and stop -- do not invent work ' +
-    'to stay busy.'#10 +
-    'Mark a task BLOCKED when it waits on another task, and say in its ' +
-    'notes what it waits on. This is not bookkeeping: only todo and ' +
-    'active tasks wake their owner, so a review task left as todo ' +
-    'before there is anything to review wakes the reviewer to look at ' +
-    'an empty project. Unblock it the moment the thing it waited for ' +
-    'closes, and tell its owner.'#10 +
+    'anything stalled. You do not close tasks: a finished task is ' +
+    'submitted and waits in review for its reviewer (the test engineer ' +
+    'where the team has one, otherwise you), and the verdict closes it ' +
+    'or sends it back. When a task waits for your verdict, give it. ' +
+    'When the whole board is done, tell the operator plainly and stop ' +
+    '-- do not invent work to stay busy.'#10 +
+    'When the board tells you one cause has rejected work twice, turn ' +
+    'it into a check if one would catch it: rule action=draft with a ' +
+    'small shell script that exits 0 only when the work is right. The ' +
+    'board proves it against the rejected submission and the accepted ' +
+    'fix before the operator sees it, so write it to the mistake, not to ' +
+    'the one task.'#10 +
+    'When a task needs another one finished first, say so on the board: ' +
+    'task action=update waits_on=["T0002"]. The board then wakes its ' +
+    'owner only once everything it waits on is done, and tells the owner ' +
+    'when that happens -- you do not have to remember to unblock it. ' +
+    'Keep BLOCKED for waits outside the board (an API key from the ' +
+    'operator), with a note saying what it waits on.'#10 +
     'Autonomy: small things within the team -- assignments, task ' +
     'edits, follow-ups -- do them and report after. Anything that ' +
     'commits money, deletes things outside the project, or touches ' +
-    'the world outside this workspace: propose it to the operator ' +
-    'with your recommendation, and wait. When you are unsure, say so ' +
-    'plainly. Silence after noticing something is the failure mode, ' +
-    'not action.'#10 +
+    'the world outside this workspace: ask the operator with agent ' +
+    'action=ask_operator -- the question with your recommendation in ' +
+    'it, the choices you can act on, and the task it holds up -- and ' +
+    'wait; the answer arrives in your mailbox. A worker''s question for ' +
+    'the operator reaches you first: decide it if you can. When you are ' +
+    'unsure, say so plainly. Silence after noticing something is the ' +
+    'failure mode, not action.'#10 +
     'You own the screen: when you assign work, use the desktop tool ' +
     'to open that worker''s window (open_agent) and tile; when the ' +
     'board is done, minimize_all and report. The operator watches the ' +
@@ -292,11 +352,14 @@ const
     'You own what "it" is: user stories and acceptance criteria. You ' +
     'do NOT own the schedule (the Foreman does) or the implementation ' +
     '(the developer does).'#10 +
-    'Before the developer starts a task, its notes must say: who it ' +
-    'is for, what they can do after that they could not do before, ' +
-    'and 2-4 acceptance checks the test engineer can execute ' +
-    'verbatim ("enter 4 URLs, press Compare, see one row per book"). ' +
-    'Write those into the task notes with the task tool.'#10 +
+    'Before the developer starts a task, its notes must say who it is ' +
+    'for and what they can do after that they could not do before, and ' +
+    'its CRITERIA field must hold 2-4 acceptance checks the test ' +
+    'engineer can execute verbatim, one per line ("enter 4 URLs, press ' +
+    'Compare, see one row per book"). Set them with task action=update ' +
+    'criteria="..." while the task is still todo: once work starts the ' +
+    'board freezes them, and the verdict is judged against exactly ' +
+    'those lines.'#10 +
     'Answer the developer''s "what should happen when..." questions ' +
     'the same day they are asked; an unanswered question is a stalled ' +
     'task with your name on it. Cut scope rather than letting a task ' +
@@ -324,10 +387,15 @@ const
     'made before claiming anything. Report failure as plainly as ' +
     'success: "it does not work yet because X" is a good report and ' +
     '"done" that was never run is the one prohibited move.'#10 +
-    'Take only tasks assigned to you; mark them active when you ' +
-    'start, and describe what changed in the task notes when you ' +
-    'stop, so the next turn -- yours or anyone''s -- can pick the ' +
-    'work up cold.'#10 +
+    'Take work with task action=next: it claims the oldest ready task ' +
+    'assigned to you and marks it active (a task still waiting on ' +
+    'unfinished work is not offered). Describe what changed in the task ' +
+    'notes when you stop, so the next turn -- yours or anyone''s -- can ' +
+    'pick the work up cold; touching the task also keeps your claim on ' +
+    'it alive. Build to the task''s criteria, and when it meets ' +
+    'them, submit it with the evidence; your reviewer (the Test ' +
+    'Engineer, or the Foreman on a team without one) gives the ' +
+    'verdict.'#10 +
     TEAM_COMMON + #10 +
     'The 10x is never having to be asked twice and never claiming ' +
     'done untested -- not volume.';
@@ -360,15 +428,22 @@ const
     'You own "does it actually work". You do NOT own fixing it (the ' +
     'developer does) or the acceptance criteria themselves (the ' +
     'Product Manager writes those; you execute them).'#10 +
-    'When a task reaches you: run every acceptance check in its notes ' +
-    'verbatim, then try to break it -- empty input, wrong input, the ' +
-    'steps out of order, the same thing twice, reload in the middle. ' +
-    'Every break becomes a task with EXACT reproduction steps: what ' +
-    'you did, what happened, what should have happened.'#10 +
+    'You give the verdicts on this team. When a task is submitted ' +
+    '(status review -- you are woken for it): read its evidence, run ' +
+    'every line of its criteria verbatim, then try to break it -- ' +
+    'empty input, wrong input, the steps out of order, the same thing ' +
+    'twice, reload in the middle. Then give the verdict: task ' +
+    'action=verdict verdict=accept, or verdict=reject with a "reason" ' +
+    'carrying EXACT reproduction steps -- what you did, what happened, ' +
+    'what should have happened -- and a "cause": a short key for the ' +
+    'KIND of mistake (untested-empty-input, wrong-path), the same key ' +
+    'every time the same kind comes back, because a cause that keeps ' +
+    'rejecting work is how the board learns a new check. A break outside ' +
+    'this task''s criteria becomes a new task instead.'#10 +
     'A fixed bug is re-tested by you before it closes; the developer ' +
-    'does not close their own bug. When everything passes, say so on ' +
-    'the task and tell the Foreman -- a pass nobody hears about ' +
-    'blocks the board as surely as a failure.'#10 +
+    'cannot close their own work, and the board will not let them. A ' +
+    'pass nobody hears about blocks the board as surely as a failure, ' +
+    'so tell the Foreman when you accept.'#10 +
     TEAM_COMMON + #10 +
     'You are not a rubber stamp: a pass you did not personally ' +
     'reproduce is not a pass.';
@@ -434,12 +509,13 @@ const
     'break the ask into tasks with the task tool, assign each to the ' +
     'RIGHT officer -- and only the officers the ask actually needs; ' +
     'two is a normal number, eight means you did not think. Message ' +
-    'each assignee ONCE naming their task ids. Mark any task that ' +
-    'depends on another BLOCKED with a note saying what it waits on, ' +
-    'and unblock it the moment that closes -- only todo and active ' +
-    'tasks wake their owner.'#10 +
-    'When the officers'' pieces are in: read their docs, then write ' +
-    'the synthesis yourself as projects/<project>/docs/brief.md -- ' +
+    'each assignee ONCE naming their task ids. A task that depends on ' +
+    'another gets waits_on=["T0002"]: the board wakes its owner only ' +
+    'when what it waits on is done, and tells them.'#10 +
+    'Officers submit their documents for YOUR verdict: read each ' +
+    'against its task''s criteria and accept it, or reject it with what ' +
+    'is missing. When the officers'' pieces are in: read their docs, ' +
+    'then write the synthesis yourself as projects/<project>/docs/brief.md -- ' +
     'one voice, the decision up front, the trade-offs honestly, ' +
     'linking the officers'' documents rather than restating them -- ' +
     'and tell the operator in one short message where it is.'#10 +
@@ -449,8 +525,11 @@ const
     'work to stay busy.'#10 +
     'Autonomy: routing, task edits and follow-ups are yours -- do ' +
     'them and report after. Anything that commits money, signs ' +
-    'anything, or touches the world outside this workspace: propose ' +
-    'it to the operator with your recommendation, and wait.'#10 +
+    'anything, or touches the world outside this workspace: ask the ' +
+    'operator with agent action=ask_operator (your recommendation in ' +
+    'the question, the choices, the task it holds up), and wait for the ' +
+    'answer in your mailbox. An officer''s question for the operator ' +
+    'reaches you first: answer it yourself when you can.'#10 +
     'You own the screen: when you assign work, use the desktop tool ' +
     'to open that officer''s window (open_agent) and tile; when the ' +
     'brief is done, minimize_all and report.'#10 +
@@ -642,6 +721,10 @@ begin
   T.Agents[2] := A('dev',     '10x Developer',   ROLE_DEV,     '',     'foreman');
   T.Agents[3] := A('ui',      'UI Psychologist', ROLE_UI,      'fast', 'foreman');
   T.Agents[4] := A('qa',      'Test Engineer',   ROLE_QA,      'fast', 'foreman');
+  { The Test Engineer gives verdicts; the Foreman reviews the Test
+    Engineer's own work, as its parent. }
+  SetLength(T.ReviewBy, 1);
+  T.ReviewBy[0] := 'qa';
   T.Kickoff :=
     'The operator has pointed this team at work.'#10 +
     'Goal: {{goal}}'#10'Project: {{project}}'#10 +
@@ -716,8 +799,8 @@ end;
 function ParseTemplateJSON(const Body: string; out T: TTeamTemplate): Boolean;
 var
   Obj, AObj, W: TJsonObject;
-  Arr, Who: TJsonArray;
-  I: Integer;
+  Arr, Who, LaneArr: TJsonArray;
+  I, K: Integer;
 begin
   Result := False;
   T := Default(TTeamTemplate);
@@ -749,6 +832,26 @@ begin
     finally
       W.Free;
     end;
+    (* "review": false opts the team's board out; {"by": [...]} names the
+       reviewers, and {"required": false} is the long spelling of false. *)
+    if Obj.Has('review') and not Obj.GetBool('review', True) then
+      T.SkipReview := True;
+    W := Obj.ChildObject('review');
+    if W <> nil then
+    try
+      T.SkipReview := not W.GetBool('required', True);
+      Who := W.ChildArray('by');
+      if Who <> nil then
+      try
+        SetLength(T.ReviewBy, Who.Count);
+        for I := 0 to Who.Count - 1 do
+          T.ReviewBy[I] := AgentSlug(Who.ItemStr(I));
+      finally
+        Who.Free;
+      end;
+    finally
+      W.Free;
+    end;
     Arr := Obj.ChildArray('agents');
     if Arr <> nil then
     try
@@ -764,6 +867,22 @@ begin
           T.Agents[I].Role   := AObj.GetStr('role', '');
           T.Agents[I].Model  := LowerCase(Trim(AObj.GetStr('model', '')));
           T.Agents[I].Parent := AgentSlug(AObj.GetStr('parent', ''));
+          T.Agents[I].Takes  := LowerCase(Trim(AObj.GetStr('takes', '')));
+          (* "lane": one glob as a string, or a list. *)
+          LaneArr := AObj.ChildArray('lane');
+          if LaneArr <> nil then
+          try
+            SetLength(T.Agents[I].Lane, LaneArr.Count);
+            for K := 0 to LaneArr.Count - 1 do
+              T.Agents[I].Lane[K] := Trim(LaneArr.ItemStr(K));
+          finally
+            LaneArr.Free;
+          end
+          else if Trim(AObj.GetStr('lane', '')) <> '' then
+          begin
+            SetLength(T.Agents[I].Lane, 1);
+            T.Agents[I].Lane[0] := Trim(AObj.GetStr('lane', ''));
+          end;
         finally
           AObj.Free;
         end;
@@ -905,6 +1024,24 @@ begin
              '" -- use "", "primary" or "fast" (never a model id)';
       Exit;
     end;
+    for J := 0 to High(T.Agents[I].Lane) do
+      if (T.Agents[I].Lane[J] = '') or (T.Agents[I].Lane[J][1] = '/') or
+         (T.Agents[I].Lane[J][1] = '\') or (Pos('..', T.Agents[I].Lane[J]) > 0) or
+         ((Length(T.Agents[I].Lane[J]) > 1) and (T.Agents[I].Lane[J][2] = ':')) then
+      begin
+        Err := 'template "' + T.Name + '": agent "' + T.Agents[I].Name +
+               '" has lane "' + T.Agents[I].Lane[J] + '" -- a lane is a ' +
+               'glob relative to the workspace (projects/{{project}}/app/**), ' +
+               'never absolute and never through ..';
+        Exit;
+      end;
+    if (T.Agents[I].Takes <> '') and (T.Agents[I].Takes <> 'routed') and
+       (T.Agents[I].Takes <> 'any') then
+    begin
+      Err := 'template "' + T.Name + '": agent "' + T.Agents[I].Name +
+             '" takes "' + T.Agents[I].Takes + '" -- use "routed" or "any"';
+      Exit;
+    end;
     for J := 0 to I - 1 do
       if T.Agents[J].Name = T.Agents[I].Name then
       begin
@@ -952,6 +1089,16 @@ begin
     begin
       Err := 'template "' + T.Name + '": wake list names "' +
              T.WakeWho[I] + '", which is not in the template';
+      Exit;
+    end;
+  { A reviewer who is not on the team would be a verdict nobody can give:
+    the task would sit in review with the right name on the refusal and
+    no such agent to wake. }
+  for I := 0 to High(T.ReviewBy) do
+    if IndexOfAgent(T.ReviewBy[I]) < 0 then
+    begin
+      Err := 'template "' + T.Name + '": review.by names "' +
+             T.ReviewBy[I] + '", which is not in the template';
       Exit;
     end;
   Result := True;
@@ -1067,6 +1214,83 @@ begin
   SetLength(Result, Length(T.Agents));
   for I := 0 to High(T.Agents) do
     Result[I] := T.Agents[I].Name;
+end;
+
+function BindTeamBoard(const T: TTeamTemplate; const Project: string;
+                       out Err: string): Boolean;
+var
+  Takers: TStringArray;
+  Lanes: TLaneArray;
+  I, J, N: Integer;
+begin
+  Err := '';
+  SetLength(Takers, 0);
+  for I := 0 to High(T.Agents) do
+    if T.Agents[I].Takes = 'any' then
+    begin
+      SetLength(Takers, Length(Takers) + 1);
+      Takers[High(Takers)] := T.Agents[I].Name;
+    end;
+  { Written even when empty: a board re-bound to a template that no
+    longer opens the pool must stop offering it. }
+  if not SetProjectTakers(Project, Takers, Err) then Exit(False);
+  (* Lanes, with the board filled in. Also written when empty, for the
+     same reason: re-binding to a template without lanes lifts them. *)
+  SetLength(Lanes, 0);
+  for I := 0 to High(T.Agents) do
+    if Length(T.Agents[I].Lane) > 0 then
+    begin
+      N := Length(Lanes);
+      SetLength(Lanes, N + 1);
+      Lanes[N].Agent := T.Agents[I].Name;
+      SetLength(Lanes[N].Globs, Length(T.Agents[I].Lane));
+      for J := 0 to High(T.Agents[I].Lane) do
+        Lanes[N].Globs[J] := StringReplace(T.Agents[I].Lane[J], '{{project}}',
+                                            Project, [rfReplaceAll]);
+    end;
+  if not SetProjectLanes(Project, Lanes, Err) then Exit(False);
+  if T.SkipReview then Exit(True);
+  Result := SetProjectReview(Project, True, T.ReviewBy, Err);
+end;
+
+function TaskReviewers(const Project: string; const T: TTaskInfo): TStringArray;
+var
+  Named: TStringArray;
+  Builder: string;
+  Acc: TStringArray;
+  I: Integer;
+
+  { A local list rather than Result: a nested routine reaching for the
+    enclosing function's Result is not something both compilers agree on. }
+  procedure Add(const Nm: string);
+  var K: Integer;
+  begin
+    if (Nm = '') or (Nm = Builder) or (Nm = T.Assignee) then Exit;
+    for K := 0 to High(Acc) do
+      if Acc[K] = Nm then Exit;
+    SetLength(Acc, Length(Acc) + 1);
+    Acc[High(Acc)] := Nm;
+  end;
+
+  procedure AddParentOf(const Nm: string);
+  var Info: TAgentInfo;
+  begin
+    if (Nm <> '') and GetAgent(Nm, Info) then Add(Info.Parent);
+  end;
+
+begin
+  SetLength(Acc, 0);
+  Builder := T.SubmittedBy;
+  if Builder = '' then Builder := T.Assignee;
+  Named := ProjectReviewers(Project);
+  for I := 0 to High(Named) do
+    Add(Named[I]);
+  { The named reviewers minus the builder can be nobody -- the Test
+    Engineer submitting its own test plan -- and then the reporting line
+    decides, as it does on a team that named no one. }
+  if Length(Acc) = 0 then AddParentOf(Builder);
+  if Length(Acc) = 0 then AddParentOf(T.Assignee);
+  Result := Acc;
 end;
 
 { -------------------------------------------------------------- state -- }
@@ -1231,6 +1455,10 @@ begin
       Exit(True);
 end;
 
+(* Does Agent have work it can do now? An active task, or a todo one that
+   is READY. A todo task still waiting on unfinished work is not a reason
+   to wake its owner -- that is what used to need a `blocked` marking and
+   somebody remembering to lift it. *)
 function AgentHasOpenAssignedTask(const Project, Agent: string): Boolean;
 var
   Tasks: TTaskInfoArray;
@@ -1241,13 +1469,62 @@ begin
   Tasks := ListTasks(Project);
   for I := 0 to High(Tasks) do
     if (Tasks[I].Assignee = Agent) and
-       (Tasks[I].Status in [tsTodo, tsActive]) then
+       ((Tasks[I].Status = tsActive) or
+        ((Tasks[I].Status = tsTodo) and TaskReady(Tasks[I], Tasks))) then
       Exit(True);
+end;
+
+{ Ready unassigned work, for an agent that takes from the pool. }
+function ReadyPoolTasks(const Project, Agent: string): Integer;
+var
+  Tasks: TTaskInfoArray;
+  Takers: TStringArray;
+  I: Integer;
+  IsTaker: Boolean;
+begin
+  Result := 0;
+  if Project = '' then Exit;
+  Takers := ProjectTakers(Project);
+  IsTaker := False;
+  for I := 0 to High(Takers) do
+    if Takers[I] = Agent then IsTaker := True;
+  if not IsTaker then Exit;
+  Tasks := ListTasks(Project);
+  for I := 0 to High(Tasks) do
+    if (Tasks[I].Status = tsTodo) and (Tasks[I].Assignee = '') and
+       TaskReady(Tasks[I], Tasks) then
+      Inc(Result);
+end;
+
+(* How many tasks on the board wait for THIS agent's verdict. A task in
+   review is not its owner's to touch -- AgentHasOpenAssignedTask leaves
+   it out for that reason -- so without this nothing would wake the one
+   agent that can move it. *)
+function AgentReviewsWaiting(const Project, Agent: string): Integer;
+var
+  Tasks: TTaskInfoArray;
+  Revs: TStringArray;
+  I, K: Integer;
+begin
+  Result := 0;
+  if Project = '' then Exit;
+  Tasks := ListTasks(Project);
+  for I := 0 to High(Tasks) do
+  begin
+    if Tasks[I].Status <> tsReview then Continue;
+    Revs := TaskReviewers(Project, Tasks[I]);
+    for K := 0 to High(Revs) do
+      if Revs[K] = Agent then
+      begin
+        Inc(Result);
+        Break;
+      end;
+  end;
 end;
 
 function TeamWakeDecisions(const S: TTeamState): TWakeReasonArray;
 var
-  I, N: Integer;
+  I, N, Reviews: Integer;
   R: TWakeReason;
   Info: TAgentInfo;
 begin
@@ -1273,7 +1550,23 @@ begin
       R.Why := 'open assigned task(s) on ' + S.Project;
     end
     else
-      R.Why := 'nothing to do -- left alone';
+    begin
+      Reviews := AgentReviewsWaiting(S.Project, R.Agent);
+      if Reviews > 0 then
+      begin
+        R.Wake := True;
+        R.Why := Format('%d task(s) on %s waiting for its verdict',
+                        [Reviews, S.Project]);
+      end
+      else if ReadyPoolTasks(S.Project, R.Agent) > 0 then
+      begin
+        R.Wake := True;
+        R.Why := Format('%d ready unassigned task(s) on %s it can claim',
+                        [ReadyPoolTasks(S.Project, R.Agent), S.Project]);
+      end
+      else
+        R.Why := 'nothing to do -- left alone';
+    end;
     Result[N] := R;
     Inc(N);
   end;
@@ -1355,6 +1648,38 @@ begin
       begin
         SetLength(Result, N + 1);
         Result[N] := Tasks[I].Id + ' -> ' + Leads[L];
+        Inc(N);
+      end;
+  end;
+end;
+
+function TeamExpireLeases(const T: TTeamTemplate; const S: TTeamState): TStringArray;
+var
+  Expired, Leads: TStringArray;
+  I, L, N, Sp: Integer;
+  Id, Holder, Text, Delivered, Err: string;
+begin
+  SetLength(Result, 0);
+  N := 0;
+  if S.Project = '' then Exit;
+  Expired := ExpireLeases(S.Project, AgentIsBusy);
+  if Length(Expired) = 0 then Exit;
+  Leads := TeamLeads(T);
+  for I := 0 to High(Expired) do
+  begin
+    Sp := Pos(' ', Expired[I]);
+    Id := Copy(Expired[I], 1, Sp - 1);
+    Holder := Copy(Expired[I], Sp + 1, MaxInt);
+    Text := Format('Task %s on %s was claimed by %s, whose claim ran out ' +
+                   'while %s was not running -- the run holding it is gone. ' +
+                   'It is back to todo. Reassign it, or let its owner claim ' +
+                   'it again with task action="next".',
+                   [Id, S.Project, Holder, Holder]);
+    for L := 0 to High(Leads) do
+      if AgentSend(Leads[L], 'team-tick', Text, Delivered, Err) then
+      begin
+        SetLength(Result, N + 1);
+        Result[N] := Id + ' ' + Holder + ' -> ' + Leads[L];
         Inc(N);
       end;
   end;

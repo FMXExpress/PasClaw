@@ -95,6 +95,8 @@ tool only to *show* the result.
 3. **Sends the kickoff** to the lead, goal or board named.
 4. **Starts the lead's first run**, so something happens in seconds.
 5. **Writes the team's state file**, which is what the wake loop reads.
+6. **Turns review on for the board** (unless the template opts out), with
+   the template's reviewers. See [Review](#review-the-board-holds-the-rule).
 
 Templates are validated before anything is created: unique slugs, every
 `parent` naming an agent in the same template, no reporting cycles, and
@@ -109,6 +111,182 @@ decoration — it is how the wake loop knows who has work, and how two
 workers avoid grabbing the same task. A handover said only in a message
 is invisible to everything else.
 
+## Review: the board holds the rule
+
+The role prompts used to say "claiming done without evidence is the one
+prohibited move" and "have the test engineer verify before you close it",
+and nothing stopped either. On a team's board the **store** holds the
+rule now, so no route to the board skips it
+([plan](./team-board-plan.md), Phase 1):
+
+```
+task action=submit  project id evidence        builder: todo/active -> review
+task action=verdict project id verdict=accept  reviewer: review -> done
+task action=verdict project id verdict=reject reason
+                                                reviewer: review -> active
+```
+
+- **An agent never marks its own work done.** `task update status=done`
+  from an agent is refused with the `submit` it should have been, and a
+  finished job (`task action=job status=done`, or the desktop's job
+  runner) *submits* the task instead of closing it, with the job's
+  summary as the evidence.
+- **A submission needs evidence** — what was run and what it printed —
+  and is recorded with who submitted it, when, and from which job.
+- **The verdict is someone else's.** Refused from the submitter, from the
+  task's owner, from anyone not on the reviewer list, and from a caller
+  that cannot be identified: the caller is the agent whose turn is
+  making the call (the same per-thread identity `agent action=send`
+  uses), and a turn that is not a standing agent's — the desktop chat, a
+  background subagent — is *not* treated as the operator. The refusal
+  names who can give the verdict instead.
+- **A reject needs a reason**, goes back to `active` with the same owner,
+  and the reason is appended to the task's notes. The builder is
+  messaged, which wakes it; the reviewers are messaged on a submit for
+  the same reason. A task in review is not its builder's to move — only
+  a verdict moves it.
+- **Who reviews** is the template's `review.by` (`software-team`: `qa`).
+  Without one, the submitter's `parent` reviews — in `duo`, the Foreman
+  reviews the developer. A submitter is never its own reviewer, even when
+  listed: the Test Engineer's own work goes to *its* parent.
+- **The operator can do anything** — close a task in review, send it
+  back, edit frozen criteria — from the desktop's **Accept** / **Reject**
+  buttons, `POST /v1/projects/<p>/tasks/<t>/verdict`, or a `PATCH`. A
+  person is the authority the review exists for, and every override is
+  recorded as theirs.
+
+**Criteria** are a task field of their own, one check per line, apart
+from the notes. The Product Manager writes them while the task is
+`todo`; once work starts they are **frozen** for agents ("reopen it —
+status todo — to change them"), and a builder never writes the criteria
+for its own task. The verdict is judged against them, and the `verdict`
+result lists them back so a reviewer that skipped one is visible in its
+own transcript.
+
+**Held-out checks on submit.** Executables in
+`$PASCLAW_HOME/scenarios/<workspace>/<project>/` (the
+[verification](./configuration.md) scenario format: `*.sh`, `*.py`,
+anything executable; run by name order, with the project directory as
+the working directory) run before a submission is accepted. A red one
+refuses the submit with its output, so work the operator's checks
+already reject never costs a reviewer a turn. They live outside the
+workspace for the reason verification scenarios do: a check the builder
+can open is a check it can "fix". No directory, no gate.
+
+**Receipts.** Every create, assign, start, submit, accept, reject,
+reopen, criteria change and direct status change is a line in
+`projects/<p>/activity.jsonl`, written by the store so the HTTP routes
+and the desktop are recorded alongside the tool. `GET
+/v1/projects/<p>/activity[?task=T0004&limit=50]` serves it, and the
+desktop shows a task's history when its row is expanded.
+
+**The file tools cannot go around it.** `task.json`, `job.json`,
+`project.json` and `activity.jsonl` are refused to every file-writing
+tool (whatever `restrict_to_workspace` says) with a pointer to the task
+tool; the app the team builds and a job's `artifacts/` stay writable.
+What this does not reach is `shell_exec`, whose writes cannot be
+path-checked reliably.
+
+### A repeated cause becomes a proven rule
+
+- **Every submission is snapshotted** — a copy of the project as
+  submitted, minus the board's records and dependency folders (`.git`,
+  `node_modules`, …), at
+  `$PASCLAW_HOME/snapshots/<workspace>/<project>/<task>/S0003/`, outside
+  the workspace. It is what the reviewer judged; a project over 50 MB is
+  not copied (a partial copy would prove things about files that were
+  never there), and the newest ten per task are kept.
+- **A reject carries a cause**: a short key for the *kind* of mistake
+  (`untested-empty-input`, `wrong-path`), slugged and kept on the task
+  and its receipt.
+- **The second time one cause rejects work on a board**, the team's lead
+  is told: the cause, the tasks, and the call that drafts a rule.
+- **`rule action=draft`** (`project`, `cause`, `script`, optional `name`)
+  proves the check before anyone sees it: it has to **fail** against the
+  snapshot of a submission rejected for that cause and **pass** against
+  the same task's accepted fix. A check that passes everything ("does
+  not catch it") or fails everything ("would reject good work") is
+  refused with both results.
+- **You decide.** A proven draft is a decision in Needs you, with the
+  script shown. Approved, it joins the project's held-out checks and
+  every submit is held to it by the gate above. Declined, the cause is
+  recorded and stops nagging.
+- You can write one directly: `POST /v1/projects/<p>/rules
+  {"cause","script","name"}` — proven the same way, then installed with
+  no approval step. `GET /v1/projects/<p>/rules` (and `rule
+  action=list`) shows the rules, the ruled and declined causes, and how
+  often each cause has rejected work.
+
+The scenarios, the drafts and the snapshots are all outside the
+workspace, and all refused to the file tools.
+
+A template opts its board out with `"review": false`; a project made by
+hand or by the desktop's Ask path does not require review unless you
+switch it on (`POST /v1/projects/<p>/review {"review":true}`), so one
+person building one app sees no change.
+
+## Needs you: one queue for your calls
+
+Some things only a person can decide — spend money, pick between two
+designs, hand over a key. An agent asks with `agent
+action=ask_operator` (a `question`, optional `choices`, optional
+`project` and `task`):
+
+- **Only the top of the chain asks you.** An agent with a `parent` has
+  its question delivered to the parent's mailbox, marked
+  `[escalation]`; the parent decides, or asks in turn. The tool holds
+  this, not the role prompt, so twelve working agents still produce only
+  the questions their leads could not answer.
+- A top-level agent's question becomes a **decision**:
+  `workspace/decisions/D0012.json` — who asked, the question, the
+  choices, the answer and who gave it. A question about a task **blocks
+  the task** until it is answered, with a note saying what it waits on.
+- **Needs you** on the desktop taskbar appears whenever something waits
+  on you and counts it: open decisions, the gateway's pending permission
+  `ask` requests (which had no window before), and tasks in review that
+  no agent can give the verdict on. The window answers all three.
+- **Off the desk.** With `decisions.channel` naming one of your
+  configured channels, a new decision is posted there too. A reply of
+  `D12 yes` in a chat with any of PasClaw's bots answers it — **only**
+  from a sender listed in `decisions.answer_from` (`"telegram:12345"`);
+  everyone else's reply is refused with the reason. `allow_senders`
+  alone is not enough: an empty one lets anyone talk to the bot.
+- **The answer** reaches the asker's mailbox (*"Operator decided D12:
+  yes"*), which wakes it under the mail rule, and the task it blocked
+  goes back to what it was doing. With choices, the answer must be one
+  of them; a decision is answered once.
+- Decisions are on the same footing as the board's records: the file
+  tools cannot write them, so an agent cannot answer its own question.
+
+`GET /v1/decisions[?open=1]`, `POST /v1/decisions/<id>/answer
+{"answer":"yes"}`, and `GET /v1/needs-you` (open decisions plus reviews
+only you can give) are the HTTP side.
+
+## Lanes
+
+A template agent may name a **lane**: path globs, relative to the
+workspace, that it owns — `"lane": "projects/{{project}}/app/**"` (or a
+list). `team up` fills in the board and records the lanes on the project.
+From then on that agent's file writes — `write_file`, `edit_file`,
+`apply_patch`, every tool that goes through the sandbox's write check —
+land only inside its lane. Anything else is refused with whose lane the
+path is in:
+
+> refused: outside dev's lane: projects/shop/docs/plan.md is pm's.
+> Message pm instead (agent action=send).
+
+or, when no one owns it, with the agent's own lane and "ask your lead".
+A laned agent writing outside the workspace is refused too. Agents
+without a lane, and turns that are not a standing agent's, are not
+bound. `**` is any run of whole path segments, `*` any run inside one,
+`?` one character; a lane is never absolute and never goes through
+`..`. Re-binding the board to a template without lanes lifts them. The
+built-in templates define none; lanes are for templates that want them.
+
+What lanes do **not** reach is `shell_exec`: a shell command's writes
+cannot be path-checked reliably, so this is a guard on the file tools,
+not a sandbox.
+
 ## The wake loop
 
 The gateway ticks every 30 seconds and, for each team whose own cadence
@@ -119,10 +297,14 @@ is due (`wake_minutes`, default 15):
   two cadences, whose owner is idle, produces a message to the
   *Foreman*, not another poke at the stuck worker. Waking a stuck worker
   repeats the stall; telling its manager is what unsticks it;
-- **wakes agents that have a reason to run** — pending messages, or open
-  tasks assigned to them. An agent with nothing to do is left alone: a
-  loop that burns a provider call per agent per tick to be told "no
-  news" is a bill, not a team;
+- **hands back expired claims** — see *Leases* below;
+- **wakes agents that have a reason to run** — pending messages, *ready*
+  tasks assigned to them, ready unassigned work for an agent that takes
+  from the pool, or tasks **waiting for their verdict**. A task
+  in review wakes its reviewer, not its owner: it is not the owner's to
+  move. An agent with nothing to do is left alone: a loop that burns a
+  provider call per agent per tick to be told "no news" is a bill, not
+  a team;
 - **parks a finished team** — a board fully done for two ticks stops
   being woken.
 
@@ -139,10 +321,34 @@ meant a lead delegated and the whole team sat still for fifteen minutes,
 with the handoff — the entire point of having a team — the slowest thing
 in the system. So a team with mail waiting is due immediately.
 
-**Block work that waits on other work.** Only `todo` and `active` tasks
-wake their owner, so the Foreman marks a downstream task `blocked` and
-says what it waits on. Without that, a review task created up front
-wakes the reviewer to look at a project with nothing in it yet.
+**Work that waits on other work says so.** A task's `waits_on` lists the
+tasks it needs (`task action=update waits_on=["T0002"]`). It is
+**ready** when every one of them is done — computed, not stored, so it
+cannot go stale — and only a ready task wakes its owner. When the last
+prerequisite closes, the board messages the dependent's owner, which
+makes the team due on the next tick. An edge to a task not on the board,
+to itself, or one that would close a cycle is refused when it is set.
+`blocked` stays for waits outside the board ("needs the operator's API
+key"). The Foreman stops being the scheduler: nobody has to remember to
+unblock anything.
+
+**`task action=next`** is how a worker takes work: it claims the oldest
+ready `todo` task assigned to the caller, or — for an agent whose
+template says `"takes": "any"` — the oldest ready *unassigned* one. The
+scan and the claim happen under one lock, so two agents asking at once
+get two different tasks, or one of them hears *nothing is ready* with the
+reasons (what its own tasks wait on, what it already holds). The claim
+makes the task active and the caller's, with a **lease**.
+
+**Leases.** An agent that starts or claims a task holds it for
+`teams.claim_lease_minutes` (default 120); the owner touching the task —
+any update, a note — renews it, and the task leaving `active` drops it.
+On each tick, an active task whose lease ran out **while its holder runs
+no turn** — the same turn-lock test supervision uses to spot a dead run,
+so a long legitimate turn is never cut — goes back to `todo` with an
+`expire` receipt, back to the pool if it was claimed from there, and the
+lead is told. Before, a task held by a dead run waited for the stall
+report two cadences later and for the lead to do something.
 
 ```sh
 pasclaw team status        # who is up, their board, last tick
@@ -236,12 +442,21 @@ software team.
   "agents": [
     { "name": "boss", "title": "Boss", "role": "…", "model": "" },
     { "name": "hand", "title": "Hand", "role": "…", "model": "fast",
-      "parent": "boss" }
+      "parent": "boss", "takes": "any" }
   ],
   "kickoff": "Goal: {{goal}}  Project: {{project}}",
-  "wake": { "minutes": 15 }
+  "wake": { "minutes": 15 },
+  "review": { "by": ["boss"] }
 }
 ```
+
+`takes` is `"routed"` (the default: only what is assigned to it) or
+`"any"` (it may also claim unassigned ready work with `next`). `lane`
+(a glob or a list, `{{project}}` filled in) limits where the agent's file
+tools may write — see [Lanes](#lanes).
+`review.by` must name agents in the template; leave it out and each
+submitter's parent reviews. `"review": false` (or `{"required": false}`)
+leaves the board without review.
 
 `pasclaw team export <file>` writes the live roster out as one of these
 — how a team you hand-tuned becomes a team you can share.

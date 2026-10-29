@@ -113,7 +113,8 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Providers.Factory,
   PasClaw.Tools.ToolLoop,
-  PasClaw.Identity;
+  PasClaw.Identity,
+  PasClaw.Decisions;  { HandleDecisionReply -- "D12 yes" }
 
 const
   { Per-operation IMAP / SMTP timeout. Bounds how long a single
@@ -185,6 +186,23 @@ begin
   else
     Result := 30;
   if Result < 5 then Result := 5;
+end;
+
+{ The first non-blank line of a mail body -- where a "D12 yes" reply is. }
+function FirstBodyLine(const Body: string): string;
+var
+  L: TStringList;
+  I: Integer;
+begin
+  Result := '';
+  L := TStringList.Create;
+  try
+    L.Text := Body;
+    for I := 0 to L.Count - 1 do
+      if Trim(L[I]) <> '' then Exit(Trim(L[I]));
+  finally
+    L.Free;
+  end;
 end;
 
 function SplitCSV(const S: string): TStringArray;
@@ -430,7 +448,20 @@ begin
 
             ReplySent       := False;
             ReplyAttempted  := False;
-            if RunToolLoop(LoopCfg, RToolMsgs, Loop) and (Loop.Content <> '') then
+            (* "D12 yes" answers the operator's decision rather than starting
+               a turn -- only from a sender decisions.answer_from names. The
+               first line of the body only: a mail reply quotes the
+               announcement under it, and the quote is not the answer. *)
+            if HandleDecisionReply(FirstBodyLine(BodyText),
+                                   CanonicalOf(LoopCfg.Identity),
+                                   FCfg.DecisionsAnswerFrom, Reply) then
+            begin
+              ReplyAttempted := True;
+              ReplySent := Push(FromAddr, 'Re: ' + Subj, Reply, PushErr);
+              if not ReplySent then
+                LogWarn('email reply send failed to %s: %s', [FromAddr, PushErr]);
+            end
+            else if RunToolLoop(LoopCfg, RToolMsgs, Loop) and (Loop.Content <> '') then
             begin
               Reply := Loop.Content;
               ReplyAttempted := True;

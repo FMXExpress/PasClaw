@@ -827,6 +827,22 @@ type
        one answers "may the model create colleagues and message them",
        and an operator can reasonably want either without the other. *)
     AgentToolsEnabled: Boolean;
+    (* teams.claim_lease_minutes: how long an agent's claim on an active
+       task lasts without the agent touching the task. The team tick hands
+       back a task whose lease ran out while its holder runs no turn -- a
+       claim held by a run that died (docs/team-board-plan.md, Phase 2).
+       Default 120. *)
+    TeamsClaimLeaseMinutes: Integer;
+    (* decisions.channel: the configured channel (by name, from
+       "channels") a new decision for the operator is posted to, so a
+       question reaches a phone and not only an open desktop. '' = none.
+       decisions.answer_from: the sender identities ("telegram:12345")
+       whose "D12 yes" reply in a chat with one of the bots answers a
+       decision. Empty = no channel may answer -- allow_senders alone is
+       not enough, because an empty allow_senders lets anyone talk to the
+       bot, and a decision is the operator's call. *)
+    DecisionsChannel:    string;
+    DecisionsAnswerFrom: array of string;
     (* Per-Chat() wait timeout in milliseconds for the relay provider
        (PasClaw.Providers.Relay -- the pull-worker pattern). 0 = use
        the Pascal default RelayDefaultWaitTimeoutMs (5 minutes).
@@ -1431,6 +1447,7 @@ begin
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
   DesktopToolsEnabled  := False; { off by default -- see the field comment: the desktop works without it. }
   AgentToolsEnabled    := False; { off by default -- standing agents are an opt-in autonomy step. }
+  TeamsClaimLeaseMinutes := 120;
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
   MCPCompactResults := True;  { on by default: the conversion is refused unless the result is rectangular, all-scalar and genuinely shorter, so the failure mode is "no change" rather than a mangled result. Flip off if a server's rows must reach the model as literal JSON. }
   { Compaction defaults MUST match DefaultCompactOptions in
@@ -2209,6 +2226,34 @@ begin
       Root.PutObject('compaction', Tmp);
     end;
 
+    if (DecisionsChannel <> '') or (Length(DecisionsAnswerFrom) > 0) then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        if DecisionsChannel <> '' then Tmp.PutStr('channel', DecisionsChannel);
+        if Length(DecisionsAnswerFrom) > 0 then
+        begin
+          Arr := TJsonArray.Create;
+          for i := 0 to High(DecisionsAnswerFrom) do Arr.AddStr(DecisionsAnswerFrom[i]);
+          Tmp.PutArray('answer_from', Arr);
+        end;
+        Root.PutObject('decisions', Tmp);
+      finally
+        Tmp.Free;
+      end;
+    end;
+
+    if TeamsClaimLeaseMinutes <> 120 then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutInt('claim_lease_minutes', TeamsClaimLeaseMinutes);
+        Root.PutObject('teams', Tmp);
+      finally
+        Tmp.Free;
+      end;
+    end;
+
     if (Verification.ScenariosDir <> '') or (Verification.MaxRounds <> 2) then
     begin
       Tmp := TJsonObject.Create;
@@ -2499,6 +2544,31 @@ begin
     MemoryCoreBudgetBytes := Integer(Root.GetInt('memory_core_budget_bytes', MemoryCoreBudgetBytes));
     if MemoryCoreBudgetBytes < 0 then MemoryCoreBudgetBytes := 0;
     BackgroundModel      := Trim(Root.GetStr('background_model', BackgroundModel));
+    Obj := Root.ChildObject('decisions');
+    if Obj <> nil then
+    try
+      DecisionsChannel := Trim(Obj.GetStr('channel', DecisionsChannel));
+      Arr := Obj.ChildArray('answer_from');
+      if Arr <> nil then
+      try
+        SetLength(DecisionsAnswerFrom, Arr.Count);
+        for i := 0 to Arr.Count - 1 do
+          DecisionsAnswerFrom[i] := Trim(Arr.ItemStr(i, ''));
+      finally
+        Arr.Free;
+      end;
+    finally
+      Obj.Free;
+    end;
+    Obj := Root.ChildObject('teams');
+    if Obj <> nil then
+    try
+      TeamsClaimLeaseMinutes := Integer(Obj.GetInt('claim_lease_minutes',
+                                                   TeamsClaimLeaseMinutes));
+      if TeamsClaimLeaseMinutes < 1 then TeamsClaimLeaseMinutes := 1;
+    finally
+      Obj.Free;
+    end;
     Obj := Root.ChildObject('verification');
     if Obj <> nil then
     try

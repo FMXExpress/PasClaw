@@ -98,7 +98,8 @@ uses
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
-  PasClaw.Identity;
+  PasClaw.Identity,
+  PasClaw.Decisions;  { HandleDecisionReply -- "D12 yes" }
 
 type
   (* PR #86 Codex P2: RunToolLoop inside OnPrivateMessage blocks
@@ -242,10 +243,17 @@ begin
   LoopCfg.OnToolCall    := nil;
   LoopCfg.OnToolResult  := nil;
 
-  if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
-    Response := Loop.Content
-  else
-    Response := '(sorry -- model returned no content)';
+  { "D12 yes" answers the operator's decision (PasClaw.Decisions) rather
+    than starting a turn -- and only from a sender decisions.answer_from
+    names, which HandleDecisionReply checks. }
+  if not HandleDecisionReply(UserText, CanonicalOf(LoopCfg.Identity),
+                             FCfg.DecisionsAnswerFrom, Response) then
+  begin
+    if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
+      Response := Loop.Content
+    else
+      Response := '(sorry -- model returned no content)';
+  end;
 
   if FClient = nil then Exit;
 

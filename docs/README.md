@@ -34,6 +34,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 - [Auto-router upgrade plan](./autoroute-upgrade-plan.md) — typed reasons, circuits, one cheap tier, and an offline tuning loop, borrowed at scale from experiential.
 - [Agent teams](./teams.md) — ready-made team templates: pick one, point it at a goal or an existing project's task list, and it starts working.
 - [Agent teams plan](./agent-teams-plan.md) — the design story behind them.
+- [Team board plan](./team-board-plan.md) — rules the board holds instead of the prompts: a second agent's verdict, frozen criteria, dependencies, one queue for the human's calls, repeated causes turned into proven rules. Ideas from Pullboard.
 - [Chat channels](./channels.md) — Telegram, Discord, Slack, Teams, LINE, WhatsApp, Matrix, IRC, Email.
 - [Embedding in your own app](./embedding.md) — `TPasClawAgent` / `TPasClawServer` `TComponent`s for VCL/FMX/CLI binaries.
 

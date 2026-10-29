@@ -29,6 +29,7 @@ uses
   PasClaw.Suite.Notes,
   PasClaw.Apps.Runner,
   PasClaw.Desktop.Events,
+  PasClaw.Decisions,
   PasClaw.Gateway.Desktop;
 
 var
@@ -211,6 +212,169 @@ begin
     end;
     Inc(Waited);
   end;
+end;
+
+(* The review routes are the OPERATOR's: a person can switch review on,
+   close or send back a submitted task, and read the receipts. The rules
+   that bind agents are pinned in team_review_tests; what is pinned here
+   is that the HTTP surface speaks them -- right status codes, the new
+   fields, and verdicts attributed to the operator. *)
+procedure TestReviewRoutes;
+var
+  R: TDesktopResponse;
+  Err: string;
+  Obj, Last: TJsonObject;
+  Arr: TJsonArray;
+begin
+  CreateProject('Review Routes', 'review-routes', '', Err);
+  ExpectBodyContains('POST', '/v1/projects/review-routes/review',
+                     '{"review":true,"reviewers":["QA"]}', '"review":true',
+                     'review switched on over HTTP');
+  ExpectBodyContains('GET', '/v1/projects/review-routes', '', '"reviewers":["qa"]',
+                     'the project reports its reviewers, slugged');
+  ExpectStatus('POST', '/v1/projects/review-routes/review', '', 400,
+               'switching review needs a body');
+  ExpectStatus('POST', '/v1/projects/nope/review', '{"review":true}', 404,
+               'and a project');
+
+  ExpectBodyContains('POST', '/v1/projects/review-routes/tasks',
+                     '{"title":"Form","criteria":"save adds a row"}', 'T0001',
+                     'a task created with criteria');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0001', '',
+                     '"criteria":"save adds a row"', 'criteria in the task JSON');
+  ExpectStatus('PATCH', '/v1/projects/review-routes/tasks/T0001',
+               '{"status":"review"}', 400, 'review is not a status you PATCH');
+  ExpectStatus('POST', '/v1/projects/review-routes/tasks/T0001/verdict',
+               '{"verdict":"accept"}', 409, 'a verdict on a task not in review is a 409');
+
+  UpdateTask('review-routes', 'T0001', '', '-', 'active', Err, 'dev');
+  SubmitTask('review-routes', 'T0001', 'dev', 'ran it: a row', '', Err);
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0001', '',
+                     '"status":"review"', 'the task shows review');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0001', '',
+                     '"submitted_by":"dev"', 'with who submitted it');
+  ExpectBodyContains('GET', '/v1/projects/review-routes', '', '"review_tasks":1',
+                     'and the board counts it');
+
+  ExpectStatus('POST', '/v1/projects/review-routes/tasks/T0001/verdict',
+               '{"verdict":"maybe"}', 400, 'a verdict is accept or reject');
+  ExpectStatus('POST', '/v1/projects/review-routes/tasks/T0001/verdict',
+               '{"verdict":"reject"}', 400, 'a reject needs a reason');
+  ExpectBodyContains('POST', '/v1/projects/review-routes/tasks/T0001/verdict',
+                     '{"verdict":"reject","reason":"blank rows save"}', '"status":"active"',
+                     'the operator sends it back');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0001', '',
+                     'blank rows save', 'with the reason in its notes');
+  SubmitTask('review-routes', 'T0001', 'dev', 'blank rows refused now', '', Err);
+  ExpectBodyContains('POST', '/v1/projects/review-routes/tasks/T0001/verdict',
+                     '{"verdict":"accept"}', '"status":"done"', 'the operator accepts');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0001', '',
+                     '"verdict_by":"operator"', 'recorded as the operator''s');
+
+  ExpectBodyContains('GET', '/v1/projects/review-routes/activity', '', '"event":"accept"',
+                     'the activity route serves the receipts');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/activity', '', '"by":"operator"',
+                     'attributed');
+  ExpectStatus('GET', '/v1/projects/nope/activity', '', 404, 'activity of a missing project');
+
+  { waits_on over HTTP: set on create, computed readiness in the JSON, a
+    cycle refused on PATCH. }
+  ExpectBodyContains('POST', '/v1/projects/review-routes/tasks',
+                     '{"title":"Later","waits_on":["T0001"]}', 'T0002',
+                     'a task created waiting on another');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0002', '',
+                     '"waits_on":["T0001"]', 'its waits_on is in the JSON');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0002', '',
+                     '"ready":true', 'ready, since T0001 is done');
+  ExpectBodyContains('POST', '/v1/projects/review-routes/tasks', '{"title":"Third"}',
+                     'T0003', 'a third task');
+  ExpectStatus('PATCH', '/v1/projects/review-routes/tasks/T0002',
+               '{"waits_on":["T0003"]}', 200, 'a new edge');
+  ExpectBodyContains('GET', '/v1/projects/review-routes/tasks/T0002', '',
+                     '"ready":false', 'and now it waits');
+  ExpectStatus('PATCH', '/v1/projects/review-routes/tasks/T0003',
+               '{"waits_on":["T0002"]}', 400, 'a cycle is a 400');
+  ExpectStatus('POST', '/v1/projects/review-routes/tasks',
+               '{"title":"Orphan","waits_on":["T0099"]}', 400,
+               'an unknown prerequisite is a 400');
+
+  { `team up` turns review on for the board it works -- here one it made
+    from a goal, parked so nothing tries to run. }
+  ExpectBodyContains('POST', '/v1/teams/up',
+                     '{"template":"software-team","goal":"a tally counter","parked":true}',
+                     '"project"', 'a parked team comes up');
+  ExpectBodyContains('GET', '/v1/projects/tally-counter', '', '"review":true',
+                     'and its board requires review');
+  ExpectBodyContains('GET', '/v1/projects/tally-counter', '', '"reviewers":["qa"]',
+                     'with the template''s reviewer');
+  if Req2('GET', '/v1/projects/review-routes/activity', 'task=T0001&limit=2', '', R) then
+  begin
+    Obj := TJsonObject.Parse(R.Body);
+    try
+      Arr := Obj.ChildArray('events');
+      try
+        ExpectTrue((Arr <> nil) and (Arr.Count = 2), 'limit keeps the newest lines');
+        if (Arr <> nil) and (Arr.Count = 2) then
+        begin
+          Last := Arr.ItemObject(1);
+          try
+            ExpectTrue((Last <> nil) and (Last.GetStr('event', '') = 'accept'),
+                       'oldest first, so the last line is the latest');
+          finally
+            Last.Free;
+          end;
+        end;
+      finally
+        Arr.Free;
+      end;
+    finally
+      Obj.Free;
+    end;
+  end
+  else
+    Fail_('activity with a query -- route not handled');
+end;
+
+(* The operator's queue over HTTP: decisions listed and answered, and
+   /v1/needs-you gathering open decisions with the reviews no agent can
+   give. *)
+procedure TestDecisionRoutes;
+var
+  Err, Id: string;
+  Choices: TStringArray;
+begin
+  SetLength(Choices, 2);
+  Choices[0] := 'yes'; Choices[1] := 'no';
+  Id := CreateDecision('question', 'lead', 'Ship it?', Choices, '', '', '', '', Err);
+  ExpectBodyContains('GET', '/v1/decisions', '', '"question":"Ship it?"', 'decisions are listed');
+  ExpectBodyContains('GET', '/v1/needs-you', '', Id, 'an open decision needs you');
+  ExpectStatus('GET', '/v1/decisions/D9999', '', 404, 'a missing decision is a 404');
+  ExpectStatus('POST', '/v1/decisions/' + Id + '/answer', '{}', 400, 'an answer needs a body');
+  ExpectStatus('POST', '/v1/decisions/' + Id + '/answer', '{"answer":"maybe"}', 409,
+               'an answer outside the choices is a 409');
+  ExpectBodyContains('POST', '/v1/decisions/' + Id + '/answer', '{"answer":"yes"}',
+                     '"answered_by":"operator"', 'the operator answers');
+  ExpectStatus('POST', '/v1/decisions/' + Id + '/answer', '{"answer":"no"}', 409,
+               'and cannot answer twice');
+  ExpectBodyMissing('GET', '/v1/needs-you', '', Id, 'an answered decision no longer needs you');
+
+  { A task in review that no agent can review -- submitted by an agent
+    with no parent on a board that names no reviewers -- is the
+    operator's verdict. }
+  CreateProject('Lone', 'lone', '', Err);
+  CreateTask('lone', 'Solo work', '', Err);
+  UpdateTask('lone', 'T0001', '', '-', 'active', Err, 'nobody-above');
+  SubmitTask('lone', 'T0001', 'nobody-above', 'ran it', '', Err);
+  ExpectBodyContains('GET', '/v1/needs-you', '', '"project":"lone"',
+                     'a verdict only the operator can give needs you');
+
+  { The operator's own rule still has to be proven. }
+  ExpectBodyContains('GET', '/v1/projects/lone/rules', '', '"rules"', 'the rules are listed');
+  ExpectStatus('POST', '/v1/projects/lone/rules', '{"cause":"x","script":"exit 0"}', 422,
+               'a rule with nothing to prove it against is a 422');
+  ExpectStatus('POST', '/v1/projects/lone/rules', '', 400, 'a rule needs a body');
+  ExpectStatus('POST', '/v1/projects/nope/rules', '{"cause":"x","script":"exit 0"}', 404,
+               'and a project');
 end;
 
 var
@@ -415,6 +579,9 @@ begin
                      'Connect IMAP', 'and so did the title');
   ExpectStatus('GET', '/v1/projects/spam-filter/tasks/nope', '', 404,
                'bad task id is a 404');
+
+  TestReviewRoutes;
+  TestDecisionRoutes;
 
   { ----------------------------------------------------------------- jobs -- }
   ExpectStatus('GET', '/v1/projects/spam-filter/tasks/T0001/jobs', '', 200, 'list jobs');

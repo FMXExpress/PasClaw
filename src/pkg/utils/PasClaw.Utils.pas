@@ -98,6 +98,10 @@ procedure WriteFileText(const Path, Content: string);
 function NormalizePathSep(const P: string): string;
 function SplitToList(const S: string; Sep: Char): TStringList;
 function NowIsoUtc: string;
+(* The same stamp, Minutes from now (negative = ago). Two stamps of this
+   one fixed shape compare correctly as strings, which is what lets a
+   lease's expiry be checked with `<` and no date parsing. *)
+function IsoUtcInMinutes(Minutes: Integer): string;
 
 { Local wall-clock time with its UTC offset and the UTC equivalent, e.g.
   "Thu 2026-08-14 12:25:33 UTC+02:00 (2026-08-14T10:25:33Z)".
@@ -754,6 +758,11 @@ begin
 end;
 
 function NowIsoUtc: string;
+begin
+  Result := IsoUtcInMinutes(0);
+end;
+
+function IsoUtcInMinutes(Minutes: Integer): string;
 var
   DT: TDateTime;
 begin
@@ -762,6 +771,7 @@ begin
   {$ELSE}
   DT := TTimeZone.Local.ToUniversalTime(Now);
   {$ENDIF}
+  if Minutes <> 0 then DT := IncMinute(DT, Minutes);
   Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"Z"', DT);
 end;
 

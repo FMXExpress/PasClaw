@@ -115,8 +115,15 @@ script — it falls back to `operator`, which is the honest answer: an
 unattributed message should not claim to be from an agent.
 
 ```
-agent  action = list | create | get | delete | send | inbox
+agent  action = list | create | get | delete | send | inbox | ask_operator
 ```
+
+`ask_operator` (`question`, optional `choices`, `project`, `task`) raises a
+question only a person can answer. An agent with a `parent` has it
+delivered to the parent as an escalation instead; a top-level agent's
+question becomes a decision on the desktop's **Needs you** and, when
+`decisions.channel` is set, in a chat. The answer arrives in the asker's
+mailbox. See [teams](./teams.md#needs-you-one-queue-for-your-calls).
 
 `list` and `get` report **live** `busy` and `pending` alongside the stored
 fields — a roster without those is a list of names.

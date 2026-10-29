@@ -41,6 +41,18 @@ begin
   if Cond then Result := Yes else Result := No;
 end;
 
+function JoinReviewers(const Names: TStringArray): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(Names) do
+  begin
+    if Result <> '' then Result := Result + ', ';
+    Result := Result + Names[I];
+  end;
+end;
+
 procedure Usage;
 begin
   PrintLn('Usage: pasclaw team <command>');
@@ -135,6 +147,16 @@ begin
     end;
     PrintLn('  project  ' + Project);
   end;
+
+  if not BindTeamBoard(T, Project, Err) then
+  begin
+    PrintLn('error: could not set review on ' + Project + ': ' + Err);
+    Exit;
+  end;
+  if not T.SkipReview then
+    PrintLn('  review   on -- agents submit work; ' +
+            IfThen_(Length(T.ReviewBy) > 0, JoinReviewers(T.ReviewBy),
+                    'each one''s lead') + ' gives the verdict');
 
   S := Default(TTeamState);
   S.Name        := T.Name;

@@ -1013,6 +1013,9 @@ h1,h2,h3 { margin: 0 0 6px; font-size: 12px; }
 .st-active  { color: var(--accent); font-weight: bold; }
 .st-done    { color: var(--text); }
 .st-blocked { color: #a00; font-weight: bold; }
+/* Submitted, waiting for someone else's verdict: not the builder's to
+   move, so not the active colour either. */
+.st-review  { color: #a60; font-weight: bold; font-style: italic; }
 
 /* ---- chat ---- */
 .chat { display: flex; flex-direction: column; height: 100%; }
@@ -1249,6 +1252,11 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
        is under every window the moment work is happening. -->
   <button id="tb-shell" class="btn" title="Talk to the desktop (Ctrl+K)">Ask</button>
   <button id="tb-log" class="btn" title="What the gateway is doing">Log</button>
+  <!-- Everything waiting on a person, in one place: decisions the team
+       asked for, permission asks, verdicts no agent can give. Hidden
+       while there is nothing, so its appearing is the signal. -->
+  <button id="tb-needs" class="btn st-review" style="display:none"
+          title="Decisions, permission asks and reviews waiting on you">Needs you</button>
   <div class="tb-sep"></div>
   <div id="tasks"></div>
   <div class="tb-sep"></div>
@@ -1979,6 +1987,7 @@ const RESTORERS = {
   console: () => openConsole(),
   shell:   () => openShell(),
   log:     () => openLog(),
+  needs:   () => openNeedsYou(),
 };
 
 let saveTimer = null;
@@ -2121,6 +2130,162 @@ $("#startbtn").addEventListener("click", e => {
 });
 $("#tb-shell").addEventListener("click", () => openShell());
 $("#tb-log").addEventListener("click", () => openLog());
+$("#tb-needs").addEventListener("click", () => openNeedsYou());
+
+/* ==========================================================================
+   Needs you -- one queue for the operator's calls
+
+   Three things wait on a person, and before this they lived in three
+   places or none: a decision a team asked for (/v1/decisions), a
+   permission "ask" the gateway is holding a tool call on (/v1/permissions
+   -- which no window showed at all), and a submitted task no agent can
+   give the verdict on. The taskbar button counts them and appears only
+   when there is something; the window answers them.
+   ========================================================================== */
+
+const NEEDS = { decisions: [], reviews: [], asks: [], timer: null };
+
+async function loadNeedsYou() {
+  try {
+    const j = await api("/v1/needs-you");
+    NEEDS.decisions = j.decisions || [];
+    NEEDS.reviews = j.reviews || [];
+  } catch { NEEDS.decisions = []; NEEDS.reviews = []; }
+  try { NEEDS.asks = (await api("/v1/permissions")).pending || []; }
+  catch { NEEDS.asks = []; }
+  const n = NEEDS.decisions.length + NEEDS.reviews.length + NEEDS.asks.length;
+  const b = $("#tb-needs");
+  b.style.display = n ? "" : "none";
+  b.textContent = "Needs you (" + n + ")";
+  const w = WINS.get("needs");
+  if (w) paintNeedsYou(w);
+}
+
+/* Events arrive in bursts; one re-read per burst. */
+function refreshNeedsSoon() {
+  if (NEEDS.timer) return;
+  NEEDS.timer = setTimeout(() => { NEEDS.timer = null; loadNeedsYou(); }, 300);
+}
+["decision", "permission_request", "permission_resolved", "task"]
+  .forEach(t => onDesktopEvent(t, refreshNeedsSoon));
+setInterval(loadNeedsYou, 30000);
+setTimeout(loadNeedsYou, 500);
+
+function openNeedsYou() {
+  const already = WINS.get("needs");
+  const w = already || createWindow({ key: "needs", title: "Needs you",
+                          width: 520, height: 380, icon: "brain", pad: false,
+                          restore: { fn: "needs" } });
+  if (already) { restoreWindow(already); focusWindow(already); }
+  paintNeedsYou(w);
+  loadNeedsYou();
+}
+
+function paintNeedsYou(w) {
+  w.body.textContent = "";
+  const list = el("div", "list in");
+  list.style.cssText = "height:calc(100% - 6px);margin:3px;overflow:auto";
+  w.body.appendChild(list);
+  const head = t => {
+    const h = el("div", "row");
+    h.style.cssText = "font-weight:bold;padding:4px 6px 2px";
+    h.textContent = t;
+    list.appendChild(h);
+  };
+  const row = () => {
+    const r = el("div", "row");
+    r.style.cssText = "padding:3px 6px;display:flex;flex-direction:column;gap:3px";
+    list.appendChild(r);
+    return r;
+  };
+  const btn = (label, fn) => {
+    const b = el("button", "btn", label);
+    b.style.cssText = "padding:0 8px;font-size:10px;line-height:16px";
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try { await fn(); } catch (e) { alert(e.message); b.disabled = false; }
+      loadNeedsYou();
+    });
+    return b;
+  };
+  const acts = () => {
+    const a = el("div");
+    a.style.cssText = "display:flex;gap:4px;flex-wrap:wrap";
+    return a;
+  };
+
+  if (!NEEDS.decisions.length && !NEEDS.asks.length && !NEEDS.reviews.length) {
+    list.appendChild(el("div", "row muted",
+      "Nothing is waiting on you. Decisions a team asks for, permission " +
+      "asks and verdicts only you can give show up here."));
+    return;
+  }
+
+  if (NEEDS.decisions.length) head("Decisions");
+  NEEDS.decisions.forEach(d => {
+    const r = row();
+    r.appendChild(el("div", null, `${d.id} from ${d.asked_by}: ${d.question}`));
+    if (d.task) r.appendChild(el("div", "muted", `holds up ${d.task} on ${d.project}`));
+    /* A proposed rule shows the check itself: approving it holds every
+       future submit to this script, so it is read before it is approved. */
+    if (d.kind === "rule" && d.payload && d.payload.script) {
+      const pre = el("pre", "muted", d.payload.script);
+      pre.style.cssText = "margin:0;max-height:120px;overflow:auto;" +
+                          "white-space:pre-wrap;font-size:10px";
+      r.appendChild(pre);
+    }
+    const a = acts();
+    const answer = ans => api(`/v1/decisions/${d.id}/answer`,
+                              { method: "POST", body: { answer: ans } });
+    if ((d.choices || []).length)
+      d.choices.forEach(c => a.appendChild(btn(c, () => answer(c))));
+    else {
+      const inp = el("input");
+      inp.style.cssText = "flex:1 1 auto;min-width:120px";
+      inp.placeholder = "Your answer";
+      a.appendChild(inp);
+      a.appendChild(btn("Answer", () => {
+        if (!inp.value.trim()) throw new Error("type an answer first");
+        return answer(inp.value.trim());
+      }));
+    }
+    r.appendChild(a);
+  });
+
+  if (NEEDS.asks.length) head("Permission asks");
+  NEEDS.asks.forEach(p => {
+    const r = row();
+    r.appendChild(el("div", null, `${p.tool} wants ${p.resource || "(no resource)"}`));
+    if (p.reason) r.appendChild(el("div", "muted", p.reason));
+    const a = acts();
+    const say = ans => api(`/v1/permissions/${p.id}`,
+                           { method: "POST", body: { answer: ans } });
+    a.appendChild(btn("Allow once", () => say("allow")));
+    a.appendChild(btn("Allow for this session", () => say("session")));
+    a.appendChild(btn("Deny", () => say("deny")));
+    r.appendChild(a);
+  });
+
+  if (NEEDS.reviews.length) head("Verdicts only you can give");
+  NEEDS.reviews.forEach(t => {
+    const r = row();
+    r.appendChild(el("div", null, `${t.id} on ${t.project}: ${t.title}`));
+    r.appendChild(el("div", "muted",
+      `submitted by ${t.submitted_by}: ${t.evidence || "(no evidence)"}`));
+    if (t.criteria) r.appendChild(el("div", "muted", "criteria: " + t.criteria));
+    const a = acts();
+    const verdict = (v, reason) =>
+      api(`/v1/projects/${t.project}/tasks/${t.id}/verdict`,
+          { method: "POST", body: { verdict: v, reason } });
+    a.appendChild(btn("Accept", () => verdict("accept", "")));
+    a.appendChild(btn("Reject...", () => {
+      const reason = prompt(`Reject ${t.id}: what is wrong?`, "");
+      if (!reason) return Promise.resolve();
+      return verdict("reject", reason);
+    }));
+    r.appendChild(a);
+  });
+}
 /* Ctrl+K raises the shell from anywhere, which is what makes it feel like
    the desktop's command line rather than one more window to hunt for. */
 document.addEventListener("keydown", e => {
@@ -3620,6 +3785,13 @@ function paintTree() {
        board gets a tick; an archived one says so and greys out. */
     if (p.open_tasks) {
       row.appendChild(el("span", "badge", String(p.open_tasks)));
+      /* Work waiting on a verdict is open, but it is waiting on a
+         REVIEWER (or you), not on its builder -- worth its own mark. */
+      if (p.review_tasks) {
+        const rv = el("span", "badge st-review", "⚖ " + p.review_tasks);
+        rv.title = p.review_tasks + " task(s) submitted and waiting for a verdict";
+        row.appendChild(rv);
+      }
     } else if (p.blocked_tasks) {
       /* Nothing open and not finished means everything left is BLOCKED
          -- work waiting on somebody. Marking it needs saying, because
@@ -3694,21 +3866,68 @@ function paintTree() {
     shown.forEach(t => {
       const tr = el("div", "node");
       tr.style.paddingLeft = "18px";
-      const tt = el("span", "twist", t.jobs ? (t.__open ? "▼" : "▶") : "");
+      /* Expandable when there is anything behind the row: jobs, the
+         acceptance criteria, a submission or a verdict. */
+      const hasDetail = t.jobs || t.criteria || t.submitted_at || t.verdict;
+      const tt = el("span", "twist", hasDetail ? (t.__open ? "▼" : "▶") : "");
       tr.appendChild(tt);
+      /* A todo task still waiting on unfinished work says on what, and
+         is drawn quieter: it is not something anyone can start yet. */
+      const waiting = (t.waiting_on || []).length && t.status === "todo";
       const lbl = el("span", "st-" + t.status,
-        t.id + "  " + t.title + (t.assignee ? "  @" + t.assignee : ""));
+        t.id + "  " + t.title + (t.assignee ? "  @" + t.assignee : "") +
+        (t.status === "review" ? "  -- waiting for a verdict" : "") +
+        (waiting ? "  -- waits on " + t.waiting_on.join(", ") : ""));
+      if (waiting) lbl.style.opacity = ".6";
       lbl.style.flex = "1 1 auto";
       tr.appendChild(lbl);
-      tr.title = t.notes || "";
+      tr.title = [t.notes, t.criteria ? "Criteria:\n" + t.criteria : ""]
+        .filter(Boolean).join("\n\n");
+
+      /* A task in review waits for a verdict, and you can give it: you
+         are the authority the review exists for. Accept closes it; reject
+         asks for the reason its builder will read. Recorded as yours. */
+      if (t.status === "review") {
+        const verdict = async (accept) => {
+          let reason = "";
+          if (accept) {
+            const msg = `Accept ${t.id} "${t.title}"?\n\n` +
+              (t.criteria ? `Criteria:\n${t.criteria}\n\n` : "") +
+              `Submitted by ${t.submitted_by}:\n${t.evidence || "(no evidence)"}`;
+            if (!confirm(msg)) return;
+          } else {
+            reason = prompt(`Reject ${t.id}: what is wrong? ` +
+                            `(${t.submitted_by} reads this)`, "");
+            if (!reason) return;
+          }
+          try {
+            await api(`/v1/projects/${p.name}/tasks/${t.id}/verdict`,
+              { method: "POST",
+                body: { verdict: accept ? "accept" : "reject", reason } });
+            await loadTasks(p.name);
+            await loadProjects();
+          } catch (err) { alert(err.message); }
+        };
+        const ok = el("button", "btn", "Accept");
+        const no = el("button", "btn", "Reject");
+        [ok, no].forEach(b => b.style.cssText =
+          "padding:0 6px;font-size:10px;line-height:14px");
+        ok.title = "Accept the submission: the task is done";
+        no.title = "Send it back to its builder with a reason";
+        ok.addEventListener("click", e => { e.stopPropagation(); verdict(true); });
+        no.addEventListener("click", e => { e.stopPropagation(); verdict(false); });
+        tr.appendChild(ok);
+        tr.appendChild(no);
+      }
 
       /* Run the task. The route has always existed and the tree has
          always shown the jobs it produces -- there was simply no gesture
          to start one, so "run this task" meant leaving the desktop for
          curl. A task the agent is already working on is not offered the
          button; a finished one is, because re-running a done task is a
-         normal thing to want. */
-      if (t.status !== "active") {
+         normal thing to want. Nor is one waiting for a verdict: running
+         it again answers a question nobody asked. */
+      if (t.status !== "active" && t.status !== "review") {
         const run = el("button", "btn", "Run");
         run.title = "Hand this task to PasClaw and watch the job log";
         run.style.cssText = "padding:0 6px;font-size:10px;line-height:14px";
@@ -3734,17 +3953,33 @@ function paintTree() {
       }
 
       tr.addEventListener("click", async () => {
-        if (!t.jobs) return;
+        if (!hasDetail) return;
         t.__open = !t.__open;
-        if (t.__open && !t.__jobs) {
-          const j = await api(`/v1/projects/${p.name}/tasks/${t.id}/jobs`);
-          t.__jobs = j.jobs || [];
-        }
+        if (t.__open && !t.__jobs) await loadTaskDetail(p.name, t);
         paintTree();
       });
       tree.appendChild(tr);
 
       if (!t.__open) return;
+      /* The detail: what the work is held to, what was claimed, what
+         was decided -- then the runs, then who did what (the receipts). */
+      const detail = (cls, text) => {
+        const d = el("div", "node " + cls);
+        d.style.cssText = "padding-left:36px;white-space:pre-wrap;align-items:flex-start";
+        d.appendChild(el("span", null, text));
+        tree.appendChild(d);
+      };
+      if (t.criteria) detail("muted", "criteria:\n" + t.criteria);
+      if (t.submitted_at)
+        detail(t.status === "review" ? "st-review" : "muted",
+               `submitted by ${t.submitted_by} ${t.submitted_at}` +
+               (t.submitted_job ? ` (job ${t.submitted_job})` : "") +
+               (t.evidence ? ":\n" + t.evidence : ""));
+      if (t.verdict)
+        detail(t.verdict === "reject" ? "st-blocked" : "muted",
+               `${t.verdict === "accept" ? "accepted" : "rejected"} by ` +
+               `${t.verdict_by} ${t.verdict_at}` +
+               (t.verdict_note ? ":\n" + t.verdict_note : ""));
       (t.__jobs || []).forEach(job => {
         const jr = el("div", "node");
         jr.style.paddingLeft = "36px";
@@ -3754,6 +3989,13 @@ function paintTree() {
           job.id + "  " + job.status + (job.summary ? " -- " + job.summary : "")));
         jr.addEventListener("dblclick", () => openJobLog(p.name, t.id, job.id));
         tree.appendChild(jr);
+      });
+      (t.__activity || []).forEach(ev => {
+        const extra = ev.reason || ev.note ||
+          (ev.event === "assign" ? "-> " + (ev.to || "nobody") :
+           ev.from || ev.to ? `${ev.from || ""} -> ${ev.to || ""}` : "");
+        detail("muted", `${(ev.at || "").replace("T", " ").replace("Z", "")}  ` +
+               `${ev.event}  ${ev.by}${extra ? "  " + extra : ""}`);
       });
     });
 
@@ -3798,10 +4040,20 @@ async function loadTasks(project) {
   st.tasks = j.tasks || [];
   await Promise.all(st.tasks.filter(t => wasOpen.has(t.id)).map(async t => {
     t.__open = true;
-    try {
-      t.__jobs = (await api(`/v1/projects/${project}/tasks/${t.id}/jobs`)).jobs || [];
-    } catch { t.__jobs = []; }
+    await loadTaskDetail(project, t);
   }));
+}
+
+/* What an expanded task row shows below itself: its jobs, and its
+   history from the board's activity log. */
+async function loadTaskDetail(project, t) {
+  try {
+    t.__jobs = (await api(`/v1/projects/${project}/tasks/${t.id}/jobs`)).jobs || [];
+  } catch { t.__jobs = []; }
+  try {
+    t.__activity = (await api(
+      `/v1/projects/${project}/activity?task=${t.id}&limit=20`)).events || [];
+  } catch { t.__activity = []; }
 }
 
 async function newProject() {
@@ -3871,6 +4123,16 @@ function mirrorChecklist(project, argsStr) {
       const wanted = items.filter(
         it => !seen.has(it.title) && seen.add(it.title));
 
+      /* On a board that requires review, the checklist only ADDS tasks.
+         These PATCHes go out as the operator -- the route cannot tell this
+         page's mirror from your click -- so ticking an item would let the
+         model close its own work past the review it is held to. Status
+         there moves by submit and verdict. And a task already in review
+         is never touched by the mirror on any board: neither "done" (that
+         is the verdict's) nor "todo" (that would pull it out of review). */
+      const proj = (S.projects || []).find(x => x.name === project);
+      const reviewed = !!(proj && proj.review);
+
       /* allSettled, not all: Promise.all rejects the moment ONE write
          fails, which would release this project's queue while the other
          writes were still in flight -- and the next reconcile would then
@@ -3885,9 +4147,11 @@ function mirrorChecklist(project, argsStr) {
           const made = await api(`/v1/projects/${project}/tasks`,
             { method: "POST", body: { title: it.title } });
           have.set(it.title, { id: made.id, status: "todo" });
-          if (it.done)
+          if (it.done && !reviewed)
             await api(`/v1/projects/${project}/tasks/${made.id}`,
               { method: "PATCH", body: { status: "done" } });
+        } else if (reviewed || t.status === "review") {
+          /* see above: status is not the mirror's to move here */
         } else if (it.done && t.status !== "done") {
           await api(`/v1/projects/${project}/tasks/${t.id}`,
             { method: "PATCH", body: { status: "done" } });

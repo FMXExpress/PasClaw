@@ -100,7 +100,8 @@ uses
   PasClaw.Providers.HTTP,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
-  PasClaw.Identity;
+  PasClaw.Identity,
+  PasClaw.Decisions;  { HandleDecisionReply -- "D12 yes" }
 
 const
   SYNC_TIMEOUT_MS = 30000;
@@ -410,10 +411,17 @@ begin
   LoopCfg.OnToolCall    := nil;
   LoopCfg.OnToolResult  := nil;
 
-  if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
-    Response := Loop.Content
-  else
-    Response := '(sorry -- model returned no content)';
+  { "D12 yes" answers the operator's decision (PasClaw.Decisions) rather
+    than starting a turn -- and only from a sender decisions.answer_from
+    names, which HandleDecisionReply checks. }
+  if not HandleDecisionReply(Body, CanonicalOf(LoopCfg.Identity),
+                             FCfg.DecisionsAnswerFrom, Response) then
+  begin
+    if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
+      Response := Loop.Content
+    else
+      Response := '(sorry -- model returned no content)';
+  end;
 
   PostSend(RoomId, Response);
 end;
