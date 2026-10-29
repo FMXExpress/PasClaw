@@ -1362,6 +1362,14 @@ test-progress-ledger: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/progress_ledger_tests.pas -o$(BUILDDIR)/progress_ledger_tests
 	@$(BUILDDIR)/progress_ledger_tests
 
+# A recorded team run, replayed through the real gateway (bench/teamboard):
+# the duo team's answers from a live run sent the instant each job arrives,
+# so the wall clock is the harness's -- handoff waits, calls, request bytes.
+# Not part of `make test` (spawns `pasclaw serve` on port 8300); run when
+# touching the team tick, the board's notices or the task tool.
+bench-teamboard: $(BIN)
+	@python3 bench/teamboard/replay.py --bin $(BIN)
+
 # Deterministic agent-loop harness bench (bench/agentloop) -- pure FPC, no
 # external runtime. Spawns the built binary, plays the scripted model over
 # the relay, asserts on what the loop did. Not part of `make test` (binds a

@@ -126,7 +126,15 @@ question becomes a decision on the desktop's **Needs you** and, when
 mailbox. See [teams](./teams.md#needs-you-one-queue-for-your-calls).
 
 `list` and `get` report **live** `busy` and `pending` alongside the stored
-fields — a roster without those is a list of names.
+fields — a roster without those is a list of names. `list` carries each
+role's **first line** only ("You are the 10x Developer of a small software
+team, reporting to the Foreman."); `get` has the whole role. A role prompt
+is kilobytes, and a roster read to find out who is who carried all of
+them.
+
+`send` takes `name` and `text`, and also `to` and `message` — the names a
+model reaches for, and the ones its result answers with. A send missing
+either says which fields it needs.
 
 Deliberately **not** in the tool: starting a turn on another agent's
 behalf. Delivery and execution are different questions, and an agent that

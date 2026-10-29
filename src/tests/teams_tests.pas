@@ -333,6 +333,12 @@ begin
              'kickoff queued to boss');
   Out_ := Tool_Task('{"action":"update","project":"' + Proj + '","id":"' +
                     TaskId + '","assignee":"worker"}', Err);
+  { Handing a task over tells its new owner -- mid and worker each got
+    "assigned to you" above. That is mail, a wake reason of its own; read
+    it, as their next turn would, so what is left is the board's reason. }
+  AssertTrue(AgentPending('worker') > 0, 'the new owner was told');
+  ClearSteering(AgentSessionId('mid'));
+  ClearSteering(AgentSessionId('worker'));
 
   Wakes := TeamWakeDecisions(S);
   AssertEqInt(Length(Wakes), 3, 'a decision per wake-list agent');

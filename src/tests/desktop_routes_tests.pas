@@ -30,6 +30,8 @@ uses
   PasClaw.Apps.Runner,
   PasClaw.Desktop.Events,
   PasClaw.Decisions,
+  PasClaw.Agents,
+  PasClaw.Teams,
   PasClaw.Gateway.Desktop;
 
 var
@@ -338,6 +340,71 @@ end;
 (* The operator's queue over HTTP: decisions listed and answered, and
    /v1/needs-you gathering open decisions with the reviews no agent can
    give. *)
+(* The tick's reports ride the cadence, not the mail. A stall report is
+   itself mail, and mail makes a team due -- so a report sent on every
+   due pass was sent again on the next one, and the next, for as long as
+   the lead had not acted: every 30 seconds, and every second once mail
+   ends the tick's sleep. *)
+procedure TestTickReportsOnCadence;
+var
+  Info: TAgentInfo;
+  S: TTeamState;
+  Err, Path: string;
+  Obj: TJsonObject;
+  First, Second: Integer;
+  Stamp: string;
+begin
+  WriteLn('-- the tick reports a stall once per cadence, not once per pass');
+  Info := Default(TAgentInfo);
+  Info.Name := 'tp-lead'; Info.Role := 'r';
+  SaveAgent(Info, Err);
+  Info.Name := 'tp-dev'; Info.Parent := 'tp-lead';
+  SaveAgent(Info, Err);
+  ForceDirectories(WorkspaceSubdir('teams'));
+  WriteFileText(JoinPath(WorkspaceSubdir('teams'), 'tick-team.json'),
+    '{"name":"tick-team","agents":[{"name":"tp-lead","role":"r"},' +
+    '{"name":"tp-dev","role":"r","parent":"tp-lead"}]}');
+  CreateProject('Tick Board', 'tick-board', '', Err);
+  CreateTask('tick-board', 'Nobody owns this', '', Err);
+  Path := JoinPath(TaskDir('tick-board', 'T0001'), 'task.json');
+  Obj := TJsonObject.Parse(ReadFileText(Path));
+  try
+    Obj.PutStr('updated', '2000-01-01T00:00:00Z');
+    WriteFileText(Path, Obj.ToJSON);
+  finally
+    Obj.Free;
+  end;
+  S := Default(TTeamState);
+  S.Name := 'tick-team';
+  S.Project := 'tick-board';
+  S.Enabled := True;
+  S.WakeMinutes := 15;
+  SetLength(S.WakeWho, 2);
+  S.WakeWho[0] := 'tp-lead';
+  S.WakeWho[1] := 'tp-dev';
+  ExpectTrue(SaveTeamState(S, Err), 'the tick team is up: ' + Err);
+  while WaitForAgentMail(0) do ;   { whatever earlier tests sent }
+
+  TeamTickPass;
+  First := AgentPending('tp-lead');
+  ExpectTrue(First = 1, Format('the due pass reports the unowned task to the lead ' +
+                               '(pending %d)', [First]));
+  LoadTeamState('tick-team', S);
+  Stamp := S.LastTick;
+  ExpectTrue(Stamp <> '', 'the cadence pass stamps the clock');
+  ExpectTrue(WaitForAgentMail(0), 'the report signalled the tick: mail for an idle agent');
+  ExpectTrue(not WaitForAgentMail(0), 'one burst of mail, one signal');
+  Sleep(1100);   { second-resolution stamps: a re-stamp would now differ }
+  TeamTickPass;
+  Second := AgentPending('tp-lead');
+  ExpectTrue(Second = First, Format('a pass the waiting report made due does not ' +
+                                    'send it again (pending %d, was %d)', [Second, First]));
+  LoadTeamState('tick-team', S);
+  ExpectStr(S.LastTick, Stamp, 'and does not move the cadence clock');
+  S.Enabled := False;
+  SaveTeamState(S, Err);
+end;
+
 procedure TestDecisionRoutes;
 var
   Err, Id: string;
@@ -582,6 +649,7 @@ begin
 
   TestReviewRoutes;
   TestDecisionRoutes;
+  TestTickReportsOnCadence;
 
   { ----------------------------------------------------------------- jobs -- }
   ExpectStatus('GET', '/v1/projects/spam-filter/tasks/T0001/jobs', '', 200, 'list jobs');

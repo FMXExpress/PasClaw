@@ -944,6 +944,7 @@ var
   Wakes: TWakeReasonArray;
   Stalls: TStringArray;
   I, J: Integer;
+  Cadence: Boolean;
   Err: string;
 begin
   { The brake, checked once at the top: a paused system starts nothing,
@@ -957,7 +958,8 @@ begin
        on the same task"; waiting MAIL skips it, because a colleague
        is blocked on the answer and nothing about the delay makes the
        answer better. *)
-    if not (TeamTickDue(S) or TeamHasWaitingMail(S)) then Continue;
+    Cadence := TeamTickDue(S);
+    if not (Cadence or TeamHasWaitingMail(S)) then Continue;
     if not FindTeamTemplate(S.Name, T) then
     begin
       LogInfo('team %s: template gone -- parking', [S.Name]);
@@ -986,9 +988,16 @@ begin
     Stalls := TeamExpireLeases(T, S);
     for J := 0 to High(Stalls) do
       LogInfo('team %s: lease expired %s', [S.Name, Stalls[J]]);
-    Stalls := TeamStallMessages(T, S);
-    for J := 0 to High(Stalls) do
-      LogDebug('team %s: stall %s', [S.Name, Stalls[J]]);
+    (* Reports ride the cadence, never the mail. A stall report is itself
+       mail, and mail makes the team due -- so a report sent on every due
+       pass was sent again on the next one, and the next, for as long as
+       the lead had not acted on it. *)
+    if Cadence then
+    begin
+      Stalls := TeamStallMessages(T, S);
+      for J := 0 to High(Stalls) do
+        LogDebug('team %s: stall %s', [S.Name, Stalls[J]]);
+    end;
 
     { 3. Wake agents that have a reason to run -- at most one run each
         per tick; the runner's own cap bounds the total. }
@@ -1002,21 +1011,25 @@ begin
           LogDebug('team %s: could not wake %s: %s', [S.Name, Wakes[J].Agent, Err]);
       end;
 
-    { 4. A board that stays done parks the team. }
-    if TeamBoardDone(S.Project) then
+    { 4. A board that stays done parks the team. Counted, like the
+        cadence itself, on cadence passes only: a pass that mail brought
+        forward is not a tick, and must not push the next one back. }
+    if Cadence then
     begin
-      Inc(S.DoneTicks);
-      if S.DoneTicks >= 2 then
+      if TeamBoardDone(S.Project) then
       begin
-        LogInfo('team %s: board done for %d ticks -- parking', [S.Name, S.DoneTicks]);
-        S.Enabled := False;
-      end;
-    end
-    else
-      S.DoneTicks := 0;
-
-    S.LastTick := NowIsoUtc;
-    SaveTeamState(S, Err);
+        Inc(S.DoneTicks);
+        if S.DoneTicks >= 2 then
+        begin
+          LogInfo('team %s: board done for %d ticks -- parking', [S.Name, S.DoneTicks]);
+          S.Enabled := False;
+        end;
+      end
+      else
+        S.DoneTicks := 0;
+      S.LastTick := NowIsoUtc;
+      SaveTeamState(S, Err);
+    end;
   end;
 end;
 

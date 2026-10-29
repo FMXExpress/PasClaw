@@ -7384,18 +7384,29 @@ end;
 
 procedure TTeamTickThread.Execute;
 var
-  I: Integer;
+  LastClock: TDateTime;
+  Mail: Boolean;
 begin
+  LastClock := Now;
   while not Terminated do
   begin
-    { Sleep in small slices so Stop is honoured promptly. }
-    for I := 1 to 30 do
-    begin
-      if Terminated then Exit;
-      Sleep(1000);
-    end;
+    (* Wait in one-second slices so Stop is honoured promptly -- and stop
+       waiting when mail is queued for an idle agent. Mail makes a team
+       due without its cadence, and a handoff that then sat out the rest
+       of a 30-second sleep spent most of its time here: 2-30 s per
+       handoff, 43% of a live run's wall clock (bench/teamboard/LIVE.md). *)
+    Mail := False;
+    while (not Terminated) and (MilliSecondsBetween(Now, LastClock) < 30000) do
+      if WaitForAgentMail(1000) then
+      begin
+        Mail := True;
+        Break;
+      end;
+    if Terminated then Exit;
+    if not Mail then LastClock := Now;
     if GDesktopGateway = nil then Continue;
-    { Prompt-cache keep-alive rides the same 30 s clock. }
+    { Prompt-cache keep-alive rides the 30 s clock, not the mail. }
+    if not Mail then
     try
       WarmTick(GDesktopGateway.FCfg.PromptCache.Warm);
     except
@@ -7408,6 +7419,9 @@ begin
       on E: Exception do
         LogWarn('team tick: %s: %s', [E.ClassName, E.Message]);
     end;
+    { At most one mail-driven pass a second: a pass that itself sends
+      mail (a supervisor's restart note) must not spin. }
+    if Mail then Sleep(1000);
   end;
 end;
 

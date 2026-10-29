@@ -159,6 +159,14 @@ function AgentMessages(const Name: string; Limit: Integer): TAgentMessageArray;
 { How many messages are queued but not yet seen by the agent. }
 function AgentPending(const Name: string): Integer;
 
+(* Wait up to TimeoutMs for a message to be queued for an idle agent --
+   the moment a team becomes due by mail. True when one was (and the
+   signal is consumed). The gateway's team tick waits on this between
+   its passes instead of sleeping: mail skips the team's cadence, and it
+   was still waiting out the tick's 30-second sleep, which was most of
+   every handoff (bench/teamboard/LIVE.md). *)
+function WaitForAgentMail(TimeoutMs: Cardinal): Boolean;
+
 { ---- run state (Phase 3) ---- }
 
 (* Record that a run began / ended. Written to the manifest so it
@@ -242,6 +250,36 @@ uses
   PasClaw.Workspaces,
   PasClaw.Agent.Steering,
   PasClaw.Session.Store;
+
+var
+  { Auto-reset: one wait consumes one burst of mail. Made on first use --
+    see MailEvent. }
+  GMailArrived: TEvent = nil;
+  GMailNoEvent: Boolean = False;
+  GMailLock: TCriticalSection;
+
+(* The event, made on first use rather than at unit start: on FPC/Linux an
+   OS event needs the thread manager, and a program that links this unit
+   without cthreads -- several single-threaded test programs do -- would
+   die before main. Where it cannot be made there is no signal: the tick
+   sleeps its slices, as it always did. *)
+function MailEvent: TEvent;
+begin
+  Result := GMailArrived;
+  if (Result <> nil) or GMailNoEvent then Exit;
+  GMailLock.Enter;
+  try
+    if (GMailArrived = nil) and not GMailNoEvent then
+    try
+      GMailArrived := TEvent.Create(nil, False, False, '');
+    except
+      GMailNoEvent := True;
+    end;
+    Result := GMailArrived;
+  finally
+    GMailLock.Leave;
+  end;
+end;
 
 const
   MaxAgentName = 64;
@@ -618,6 +656,9 @@ begin
     Exit;
   end;
   LogInfo('agents: %s -> %s (%s)', [Msg.From, Info.Name, Delivered]);
+  { A running agent sees it between tool calls; only an idle one needs
+    its team's tick to start a turn. }
+  if (Delivered = 'queued') and (MailEvent <> nil) then MailEvent.SetEvent;
   (* Tell the screens. The roster and the agent-chat window subscribe to
      this event and deliberately do not poll, so without it a message
      from another agent, a supervisor, or an HTTP client changed the
@@ -630,6 +671,19 @@ begin
      caller someone adds. *)
   PublishAgent(Info.Name);
   Result := True;
+end;
+
+function WaitForAgentMail(TimeoutMs: Cardinal): Boolean;
+var
+  E: TEvent;
+begin
+  E := MailEvent;
+  if E = nil then
+  begin
+    Sleep(TimeoutMs);
+    Exit(False);
+  end;
+  Result := E.WaitFor(TimeoutMs) = wrSignaled;
 end;
 
 function AgentMessages(const Name: string; Limit: Integer): TAgentMessageArray;
@@ -946,5 +1000,12 @@ begin
   if Info.Parent = '' then Exit;
   Result := AgentSend(Info.Parent, Name, Text, Delivered, Err);
 end;
+
+initialization
+  GMailLock := TCriticalSection.Create;
+
+finalization
+  GMailArrived.Free;
+  GMailLock.Free;
 
 end.

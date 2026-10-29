@@ -92,7 +92,10 @@ tool only to *show* the result.
    Same rule the desktop's Ask path has always used, now server-side so
    a team and a hand-built app name things alike. The full goal is kept
    as the project's description.
-3. **Sends the kickoff** to the lead, goal or board named.
+3. **Sends the kickoff** to the lead, goal or board named — and the team
+   by the names tasks are assigned to (`foreman (Foreman), dev (10x
+   Developer, reports to foreman)`). Without it the lead's first call
+   was `agent list`, which carried every agent's role prompt.
 4. **Starts the lead's first run**, so something happens in seconds.
 5. **Writes the team's state file**, which is what the wake loop reads.
 6. **Turns review on for the board** (unless the template opts out), with
@@ -106,10 +109,24 @@ a template that pinned a model name would go stale the day the name did.
 ## Tasks have owners
 
 Tasks carry an `assignee` (an agent slug). The Foreman sets it through
-the `task` tool; the board shows `@dev` on the row. This is not
-decoration — it is how the wake loop knows who has work, and how two
-workers avoid grabbing the same task. A handover said only in a message
-is invisible to everything else.
+the `task` tool — on `create` or on `update`; the board shows `@dev` on
+the row. This is not decoration — it is how the wake loop knows who has
+work, and how two workers avoid grabbing the same task. A handover said
+only in a message is invisible to everything else.
+
+**The board tells the new owner.** Assigning a task someone can start
+messages them ("T0003 … is assigned to you by foreman"), so the handoff
+is mail and the team is due on the next tick. A task that still waits
+on other work is not news yet — its owner hears when the last of it is
+done. Taking a task yourself (`next`, or assigning yourself) tells
+nobody. The lead no longer messages assignees as well.
+
+**Notes are added to, not replaced.** Every role is told to describe what
+changed in the task notes; an agent's note now lands under its name
+(`[dev] Wrote main.py; running it next.`) after the lead's brief instead
+of erasing it. The operator's edit on the desktop still replaces — that
+is an editor. The board listing keeps the start and the end of a long
+trail (`[... 1000 chars ...]`); the task keeps all of it.
 
 ## Review: the board holds the rule
 
@@ -289,14 +306,18 @@ not a sandbox.
 
 ## The wake loop
 
-The gateway ticks every 30 seconds and, for each team whose own cadence
-is due (`wake_minutes`, default 15):
+The gateway ticks every 30 seconds — and within a second of mail for an
+idle agent — and, for each team whose own cadence is due (`wake_minutes`,
+default 15) or that has mail waiting:
 
 - **supervises** — restarts runs whose process died;
 - **reports stalls to the lead** — a task active with no progress for
   two cadences, whose owner is idle, produces a message to the
   *Foreman*, not another poke at the stuck worker. Waking a stuck worker
-  repeats the stall; telling its manager is what unsticks it;
+  repeats the stall; telling its manager is what unsticks it. So does
+  **ready work nobody owns** on a board with no takers, after one
+  cadence: nothing else would ever say so, because no owner is idle on
+  it (a [live run](../bench/teamboard/LIVE.md) stalled exactly there);
 - **hands back expired claims** — see *Leases* below;
 - **wakes agents that have a reason to run** — pending messages, *ready*
   tasks assigned to them, ready unassigned work for an agent that takes
@@ -319,14 +340,25 @@ new has happened. A *message* is the opposite: new information, from a
 colleague now waiting on the answer. Making it wait out the cadence
 meant a lead delegated and the whole team sat still for fifteen minutes,
 with the handoff — the entire point of having a team — the slowest thing
-in the system. So a team with mail waiting is due immediately.
+in the system. So a team with mail waiting is due immediately — and
+"immediately" means it: queueing mail for an idle agent signals the tick,
+which runs within a second rather than at its next 30-second slice (that
+slice was most of every handoff in a [live run](../bench/teamboard/LIVE.md):
+the same 29 answers took 180 s through the 30-second tick and about 5 s
+through the signalled one). Mail queued by another process — the CLI's
+kickoff — still waits for the next slice. A pass that mail brought forward
+is not a tick: stall
+reports, the done-board count and the cadence clock move only on cadence
+passes, or a stall report — itself mail — would re-send itself on every
+pass until the lead acted.
 
 **Work that waits on other work says so.** A task's `waits_on` lists the
 tasks it needs (`task action=update waits_on=["T0002"]`). It is
 **ready** when every one of them is done — computed, not stored, so it
 cannot go stale — and only a ready task wakes its owner. When the last
 prerequisite closes, the board messages the dependent's owner, which
-makes the team due on the next tick. An edge to a task not on the board,
+makes the team due on the next tick — or, when it has no owner and the
+board no takers, the lead, whose job is to hand it out. An edge to a task not on the board,
 to itself, or one that would close a cycle is refused when it is set.
 `blocked` stays for waits outside the board ("needs the operator's API
 key"). The Foreman stops being the scheduler: nobody has to remember to
@@ -470,7 +502,8 @@ Teams need two model-facing flags that are off by default:
 ```
 
 The first lets the team manage its task board, the second lets members
-message each other. `team up` **warns** when either is off and names it,
+message each other. `team up` — **New team…** on the desktop and
+`pasclaw team up` alike — **warns** when either is off and names it,
 rather than seeding a team that cannot reach its own board — which
 looks like model stupidity and is not.
 

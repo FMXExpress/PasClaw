@@ -325,8 +325,9 @@ begin
   CreateProject('Notify', 'notify', '', Err);
   Pre := CreateTask('notify', 'Prerequisite', '', Err);
   Dep := CreateTask('notify', 'Dependent', '', Err);
-  UpdateTask('notify', Dep, '', '-', '', Err, 'n-dev');
+  { The edge first: assigned while it waits, the owner is not told yet. }
   SetTaskWaitsOn('notify', Dep, Names([Pre]), 'n-lead', Err);
+  UpdateTask('notify', Dep, '', '-', '', Err, 'n-dev');
 
   S := Default(TTeamState);
   S.Name := 'notify-team';
@@ -750,6 +751,155 @@ begin
   SetCallingAgent('');
 end;
 
+{ ------------------------------------------------------------ handoffs -- }
+
+(* What a live run of the duo team found (bench/teamboard/LIVE.md): a lead
+   that passed "assignee" on create had it dropped, its developer was told
+   nothing was ready, and the next task -- ready, unowned, on a board with
+   no takers -- stalled with nobody woken. Handing work over is now one
+   move that reaches the new owner, and work nobody owns reaches the
+   lead. *)
+procedure TestHandoffs;
+var
+  Err, Out_, T1, T2, T3: string;
+  Mail, LeadMail: Integer;
+  T: TTeamTemplate;
+  S: TTeamState;
+  Msgs: TAgentMessageArray;
+  Stalls: TStringArray;
+  Path: string;
+  Obj: TJsonObject;
+  Info: TTaskInfo;
+  I: Integer;
+  Found: Boolean;
+begin
+  WriteLn('-- handoffs: assign on create, the owner hears, unowned work reaches the lead');
+  MakeAgent('h-lead', '');
+  MakeAgent('h-dev', 'h-lead');
+  CreateProject('Handoff', 'handoff', '', Err);
+  ForceDirectories(WorkspaceSubdir('teams'));
+  WriteFileText(JoinPath(WorkspaceSubdir('teams'), 'handoff-team.json'),
+    '{"name":"handoff-team","agents":[{"name":"h-lead","title":"Lead","role":"r"},' +
+    '{"name":"h-dev","title":"Dev","role":"r","parent":"h-lead"}]}');
+  AssertTrue(FindTeamTemplate('handoff-team', T), 'the handoff team template is found');
+  S := Default(TTeamState);
+  S.Name := 'handoff-team';
+  S.Project := 'handoff';
+  S.Enabled := True;
+  S.WakeMinutes := 15;
+  S.WakeWho := Names(['h-lead', 'h-dev']);
+  AssertTrue(SaveTeamState(S, Err), 'the team is up on the board: ' + Err);
+
+  AssertContains(TeamKickoffText(T, 'ship it', 'handoff'),
+                 'h-lead (Lead), h-dev (Dev, reports to h-lead)',
+                 'the kickoff names the team by the names the board takes');
+
+  SetCallingAgent('h-lead');
+  Mail := AgentPending('h-dev');
+  Out_ := Tool_Task('{"action":"create","project":"handoff","title":"Build",' +
+                    '"assignee":"h-dev","notes":"Output: one line per file."}', Err);
+  T1 := 'T0001';
+  AssertContains(Out_, '(assigned to h-dev)', 'create takes the assignee, and says so');
+  AssertEqStr(Task_('handoff', T1).Assignee, 'h-dev', 'the assignee is on the task');
+  AssertTrue(AgentPending('h-dev') = Mail + 1, 'the new owner is told');
+  Msgs := AgentMessages('h-dev', 1);
+  AssertTrue((Length(Msgs) = 1) and (Pos('assigned to you by h-lead', Msgs[0].Text) > 0),
+             'that it is theirs, and by whom');
+
+  Mail := AgentPending('h-dev');
+  Out_ := Tool_Task('{"action":"create","project":"handoff","title":"Test",' +
+                    '"assignee":"h-dev","waits_on":["T0001"]}', Err);
+  T2 := 'T0002';
+  AssertContains(Out_, 'waits on T0001', 'a task can be created waiting and assigned at once');
+  AssertTrue(AgentPending('h-dev') = Mail,
+             'but its owner is not told before it can be started');
+
+  { The owner's progress note joins the brief instead of replacing it. }
+  SetCallingAgent('h-dev');
+  Tool_Task('{"action":"update","project":"handoff","id":"T0001",' +
+            '"notes":"Wrote main.py; running it next."}', Err);
+  Info := Task_('handoff', T1);
+  AssertContains(Info.Notes, 'Output: one line per file.', 'the lead''s brief survives a progress note');
+  AssertContains(Info.Notes, '[h-dev] Wrote main.py', 'and the note is added under its author');
+  Mail := AgentPending('h-dev');
+  Tool_Task('{"action":"create","project":"handoff","title":"Mine"}', Err);
+  T3 := 'T0003';
+  Tool_Task('{"action":"update","project":"handoff","id":"T0003","assignee":"h-dev"}', Err);
+  AssertTrue(AgentPending('h-dev') = Mail, 'taking a task yourself is not news to you');
+  SetCallingAgent('');
+  Tool_Task('{"action":"update","project":"handoff","id":"T0003","notes":"replaced"}', Err);
+  AssertEqStr(Task_('handoff', T3).Notes, 'replaced', 'a turn that is no agent''s still replaces');
+
+  { A long trail of notes is cut in the listing, not in the record. }
+  UpdateTask('handoff', T3, '', StringOfChar('a', 400) + StringOfChar('b', 800) +
+             StringOfChar('c', 400), '', Err);
+  Out_ := Tool_Task('{"action":"list","project":"handoff"}', Err);
+  AssertContains(Out_, ' [... 1000 chars ...] ', 'the listing keeps the brief and the latest word');
+  AssertTrue(Pos(StringOfChar('b', 400), Out_) = 0, 'and leaves the middle out');
+  AssertTrue(Length(Task_('handoff', T3).Notes) = 1600, 'the task keeps all of it');
+
+  { Ready work nobody owns, on a board with no takers. }
+  UpdateTask('handoff', T2, '', '-', '', Err, '');
+  LeadMail := AgentPending('h-lead');
+  UpdateTask('handoff', T1, '', '-', 'done', Err);
+  AssertTrue(AgentPending('h-lead') = LeadMail + 1,
+             'closing what an unowned task waited on tells the lead');
+  Msgs := AgentMessages('h-lead', 1);
+  AssertTrue((Length(Msgs) = 1) and (Pos('nobody owns it', Msgs[0].Text) > 0) and
+             (Pos('T0002', Msgs[0].Text) > 0), 'which task, and that it needs an owner');
+
+  Stalls := TeamStallMessages(T, S);
+  AssertTrue(Length(Stalls) = 0, 'not the tick that finds it fresh');
+  Path := JoinPath(TaskDir('handoff', T2), 'task.json');
+  Obj := TJsonObject.Parse(ReadFileText(Path));
+  try
+    Obj.PutStr('updated', '2000-01-01T00:00:00Z');
+    WriteFileText(Path, Obj.ToJSON);
+  finally
+    Obj.Free;
+  end;
+  LeadMail := AgentPending('h-lead');
+  Stalls := TeamStallMessages(T, S);
+  Found := False;
+  for I := 0 to High(Stalls) do
+    if Stalls[I] = 'T0002 (unowned) -> h-lead' then Found := True;
+  AssertTrue(Found, 'a cadence later the tick reports it to the lead');
+  AssertTrue(AgentPending('h-lead') = LeadMail + 1, 'in the lead''s mailbox');
+
+  SetProjectTakers('handoff', Names(['h-dev']), Err);
+  Stalls := TeamStallMessages(T, S);
+  Found := False;
+  for I := 0 to High(Stalls) do
+    if Pos('unowned', Stalls[I]) > 0 then Found := True;
+  AssertTrue(not Found, 'a board with takers offers it to them instead');
+  SetProjectTakers('handoff', nil, Err);
+end;
+
+procedure TestAgentToolShapes;
+var
+  Err, Out_: string;
+  Info: TAgentInfo;
+begin
+  WriteLn('-- the agent tool: the field names a model reaches for, a lean roster');
+  Info := Default(TAgentInfo);
+  Info.Name := 's-one';
+  Info.Role := 'You are the one who checks.'#10'Here is a page of how you work.';
+  SaveAgent(Info, Err);
+  SetCallingAgent('s-one');
+  Out_ := Tool_Agent('{"action":"send","to":"h-lead","message":"hello"}', Err);
+  AssertContains(Out_, '"delivered"', '"to" and "message" send: ' + Err);
+  Tool_Agent('{"action":"send","name":"h-lead"}', Err);
+  AssertContains(Err, '"name" (the agent to message) and "text"',
+                 'a send with nothing to say names the fields');
+  SetCallingAgent('');
+  Out_ := Tool_Agent('{"action":"list"}', Err);
+  AssertContains(Out_, '"role" : "You are the one who checks."',
+                 'the roster carries each role''s first line');
+  AssertTrue(Pos('a page of how you work', Out_) = 0, 'and not the rest of it');
+  Out_ := Tool_Agent('{"action":"get","name":"s-one"}', Err);
+  AssertContains(Out_, 'a page of how you work', 'get has the whole role');
+end;
+
 begin
   TestWaitsOn;
   TestNext;
@@ -757,6 +907,8 @@ begin
   TestLeases;
   TestNotifyAndWake;
   TestTool;
+  TestHandoffs;
+  TestAgentToolShapes;
   TestDecisionStore;
   TestAskOperator;
   TestRules;
