@@ -4097,9 +4097,19 @@ async function taskForm(project, task) {
   if (w.__wired) { restoreWindow(w); focusWindow(w); return; }
   w.__wired = true;
 
+  /* A lookup that fails must not read as "nobody" and "nothing": the form
+     would show the task with no owner and no prerequisites, and Save would
+     send those as edits -- unassigning it and making waiting work ready.
+     So the task's own values are always offered, marked when they could
+     not be checked, and a failed lookup is said. */
   let agents = [], tasks = [];
-  try { agents = (await api("/v1/agents")).agents || []; } catch {}
-  try { tasks = (await api(`/v1/projects/${project}/tasks`)).tasks || []; } catch {}
+  const unloaded = [];
+  try { agents = (await api("/v1/agents")).agents || []; }
+  catch { unloaded.push("the agent list"); }
+  try { tasks = (await api(`/v1/projects/${project}/tasks`)).tasks || []; }
+  catch { unloaded.push("the board"); }
+  const rosterOk = !unloaded.includes("the agent list");
+  const boardOk = !unloaded.includes("the board");
 
   const wrap = el("div");
   wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;padding:8px";
@@ -4124,7 +4134,15 @@ async function taskForm(project, task) {
     o.value = a.name;
     owner.appendChild(o);
   });
-  if (task && task.assignee) owner.value = task.assignee;
+  if (task && task.assignee) {
+    if (!agents.some(a => a.name === task.assignee)) {
+      const o = el("option", null, task.assignee +
+        (rosterOk ? "  (not on the roster)" : "  (roster not loaded)"));
+      o.value = task.assignee;
+      owner.appendChild(o);
+    }
+    owner.value = task.assignee;
+  }
   wrap.appendChild(owner);
 
   label("Acceptance checks -- one per line; the verdict is given against these");
@@ -4153,12 +4171,29 @@ async function taskForm(project, task) {
     boxes.push(cb);
     waits.appendChild(row);
   });
-  if (!boxes.length) waits.appendChild(el("span", "muted", "(no other tasks)"));
+  [...had].filter(id => !tasks.some(t => t.id === id)).forEach(id => {
+    const row = el("label");
+    row.style.cssText = "display:flex;gap:4px;align-items:center";
+    const cb = el("input");
+    cb.type = "checkbox";
+    cb.value = id;
+    cb.checked = true;
+    row.appendChild(cb);
+    row.appendChild(el("span", "muted",
+      id + (boardOk ? "  (not on the board)" : "  (board not loaded)")));
+    boxes.push(cb);
+    waits.appendChild(row);
+  });
+  if (!boxes.length)
+    waits.appendChild(el("span", "muted", boardOk ? "(no other tasks)" : "(board not loaded)"));
   wrap.appendChild(waits);
 
   const bar = el("div");
   bar.style.cssText = "display:flex;gap:6px;justify-content:flex-end;align-items:center";
   const status = el("span", "muted");
+  if (unloaded.length)
+    status.textContent = "could not load " + unloaded.join(" or ") + " -- " +
+                         "what the task has is kept";
   const save = el("button", "btn", task ? "Save" : "Create");
   bar.appendChild(status); bar.appendChild(save);
   wrap.appendChild(bar);
