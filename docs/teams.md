@@ -9,9 +9,41 @@ pasclaw team up software-team --goal "an invoice tracker for my shop"
 pasclaw team up software-team --project invoice-desk   # work a board you already have
 ```
 
-Or in the desktop: **Start → New Team…**, or just type *"spin up a
-software team to build an invoice tracker"* into Ask PasClaw. All three
-drive `POST /v1/teams/up`.
+Or in the desktop: **Start → Software Factory**, **Ask PasClaw → Build with a
+team**, **Start → New Team…**, or just type *"spin up a software team to
+build an invoice tracker"* into Ask PasClaw. All of them drive
+`POST /v1/teams/up`, and all of them open the team's factory window.
+
+## The Software Factory
+
+One sentence in, a team building it, one window to watch and steer it from.
+
+- **Start it.** **Start → Software Factory** — say what to build, pick the
+  team (Software Team by default; Duo for small things), **Build it**. Or in
+  **Ask PasClaw**, choose **Build with a team** and type the sentence.
+- **The factory window** is the conversation with the team's lead beside its
+  live board. The left side is one timeline: what you told the lead, what
+  the lead said back at the end of each turn, and what happened on the board
+  ("dev submitted T0002 for review", "foreman rejected T0002: …"), each with
+  its time. The right side is the board — in review, working, to do, done —
+  with **Accept** / **Reject** on work waiting for a verdict and **Edit** /
+  **+ Task** for the rest. The header says whether the team is working,
+  waiting, parked or finished, who is busy, and what is in each mailbox; a
+  question the team asked you shows above the timeline with **Answer**.
+- **Steer it.** What you type in the factory goes to the lead, who plans it
+  into tasks and hands them out. After **Build with a team**, Ask switches
+  itself to **Tell the … team**, so what you type there next goes to the
+  same lead; every team at work has that entry. Writing to a team the
+  finished board parked puts it back to work; one you parked stays parked
+  (the factory's **Resume** puts it back on).
+- It repaints on the board's and the agents' events and does not poll. It
+  comes back after a reload, like the other windows.
+
+`GET /v1/teams/<name>/feed` is the window's data: the team's header
+(members, leads, status, open questions) and the merged timeline. The lead's
+side of it is a new record: each finished turn's reply is kept with its time
+(`replies.jsonl` beside the agent's message record), because a session holds
+the whole transcript but no times.
 
 ## What ships
 
@@ -506,27 +538,40 @@ leaves the board without review.
 `pasclaw team export <file>` writes the live roster out as one of these
 — how a team you hand-tuned becomes a team you can share.
 
-## Flags
+## Flags: none — it asks
 
-Teams need two model-facing flags that are off by default:
+Nothing to set. A team's members always have the board tools (`project`,
+`task`, `rule`) and the `agent` tool: a team *is* those tools, and starting
+one is your opt-in to agents that manage a board and message each other.
+
+An **ordinary chat** — the CLI, a project chat, Ask PasClaw — gets them by
+**asking you**. They are not in a chat's tool list (no schema bytes until
+wanted); `tool_search` finds them, and the call waits for your answer —
+**Allow once**, **Allow for this session**, or **Deny** — in **Needs you**
+on the desktop, the TUI's footer, or the CLI's prompt:
+
+> task: create, title Add a search box, project shop
+> This chat wants to manage the project board (task create) — the work a
+> team's agents do.
+
+The same goes for the desktop tool's `team_up` ("spin up a team to build
+…"): advertised always, asked before anything starts — on *every* turn,
+a team member's included, because starting another team is not one of a
+team's own tools. Tiling windows asks nothing. With nobody to ask — a cron
+run, a piped `pasclaw agent`, a gateway with no desktop connected — the
+call is refused, never quietly allowed; so is one that never meets the
+question at all (PasClaw's MCP server runs tools directly). A subagent a
+chat spawns inherits the question, not the tool.
+
+To say yes for good, write it down as a permission rule:
 
 ```json
-{ "desktop_tools_enabled": true, "agent_tools_enabled": true }
+"permissions": [{"tool": "task", "effect": "allow"}, {"tool": "agent", "effect": "allow"}]
 ```
 
-The first lets the team manage its task board, the second lets members
-message each other. `team up` — **New team…** on the desktop and
-`pasclaw team up` alike — **warns** when either is off and names it,
-rather than seeding a team that cannot reach its own board — which
-looks like model stupidity and is not.
-
-`agent_tools_enabled` also **gates the model's `team_up` action**. The
-`desktop` tool is registered always, because gating window management
-behind a flag meant a fresh install could not answer "tile these" — but
-`team_up` is not window management: it seeds standing agents, creates a
-project and starts a turn, which is precisely what this flag exists to
-let an operator decline. With the flag off the action is refused before
-anything is published, and is not advertised to the model at all.
+The old switches, `desktop_tools_enabled` and `agent_tools_enabled`, still
+mean "yes, every chat, always" for configs that set them; nothing needs
+them any more.
 
 The **HTTP route stays open**. A person clicking **New team…** is the
 operator, and gating them behind a switch meant for the model is the

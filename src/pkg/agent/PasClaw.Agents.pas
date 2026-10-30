@@ -156,6 +156,14 @@ function AgentSend(const ToName, FromWho, Text: string;
 { The message record, newest last. Limit 0 = all. }
 function AgentMessages(const Name: string; Limit: Integer): TAgentMessageArray;
 
+(* What the agent said back: each finished turn's reply (or its error),
+   newest last, as records -- At, From (the agent), Text, and Delivered
+   carrying the run's state ('done' | 'failed'). A session holds the
+   whole transcript but no times; this is the part a person reads, with
+   the time it was said, so it can sit in one timeline with the messages
+   the agent was sent. Limit 0 = all. *)
+function AgentReplies(const Name: string; Limit: Integer): TAgentMessageArray;
+
 { How many messages are queued but not yet seen by the agent. }
 function AgentPending(const Name: string): Integer;
 
@@ -529,6 +537,8 @@ begin
   if FileExists(Path) then DeleteFile(Path);
   Path := JoinPath(Dir, 'messages.jsonl');
   if FileExists(Path) then DeleteFile(Path);
+  Path := JoinPath(Dir, 'replies.jsonl');
+  if FileExists(Path) then DeleteFile(Path);
   RemoveDir(Dir);
   LogInfo('agents: deleted %s', [AgentSlug(Name)]);
   Result := True;
@@ -557,15 +567,16 @@ end;
 { One JSONL line. Written with the same all-or-nothing append the
   session record uses: a torn line is a corrupt record, and a record
   nobody can parse is worse than a missing one. }
-function AppendMessage(const Name: string; const Msg: TAgentMessage): Boolean;
+{ One record line appended to an agent's jsonl file (messages.jsonl, or
+  replies.jsonl). }
+function AppendRecordTo(const Path, Name: string; const Msg: TAgentMessage): Boolean;
 var
-  Path, Line: string;
+  Line: string;
   Obj: TJsonObject;
   Strm: TFileStream;
   Bytes: TBytes;
 begin
   Result := False;
-  Path := MessagesPath(Name);
   if Path = '' then Exit;
   if not EnsureDir(ExtractFileDir(Path)) then Exit;
   Obj := TJsonObject.Create;
@@ -600,6 +611,11 @@ begin
     end;
   end;
   Result := True;
+end;
+
+function AppendMessage(const Name: string; const Msg: TAgentMessage): Boolean;
+begin
+  Result := AppendRecordTo(MessagesPath(Name), Name, Msg);
 end;
 
 function AgentSend(const ToName, FromWho, Text: string;
@@ -695,16 +711,14 @@ begin
   Result := E.WaitFor(TimeoutMs) = wrSignaled;
 end;
 
-function AgentMessages(const Name: string; Limit: Integer): TAgentMessageArray;
+function ReadRecordFrom(const Path: string; Limit: Integer): TAgentMessageArray;
 var
-  Path: string;
   Lines: TStringList;
   I, Start: Integer;
   Obj: TJsonObject;
   Msg: TAgentMessage;
 begin
   SetLength(Result, 0);
-  Path := MessagesPath(Name);
   if (Path = '') or not FileExists(Path) then Exit;
   Lines := TStringList.Create;
   try
@@ -741,6 +755,26 @@ begin
   end;
 end;
 
+function AgentMessages(const Name: string; Limit: Integer): TAgentMessageArray;
+begin
+  Result := ReadRecordFrom(MessagesPath(Name), Limit);
+end;
+
+function RepliesPath(const Name: string): string;
+var
+  D: string;
+begin
+  Result := '';
+  D := AgentDir(Name);
+  if D = '' then Exit;
+  Result := JoinPath(D, 'replies.jsonl');
+end;
+
+function AgentReplies(const Name: string; Limit: Integer): TAgentMessageArray;
+begin
+  Result := ReadRecordFrom(RepliesPath(Name), Limit);
+end;
+
 function AgentPending(const Name: string): Integer;
 var
   Sid: string;
@@ -769,6 +803,7 @@ end;
 procedure MarkAgentRunFinished(const Name, State, Note: string);
 var
   Info: TAgentInfo;
+  Rec: TAgentMessage;
   Err, Line: string;
 begin
   if not GetAgent(Name, Info) then Exit;
@@ -781,6 +816,17 @@ begin
   if Length(Line) > 240 then Line := Copy(Line, 1, 240) + '...';
   Info.RunNote := Line;
   SaveAgent(Info, Err);
+  { ...and the whole reply goes on the agent's reply record, with its
+    time. Capped: a reply is something a person reads. }
+  if Trim(Note) <> '' then
+  begin
+    Rec.At := Info.RunEnd;
+    Rec.From := Info.Name;
+    Rec.Text := Trim(Note);
+    if Length(Rec.Text) > 8000 then Rec.Text := Copy(Rec.Text, 1, 8000) + '...';
+    Rec.Delivered := State;
+    AppendRecordTo(RepliesPath(Info.Name), Info.Name, Rec);
+  end;
 end;
 
 { ISO-8601 'YYYY-MM-DDTHH:NN:SSZ' -> TDateTime. Returns 0 when the

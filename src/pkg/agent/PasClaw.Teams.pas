@@ -173,6 +173,10 @@ function ListTeamStates: TTeamStateArray;
    Returns the teams resumed. *)
 function ResumeParkedTeams(const Project: string): TStringArray;
 
+(* The operator wrote to Agent: every board-parked team it is on goes back
+   on -- talking to a finished team is giving it new work. *)
+function ResumeTeamsOf(const Agent: string): TStringArray;
+
 { --------------------------------------------------------- the tick -- }
 
 (* Is this team due a tick? Compares LastTick + WakeMinutes against now;
@@ -1454,6 +1458,27 @@ begin
     end;
   end;
   if N > 0 then WakeTeamTick;
+end;
+
+function ResumeTeamsOf(const Agent: string): TStringArray;
+var
+  States: TTeamStateArray;
+  More: TStringArray;
+  I, J: Integer;
+begin
+  SetLength(Result, 0);
+  States := ListTeamStates;
+  for I := 0 to High(States) do
+    if (not States[I].Enabled) and States[I].AutoParked and
+       AgentInTeam(States[I], Agent) then
+    begin
+      More := ResumeParkedTeams(States[I].Project);
+      for J := 0 to High(More) do
+      begin
+        SetLength(Result, Length(Result) + 1);
+        Result[High(Result)] := More[J];
+      end;
+    end;
 end;
 
 function ListTeamStates: TTeamStateArray;

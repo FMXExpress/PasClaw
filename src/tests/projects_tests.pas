@@ -18,6 +18,7 @@ uses
   PasClaw.Config,
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
+  PasClaw.Tools.Registry,   { SetDispatchGatePassed -- what the tool loop's gate sets }
   PasClaw.Projects.Tools;
 
 var
@@ -366,36 +367,47 @@ begin
   ExpectStr(Err, '', 'a good call is clean');
   ExpectContains(Out_, '1 desktop action', 'and reports what it sent');
 
-  (* ------------------------------------------------ the team_up gate -- *)
+  (* ------------------------------------------------ the team_up ask -- *)
   (* The `desktop` tool is registered ALWAYS -- window management should
-     not need a flag. But team_up seeds standing agents and starts
-     turns, which is exactly what agent_tools_enabled lets an operator
-     decline. Refused BEFORE publishing: the connected desktop acts on a
-     published command immediately, so a check afterwards would be a
-     warning about a team that already exists. *)
-  Out_ := Tool_Desktop('{"actions":[{"do":"team_up","template":"duo",' +
-                       '"brief":"a thing"}]}', Err);
-  ExpectTrue(Err <> '', 'team_up is refused when agent tools are off');
-  ExpectContains(Err, 'agent_tools_enabled', 'and the refusal names the flag');
-  ExpectTrue(Pos('team_up', Out_) = 0, 'and nothing was sent');
+     not need anyone's say-so. But team_up starts standing agents that go
+     on working by themselves, so an ordinary chat's team_up asks the
+     operator first. The question is put by the tool loop's permission
+     gate BEFORE the tool runs -- the connected desktop acts on a published
+     command immediately -- and DesktopConsent is what it asks with. *)
+  ExpectTrue(DesktopConsent('desktop', '{"actions":[{"do":"team_up","template":"duo",' +
+             '"brief":"a thing"}]}') <> '', 'a chat''s team_up needs the operator''s say-so');
+  ExpectContains(DesktopConsent('desktop', '{"actions":[{"do":"team_up"}]}'),
+                 'start an agent team', 'and the question says what it starts');
+  ExpectStr(DesktopConsent('desktop', '{"actions":[{"do":"tile"}]}'), '',
+            'tiling windows asks nothing');
+  ExpectStr(DesktopConsent('task', '{"actions":[{"do":"team_up"}]}'), '',
+            'only the desktop tool''s actions are read');
 
-  { A gated action does not poison the rest of the call... }
-  Out_ := Tool_Desktop('{"actions":[{"do":"tile"}]}', Err);
-  ExpectStr(Err, '', 'ordinary window actions still work with the flag off');
-
-  { ...and cannot be smuggled in through a near-miss shape, because the
-    check reads the COERCED array. }
-  Out_ := Tool_Desktop('{"action":"team_up","template":"duo"}', Err);
-  ExpectContains(Err, 'agent_tools_enabled',
-                 'the singular-action shape is gated too');
-  Out_ := Tool_Desktop('{"actions":[{"do":"tile"},{"do":"TEAM_UP"}]}', Err);
-  ExpectTrue(Err <> '', 'case does not evade the gate, and one bad action ' +
-             'refuses the whole call');
+  { ...and cannot slip past through a near-miss shape, because the check
+    reads the COERCED array, as the tool does. }
+  ExpectTrue(DesktopConsent('desktop', '{"action":"team_up","template":"duo"}') <> '',
+             'the singular-action shape asks too');
+  ExpectTrue(DesktopConsent('desktop', '{"actions":[{"do":"tile"},{"do":"TEAM_UP"}]}') <> '',
+             'case does not evade it, and one team_up in a batch asks for the batch');
 
   SetTeamActionsAllowed(True);
-  Out_ := Tool_Desktop('{"actions":[{"do":"team_up","template":"duo"}]}', Err);
-  ExpectStr(Err, '', 'with the flag on it goes through');
+  ExpectStr(DesktopConsent('desktop', '{"actions":[{"do":"team_up","template":"duo"}]}'), '',
+            'agent_tools_enabled says yes for good');
   SetTeamActionsAllowed(False);
+  { And the tool holds the line for a call that never met the gate --
+    PasClaw's MCP server runs it directly, and the desktop tool is exposed
+    read-only. Through the gate, the answer was yes. }
+  Out_ := Tool_Desktop('{"actions":[{"do":"team_up","template":"duo"}]}', Err);
+  ExpectContains(Err, 'needs the operator', 'team_up that skipped the gate is refused');
+  ExpectTrue(Pos('team_up', Out_) = 0, 'and nothing was sent');
+  Out_ := Tool_Desktop('{"action":"team_up","template":"duo"}', Err);
+  ExpectContains(Err, 'needs the operator', 'in any shape');
+  Out_ := Tool_Desktop('{"actions":[{"do":"tile"}]}', Err);
+  ExpectStr(Err, '', 'ordinary window actions are clean');
+  SetDispatchGatePassed(True);
+  Out_ := Tool_Desktop('{"actions":[{"do":"team_up","template":"duo"}]}', Err);
+  ExpectStr(Err, '', 'through the gate it goes');
+  SetDispatchGatePassed(False);
 
   { --------------------------------------------------- workspace isolation -- }
   { Projects belong to a workspace: switching desktops must switch boards. }

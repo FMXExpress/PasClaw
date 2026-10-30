@@ -56,6 +56,19 @@ The sandbox above says what is *possible*. The permissions list says what the ag
 
 The file is re-read whenever its modification time **or size** changes, and a read that cannot be used — unreadable, truncated, not JSON, no `permissions` array — **keeps the rules already in force** rather than clearing them. That matters because the file a team gateway owns is the file that gets rewritten under a running agent: a non-atomic write must not open a window with no denies in it. `pasclaw permissions list` warns when what is in force is not what is on disk. The two ways to clear the rules are both explicit: an empty array, or deleting the file.
 
+**Built in: a standing agent's tools ask.** The board tools (`project`,
+`task`, `rule`), the `agent` tool and the desktop tool's `team_up` action are
+a team's own; on a turn that is not a standing agent's, a call to one that
+no rule has an opinion on is treated as `ask`, with the reason saying what
+the chat wants. `team_up` is asked on every turn, a standing agent's
+included. An `allow` rule (or the old `desktop_tools_enabled` /
+`agent_tools_enabled` switches) answers yes in advance; a `deny` refuses as
+always. A standing agent's turn is never asked about its own tools. The
+gate marks the call it passed, and the tools refuse a call that did not
+come through it — PasClaw's MCP server runs tools directly and has nobody to
+ask, so the board and agent tools are not exposed there and `team_up` is
+refused. A subagent's copied registry keeps the question.
+
 `pasclaw permissions list` prints both lists in evaluation order; `pasclaw permissions test shell_exec "git push origin main"` prints the decision and the rule that made it.
 
 The permissions gate runs after the plan / SPACE mode gates and before the tool's own checks. Source: `src/pkg/config/PasClaw.Permissions.pas`, `PermissionGate` in `src/pkg/tools/PasClaw.Tools.ToolLoop.pas`.

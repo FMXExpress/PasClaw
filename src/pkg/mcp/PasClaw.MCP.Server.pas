@@ -156,6 +156,9 @@ begin
   if FRegistry = nil then Exit;
   if not FRegistry.Find(Name, T) then Exit;
   if (not FAllowMutating) and (T.Category <> tcReadOnly) then Exit;
+  { A standing agent's tool asks the operator before an ordinary caller
+    uses it, and an MCP client has no operator here to ask. }
+  if T.AskOutsideAgents then Exit;
   if Length(FAllowList) > 0 then
   begin
     Result := False;

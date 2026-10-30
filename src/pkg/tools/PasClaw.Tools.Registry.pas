@@ -90,6 +90,10 @@ type
     { Register a code-mode tool: dispatchable, never a provider schema,
       never surfaced by tool_search. See TTool.CodeMode. }
     procedure RegisterCodeMode(const T: TTool);
+    { Register a standing agent's tool that an ordinary chat finds with
+      tool_search and may call only with the operator's say-so. See
+      TTool.AskOutsideAgents and AgentTurnProbe. }
+    procedure RegisterAskOutsideAgents(const T: TTool);
     { When True, any tool matching ToolIsLongTail registers DEFERRED no
       matter which entry point it came through. Set once, by the disclosure
       registration, instead of asking ~10 call sites to remember: the spawn
@@ -138,7 +142,63 @@ var
   { Installed by PasClaw.Tools.ToolLoop at initialization. See IToolDispatcher. }
   GCaptureDispatcher: TCaptureDispatcherFn = nil;
 
+type
+  TAgentTurnProbe = function: Boolean;
+
+var
+  (* Is the turn on this thread a standing agent's? Installed by
+     PasClaw.Agents.Tools (which knows the calling agent); unset, nothing
+     is an agent turn. *)
+  AgentTurnProbe: TAgentTurnProbe = nil;
+
+function IsAgentTurn: Boolean;
+
+type
+  (* Does this call need the operator's say-so beyond its permissions
+     rules? '' = no; otherwise the reason, shown with the question. For a
+     call that is not a whole tool's worth of power -- the desktop tool's
+     team_up action, say, where tiling windows asks nothing. Installed by
+     PasClaw.Projects.Tools; consulted by the tool loop's permission gate
+     on a turn that is not a standing agent's, when no rule has spoken. *)
+  TConsentProbe = function(const ToolName, ArgsJSON: string): string;
+
+var
+  ConsentProbe: TConsentProbe = nil;
+
+(* Did the call running on this thread come through the tool loop's
+   permission gate -- every rule satisfied, every question answered yes?
+   Set by the dispatcher for exactly as long as the tool runs. A tool that
+   needs the operator's say-so refuses a call that did not: PasClaw's MCP
+   server calls RunTool directly, and there is no one there to ask. *)
+procedure SetDispatchGatePassed(Value: Boolean);
+function DispatchGatePassed: Boolean;
+
 implementation
+
+threadvar
+  GGatePassed: Boolean;
+
+procedure SetDispatchGatePassed(Value: Boolean);
+begin
+  GGatePassed := Value;
+end;
+
+function DispatchGatePassed: Boolean;
+begin
+  Result := GGatePassed;
+end;
+
+function IsAgentTurn: Boolean;
+begin
+  Result := Assigned(AgentTurnProbe) and AgentTurnProbe();
+end;
+
+{ An AskOutsideAgents tool, on a turn that is not a standing agent's:
+  searchable rather than listed, the way a deferred tool is. }
+function DeferredHere(const T: TTool): Boolean;
+begin
+  Result := T.AskOutsideAgents and not IsAgentTurn;
+end;
 
 constructor TToolRegistry.Create;
 begin
@@ -216,6 +276,19 @@ begin
     from ToProviderDefs. Aliases go through RegisterHidden instead. }
   Modified.Hidden := False;
   Modified.CodeMode := False;
+  Modified.AskOutsideAgents := False;
+  RegisterImpl(Modified);
+end;
+
+procedure TToolRegistry.RegisterAskOutsideAgents(const T: TTool);
+var
+  Modified: TTool;
+begin
+  Modified := T;
+  Modified.IsDeferred := False;
+  Modified.Hidden     := False;
+  Modified.CodeMode   := False;
+  Modified.AskOutsideAgents  := True;
   RegisterImpl(Modified);
 end;
 
@@ -229,6 +302,7 @@ begin
   Modified.IsDeferred := False;
   Modified.Hidden     := True;
   Modified.CodeMode   := False;
+  Modified.AskOutsideAgents  := False;
   RegisterImpl(Modified);
 end;
 
@@ -239,6 +313,7 @@ begin
   Modified := T;
   Modified.IsDeferred := Deferred;
   Modified.CodeMode   := False;
+  Modified.AskOutsideAgents  := False;
   RegisterImpl(Modified);
 end;
 
@@ -254,6 +329,7 @@ begin
   Modified.IsDeferred := True;
   Modified.Hidden     := False;
   Modified.CodeMode   := True;
+  Modified.AskOutsideAgents  := False;
   RegisterImpl(Modified);
 end;
 
@@ -355,6 +431,10 @@ begin
         not resurrect the schema. }
       if FTools[i].CodeMode then
         Continue;
+      { A standing agent's tool on an ordinary chat's turn: listed once
+        tool_search has revealed it, like a deferred one. }
+      if DeferredHere(FTools[i]) and (not IsRevealedLocked(FTools[i].Name)) then
+        Continue;
       Result[k].Name        := FTools[i].Name;
       Result[k].Description := FTools[i].Description;
       Result[k].Schema      := FTools[i].Schema;
@@ -375,7 +455,7 @@ begin
     SetLength(Result, Length(FTools));
     k := 0;
     for i := 0 to High(FTools) do
-      if FTools[i].IsDeferred and (not FTools[i].CodeMode)
+      if (FTools[i].IsDeferred or DeferredHere(FTools[i])) and (not FTools[i].CodeMode)
          and (not IsRevealedLocked(FTools[i].Name)) then
       begin
         Result[k] := FTools[i].Name;
@@ -477,7 +557,8 @@ begin
   FLock.Acquire;
   try
     for i := 0 to High(FTools) do
-      if (FTools[i].Name = Name) and FTools[i].IsDeferred and (not FTools[i].CodeMode) then
+      if (FTools[i].Name = Name) and (FTools[i].IsDeferred or DeferredHere(FTools[i])) and
+         (not FTools[i].CodeMode) then
       begin
         T := FTools[i];
         Exit(True);
@@ -500,7 +581,7 @@ begin
       from a previous session. Also dedupe so a re-reveal doesn't grow
       FRevealed unbounded across a long session. }
     for i := 0 to High(FTools) do
-      if (FTools[i].Name = Name) and FTools[i].IsDeferred then
+      if (FTools[i].Name = Name) and (FTools[i].IsDeferred or DeferredHere(FTools[i])) then
       begin
         if not IsRevealedLocked(Name) then
         begin
@@ -563,6 +644,16 @@ begin
   if (not Assigned(T.Handler)) and (not Assigned(T.HandlerObj)) then
   begin
     ErrMsg := 'tool "' + Name + '" has no handler';
+    Exit('');
+  end;
+  { The question is asked at the tool loop's gate; a call that reached
+    here some other way -- an MCP client, a script with no loop -- was
+    never asked, and is not let through. A standing agent's own turn
+    needs no question. }
+  if T.AskOutsideAgents and not IsAgentTurn and not DispatchGatePassed then
+  begin
+    ErrMsg := 'tool "' + Name + '" needs the operator''s say-so, which a ' +
+              'chat asks for; this call did not come through one';
     Exit('');
   end;
   try

@@ -87,16 +87,6 @@ procedure SetPageGenerator(Gen: TPageGenerator);
 procedure SetTextGenerator(Gen: TTextGenerator);
 procedure SetAgentRunner(Runner: TAgentRunner);
 
-type
-  (* Answers "which agent-facing config flags are off", as a warning
-     string ('' = all on). Teams half-work confusingly without the
-     board tools and the agent tool, so `team up` names what is
-     missing instead of seeding a team that cannot reach its own
-     board. Lives behind a probe because this unit has no TConfig --
-     the gateway, which does, installs it at start. *)
-  TTeamFlagsProbe = function: string;
-
-procedure SetTeamFlagsProbe(Probe: TTeamFlagsProbe);
 
 (* One pass of the team wake loop, called by the gateway's tick thread
    (and by tests directly): for every enabled team that is due, sweep
@@ -162,7 +152,6 @@ uses
 var
   GJobRunner: TJobRunner = nil;
   GAgentRunner: TAgentRunner = nil;
-  GTeamFlagsProbe: TTeamFlagsProbe = nil;
   GPageGen: TPageGenerator = nil;
   GTextGen: TTextGenerator = nil;
   GAppsOrigin: string = '';
@@ -170,11 +159,6 @@ var
 procedure SetAgentRunner(Runner: TAgentRunner);
 begin
   GAgentRunner := Runner;
-end;
-
-procedure SetTeamFlagsProbe(Probe: TTeamFlagsProbe);
-begin
-  GTeamFlagsProbe := Probe;
 end;
 
 procedure SetJobRunner(Runner: TJobRunner);
@@ -689,17 +673,236 @@ begin
     Result.PutBool('up', False);
 end;
 
-function RouteTeams(const Method, Doc, Body: string;
+(* One team, as the Software Factory window shows it: who is on it and
+   how each is doing, what waits on the operator, and one timeline -- what
+   the operator told the lead, what the lead said back, and what happened
+   on the board -- every entry with its time, oldest first, the last
+   Limit of them.
+
+   Three records, merged rather than invented: the lead's message record
+   (what it was told), its reply record (what each finished turn said),
+   and the project's activity log (what the board saw). None of them is
+   new state; the factory is a way of reading the team. *)
+{ The first line of a free-text field, capped -- a feed line, not the
+  evidence itself. }
+function FeedLine(const Text: string): string;
+var
+  P: Integer;
+begin
+  Result := Trim(Text);
+  P := Pos(#10, Result);
+  if P > 0 then Result := TrimRight(Copy(Result, 1, P - 1));
+  if Length(Result) > 200 then Result := Copy(Result, 1, 197) + '...';
+end;
+
+function BoardEventText(Obj: TJsonObject): string;
+var
+  Ev, By, Tk: string;
+begin
+  Ev := Obj.GetStr('event', '');
+  By := ActorLabel(Obj.GetStr('by', ''));
+  Tk := Obj.GetStr('task', '');
+  if Ev = 'create' then Result := By + ' created ' + Tk + ': ' + Obj.GetStr('title', '')
+  else if Ev = 'assign' then
+  begin
+    if Obj.GetStr('to', '') = '' then Result := By + ' unassigned ' + Tk
+    else Result := By + ' assigned ' + Tk + ' to ' + Obj.GetStr('to', '');
+  end
+  else if Ev = 'start' then Result := By + ' started ' + Tk
+  else if Ev = 'reopen' then Result := By + ' reopened ' + Tk
+  else if Ev = 'status' then
+    Result := By + ' moved ' + Tk + ' from ' + Obj.GetStr('from', '') + ' to ' +
+              Obj.GetStr('to', '')
+  else if Ev = 'claim' then Result := By + ' took ' + Tk
+  else if Ev = 'submit' then
+    Result := By + ' submitted ' + Tk + ' for review: ' + FeedLine(Obj.GetStr('evidence', ''))
+  else if Ev = 'submit-refused' then
+    Result := Tk + ' was not taken for review: ' + FeedLine(Obj.GetStr('reason', ''))
+  else if Ev = 'accept' then Result := By + ' accepted ' + Tk
+  else if Ev = 'reject' then
+    Result := By + ' rejected ' + Tk + ': ' + FeedLine(Obj.GetStr('reason', ''))
+  else if Ev = 'criteria' then Result := By + ' set the checks on ' + Tk
+  else if Ev = 'waits' then Result := Tk + ' waits on ' + Obj.GetStr('on', '')
+  else if Ev = 'expire' then Result := Tk + '''s claim ran out -- back to todo'
+  else if Ev = 'rule' then Result := 'a check for "' + Obj.GetStr('cause', '') + '" was installed'
+  else if Ev = 'rule-declined' then Result := 'the operator declined a check for "' + Obj.GetStr('cause', '') + '"'
+  else if Ev = 'rule-failed' then Result := 'a check for "' + Obj.GetStr('cause', '') + '" could not be installed'
+  else Result := Trim(By + ' ' + Ev + ' ' + Tk);
+end;
+
+type
+  TFeedItem = record
+    At, Kind, Who, Task, Event, Text: string;
+  end;
+  TFeedItemArray = array of TFeedItem;
+
+procedure AddFeed(var Items: TFeedItemArray; const At, Kind, Who, Task, Event, Text: string);
+begin
+  SetLength(Items, Length(Items) + 1);
+  Items[High(Items)].At := At;
+  Items[High(Items)].Kind := Kind;
+  Items[High(Items)].Who := Who;
+  Items[High(Items)].Task := Task;
+  Items[High(Items)].Event := Event;
+  Items[High(Items)].Text := Text;
+end;
+
+function TeamFeedJSON(const Name: string; Limit: Integer; out Err: string): string;
+var
+  S: TTeamState;
+  T: TTeamTemplate;
+  Root, Item, Obj: TJsonObject;
+  Arr: TJsonArray;
+  Items: TFeedItemArray;
+  Leads: TStringArray;
+  Msgs: TAgentMessageArray;
+  Lines: TStringArray;
+  Decs: TDecisionInfoArray;
+  Info: TAgentInfo;
+  Tmp: TFeedItem;
+  I, J, N, Start: Integer;
+  Ev: string;
+begin
+  Result := '';
+  Err := '';
+  if not LoadTeamState(Name, S) then
+  begin
+    Err := 'no team called "' + Name + '" is up';
+    Exit;
+  end;
+  T := Default(TTeamTemplate);
+  if FindTeamTemplate(S.Name, T) then Leads := TeamLeads(T)
+  else SetLength(Leads, 0);
+  if Limit <= 0 then Limit := 200;
+  SetLength(Items, 0);
+
+  (* Collected in the order that breaks a tie right -- stamps are to the
+     second, and one turn's work lands in one: what the operator said
+     starts it, the board moves during it, the lead's reply ends it. *)
+  for I := 0 to High(Leads) do
+  begin
+    Msgs := AgentMessages(Leads[I], 0);
+    for J := 0 to High(Msgs) do
+      if Msgs[J].From = 'operator' then
+        AddFeed(Items, Msgs[J].At, 'you', Leads[I], '', '', Msgs[J].Text);
+  end;
+  if S.Project <> '' then
+  begin
+    Lines := ReadActivity(S.Project, '', 0);
+    for I := 0 to High(Lines) do
+    begin
+      try
+        Obj := TJsonObject.Parse(Lines[I]);
+      except
+        Continue;
+      end;
+      if Obj = nil then Continue;
+      try
+        AddFeed(Items, Obj.GetStr('at', ''), 'board', ActorLabel(Obj.GetStr('by', '')),
+                Obj.GetStr('task', ''), Obj.GetStr('event', ''), BoardEventText(Obj));
+      finally
+        Obj.Free;
+      end;
+    end;
+  end;
+  for I := 0 to High(Leads) do
+  begin
+    Msgs := AgentReplies(Leads[I], 0);
+    for J := 0 to High(Msgs) do
+    begin
+      if Msgs[J].Delivered = 'failed' then Ev := 'failed' else Ev := '';
+      AddFeed(Items, Msgs[J].At, 'lead', Leads[I], '', Ev, Msgs[J].Text);
+    end;
+  end;
+  { Oldest first; a stable insertion sort -- equal stamps keep the order
+    collected above. }
+  for I := 1 to High(Items) do
+  begin
+    Tmp := Items[I];
+    J := I - 1;
+    while (J >= 0) and (Items[J].At > Tmp.At) do
+    begin
+      Items[J + 1] := Items[J];
+      Dec(J);
+    end;
+    Items[J + 1] := Tmp;
+  end;
+
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr('team', S.Name);
+    if T.Title <> '' then Root.PutStr('title', T.Title)
+    else Root.PutStr('title', S.Name);
+    Root.PutStr('project', S.Project);
+    Root.PutStr('goal', S.Goal);
+    Root.PutBool('enabled', S.Enabled);
+    Root.PutBool('auto_parked', S.AutoParked);
+    Root.PutBool('paused', AgentsPaused);
+    Arr := TJsonArray.Create;
+    for I := 0 to High(Leads) do Arr.AddStr(Leads[I]);
+    Root.PutArray('leads', Arr);
+    Arr := TJsonArray.Create;
+    for I := 0 to High(S.WakeWho) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr('name', S.WakeWho[I]);
+      if GetAgent(S.WakeWho[I], Info) then
+      begin
+        Item.PutStr('title', Info.Title);
+        Item.PutStr('run_state', Info.RunState);
+      end;
+      Item.PutBool('busy', AgentIsBusy(S.WakeWho[I]));
+      Item.PutInt('pending', AgentPending(S.WakeWho[I]));
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('members', Arr);
+    { What waits on the operator from this team: its open questions. }
+    Arr := TJsonArray.Create;
+    Decs := ListDecisions(True);
+    for I := 0 to High(Decs) do
+      if (S.Project <> '') and (Decs[I].Project = S.Project) then
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr('id', Decs[I].Id);
+        Item.PutStr('kind', Decs[I].Kind);
+        Item.PutStr('asked_by', Decs[I].AskedBy);
+        Item.PutStr('question', Decs[I].Question);
+        Arr.AddObject(Item);
+      end;
+    Root.PutArray('asks', Arr);
+    Arr := TJsonArray.Create;
+    N := Length(Items);
+    Start := 0;
+    if N > Limit then Start := N - Limit;
+    for I := Start to N - 1 do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr('at', Items[I].At);
+      Item.PutStr('kind', Items[I].Kind);
+      Item.PutStr('who', Items[I].Who);
+      if Items[I].Task <> '' then Item.PutStr('task', Items[I].Task);
+      if Items[I].Event <> '' then Item.PutStr('event', Items[I].Event);
+      Item.PutStr('text', Items[I].Text);
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('feed', Arr);
+    Result := Root.ToJSON;
+  finally
+    Root.Free;
+  end;
+end;
+
+function RouteTeams(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
   Root, Obj, Item: TJsonObject;
-  Arr: TJsonArray;
+  Arr, Lead: TJsonArray;
   T: TTeamTemplate;
   S: TTeamState;
   States: TTeamStateArray;
   Created, Skipped, Leads: TStringArray;
   Tasks: TTaskInfoArray;
-  Name_, Goal, Project, Err, Delivered, Warn, Kick: string;
+  Name_, Goal, Project, Err, Delivered, Kick: string;
   I, J, OpenN: Integer;
   Parked: Boolean;
 begin
@@ -734,7 +937,18 @@ begin
         Item := TJsonObject.Create;
         Item.PutStr('name', States[I].Name);
         Item.PutStr('project', States[I].Project);
+        Item.PutStr('goal', States[I].Goal);
         Item.PutBool('enabled', States[I].Enabled);
+        Item.PutBool('auto_parked', States[I].AutoParked);
+        { Who to talk to: the leads, by the template. }
+        Lead := TJsonArray.Create;
+        if FindTeamTemplate(States[I].Name, T) then
+        begin
+          Item.PutStr('title', T.Title);
+          Leads := TeamLeads(T);
+          for J := 0 to High(Leads) do Lead.AddStr(Leads[J]);
+        end;
+        Item.PutArray('leads', Lead);
         Item.PutInt('wake_minutes', States[I].WakeMinutes);
         Item.PutStr('last_tick', States[I].LastTick);
         if States[I].Project <> '' then
@@ -753,6 +967,19 @@ begin
     finally
       Root.Free;
     end;
+    Exit;
+  end;
+
+  { GET /v1/teams/<name>/feed -- the Software Factory's view of a team. }
+  if (Method = 'GET') and HasPrefix(Doc, '/v1/teams/') and
+     (Length(Doc) > Length('/v1/teams//feed')) and
+     (Copy(Doc, Length(Doc) - Length('/feed') + 1, MaxInt) = '/feed') then
+  begin
+    Name_ := Copy(Doc, Length('/v1/teams/') + 1,
+                  Length(Doc) - Length('/v1/teams/') - Length('/feed'));
+    Kick := TeamFeedJSON(Name_, StrToIntDef(QueryValue(Query, 'limit'), 0), Err);
+    if Kick = '' then ReplyErr(Resp, 404, Err)
+    else ReplyJSON(Resp, 200, Kick);
     Exit;
   end;
 
@@ -851,21 +1078,22 @@ begin
           LogInfo('team %s: lead %s not started (%s) -- the tick will ' +
                   'retry', [T.Name, Leads[I], Err]);
 
-    Warn := '';
-    if Assigned(GTeamFlagsProbe) then Warn := GTeamFlagsProbe();
 
     Root := TJsonObject.Create;
     try
       Root.PutStr('team', T.Name);
+      Root.PutStr('title', T.Title);
       Root.PutStr('project', Project);
       Root.PutBool('enabled', S.Enabled);
+      Arr := TJsonArray.Create;
+      for I := 0 to High(Leads) do Arr.AddStr(Leads[I]);
+      Root.PutArray('leads', Arr);
       Arr := TJsonArray.Create;
       for I := 0 to High(Created) do Arr.AddStr(Created[I]);
       Root.PutArray('created', Arr);
       Arr := TJsonArray.Create;
       for I := 0 to High(Skipped) do Arr.AddStr(Skipped[I]);
       Root.PutArray('skipped', Arr);
-      if Warn <> '' then Root.PutStr('warning', Warn);
       ReplyJSON(Resp, 200, Root.ToJSON);
     finally
       Root.Free;
@@ -1502,6 +1730,11 @@ begin
         ReplyErr(Resp, 400, Err);
         Exit;
       end;
+      { The operator writing to a member of a team its finished board
+        parked is new work for that team -- the factory's composer is
+        exactly this call. A team the operator parked stays parked. }
+      if Obj.GetStr('from', 'operator') = 'operator' then
+        ResumeTeamsOf(Info.Name);
       Root := TJsonObject.Create;
       try
         Root.PutStr('to', Info.Name);
@@ -4205,7 +4438,7 @@ begin
   end;
 
   if HasPrefix(Doc, '/v1/teams') then
-    Exit(RouteTeams(M, Doc, Body, Resp));
+    Exit(RouteTeams(M, Doc, Query, Body, Resp));
 
   if HasPrefix(Doc, '/v1/agents') then
     Exit(RouteAgents(M, Doc, Body, Resp));

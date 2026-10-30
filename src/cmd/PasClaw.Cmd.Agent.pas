@@ -533,23 +533,21 @@ begin
     autonomy. In `agent` there's no live scheduler, so additions apply the
     next time serve/gateway runs. }
   if EnableCron then RegisterCronTool(Result);
-  (* project/task: the desktop board. OPT-IN (Cfg.DesktopToolsEnabled).
-
-     The desktop clients drive this board over HTTP and do not need the
-     tools to exist; they are here only for when you want the MODEL to
-     manage the board itself. Off by default because PasClaw's behaviour
-     should not change for someone who never opens a desktop -- two extra
-     tools in the schema is two extra tools the model reads every turn. *)
-  if EnableDesktopTools then
-    RegisterProjectTools(Result);
+  (* project/task: the desktop board. For an ORDINARY chat, opt-in
+     (Cfg.DesktopToolsEnabled): the desktop clients drive the board over
+     HTTP, the tools are only for when you want the model to manage it,
+     and PasClaw's behaviour should not change for someone who never opens
+     a desktop -- two extra tools in the schema is two extra tools the
+     model reads every turn. A standing agent's turn has them whatever the
+     flag says: a team is these tools, and starting one is the opt-in. *)
+  RegisterProjectTools(Result, not EnableDesktopTools);
   (* agent: standing agents and the mailbox between them. Gates itself on
      the loaded config rather than taking a parameter -- the same shape
      send_message uses below, and it keeps the CLI in step with `gateway`
      and `serve` without threading a flag through every caller of this
      function. Without it, an operator who set agent_tools_enabled got
      the tool on the gateway and silently nothing on the CLI. *)
-  if LoadConfig.AgentToolsEnabled then
-    RegisterAgentTools(Result);
+  RegisterAgentTools(Result, not LoadConfig.AgentToolsEnabled);
   { plan_write registers when running in pmPlan mode (Cmd.Plan and
     `pasclaw agent --mode plan` both arrive here with the flag set).
     The tool is tcReadOnly even though it writes the one plan-meta

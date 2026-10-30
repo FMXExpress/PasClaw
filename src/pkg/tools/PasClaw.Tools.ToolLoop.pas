@@ -792,10 +792,51 @@ begin
 end;
 
 { True = proceed. False = refused; Refusal holds the tool result. }
+(* Why a call needs the operator's say-so when no rule has spoken: a
+   standing agent's tool (TTool.AskOutsideAgents) on an ordinary chat's
+   turn, or a call the consent probe names on ANY turn. '' = it does not.
+   A standing agent uses its own tools unasked -- starting the team was
+   the say-so -- but what the probe guards (starting another team) is not
+   one of them. *)
+function OutsideAgentConsent(const Cfg: TToolLoopConfig;
+  const ToolName, ArgsJSON: string): string;
+var
+  T: TTool;
+  Obj: TJsonObject;
+  Action: string;
+begin
+  Result := '';
+  if (not IsAgentTurn) and (Cfg.Registry <> nil) and Cfg.Registry.Find(ToolName, T) and
+     T.AskOutsideAgents then
+  begin
+    Action := '';
+    try
+      Obj := TJsonObject.Parse(ArgsJSON);
+      try
+        if Obj <> nil then Action := Trim(Obj.GetStr('action', ''));
+      finally
+        Obj.Free;
+      end;
+    except
+      Action := '';
+    end;
+    if ToolName = 'agent' then
+      Result := 'This chat wants to work with standing agents (agent ' + Action +
+                ') -- creating them, messaging them, asking for decisions.'
+    else
+      Result := 'This chat wants to manage the project board (' + ToolName + ' ' +
+                Action + ') -- the work a team''s agents do.';
+    Result := Result + ' Allow for this session to stop being asked here; a ' +
+              'permissions "allow" rule for "' + ToolName + '" stops it for good.';
+    Exit;
+  end;
+  if Assigned(ConsentProbe) then Result := ConsentProbe(ToolName, ArgsJSON);
+end;
+
 function PermissionGate(const Cfg: TToolLoopConfig; const ToolName, ArgsJSON: string;
                         out Refusal: string): Boolean;
 var
-  Res: string;
+  Res, Why: string;
   Dec: TPermDecision;
   Ans: TAskAnswer;
 begin
@@ -803,6 +844,14 @@ begin
   Refusal := '';
   Res := ResourceOf(ToolName, ArgsJSON);
   Dec := Decide(ToolName, Res);
+  { No rule has an opinion: the operator's say-so may still be needed. An
+    "allow" rule answered it in advance; a "deny" refuses as always. }
+  Why := '';
+  if Dec.Effect = peNone then
+  begin
+    Why := OutsideAgentConsent(Cfg, ToolName, ArgsJSON);
+    if Why <> '' then Dec.Effect := peAsk;
+  end;
   case Dec.Effect of
     peDeny:
       begin
@@ -817,7 +866,8 @@ begin
           Refusal := PermissionAskRefusal(ToolName, Res, True);
           Exit(False);
         end;
-        Ans := Cfg.OnAsk(ToolName, ArgsJSON, Res, PermissionAskReason(Dec));
+        if Why = '' then Why := PermissionAskReason(Dec);
+        Ans := Cfg.OnAsk(ToolName, ArgsJSON, Res, Why);
         case Ans of
           aaAllowOnce: ;
           aaAllowSession: RememberSessionAllow(Cfg.SteeringKey, ToolName, Res);
@@ -838,6 +888,7 @@ var
   PlanTool: TTool;
   SavedCfg: PToolLoopConfig;
   SavedWs: string;
+  SavedGate: Boolean;
 begin
   { Publish this run's config to the dispatching thread (loop thread for
     serial/mutating tools, worker thread for parallel read-only ones) so any
@@ -847,6 +898,8 @@ begin
   SetActiveConfig(Cfg.ActiveConfig);
   SavedCfg := GDispatchingCfg;
   GDispatchingCfg := @Cfg;
+  SavedGate := DispatchGatePassed;
+  SetDispatchGatePassed(False);
   SavedWs := ThreadSandboxWorkspace;
   if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(Cfg.Workspace);
   try
@@ -895,6 +948,10 @@ begin
      denylist and the family switches still run inside the tool. *)
   if not PermissionGate(Cfg, D.Call.Func.Name, RetryArgs, D.ResultText) then
     Exit;
+  { Through the gate: what it asked was answered yes. The tool reads this
+    to tell a gated call from one that never met the gate (restored in
+    the finally -- a tool that dispatches others nests). }
+  SetDispatchGatePassed(True);
   if not PreflightToolCall(D.Call.Func.Name, RetryArgs, D.Err) then
     D.ResultText := ''
   else if Cfg.Registry <> nil then
@@ -953,6 +1010,7 @@ begin
       D.Err := 'format_error: unable to canonicalize patch for deterministic retry; regenerate patch intent or use safer apply-patch/unified-diff edit path. original=' + D.Err;
   end;
   finally
+    SetDispatchGatePassed(SavedGate);
     if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(SavedWs);
     GDispatchingCfg := SavedCfg;
     SetActiveConfig(nil);

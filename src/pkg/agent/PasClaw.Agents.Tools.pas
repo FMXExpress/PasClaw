@@ -33,7 +33,11 @@ interface
 uses
   PasClaw.Tools.Registry;
 
-procedure RegisterAgentTools(R: TToolRegistry);
+{ AskOutsideAgents: a standing agent's tool that an ordinary chat finds
+  with tool_search and may call only with the operator's say-so
+  (TTool.AskOutsideAgents) -- the default; agent_tools_enabled registers
+  it plainly for everyone. }
+procedure RegisterAgentTools(R: TToolRegistry; AskOutsideAgents: Boolean = False);
 
 (* Who is calling, for THIS thread.
 
@@ -500,7 +504,7 @@ begin
   end;
 end;
 
-procedure RegisterAgentTools(R: TToolRegistry);
+procedure RegisterAgentTools(R: TToolRegistry; AskOutsideAgents: Boolean);
 var
   T: TTool;
 begin
@@ -519,10 +523,18 @@ begin
   T.Schema      := AgentSchema;
   T.Handler     := Tool_Agent;
   T.Category    := tcMutating;
-  R.Register(T);
+  if AskOutsideAgents then R.RegisterAskOutsideAgents(T) else R.Register(T);
+end;
+
+{ The registry's question -- is this turn a standing agent's? -- answered
+  by who is calling on this thread. }
+function CallerIsAgent: Boolean;
+begin
+  Result := CallingAgent <> '';
 end;
 
 initialization
+  AgentTurnProbe := CallerIsAgent;
   AddDecisionCreatedListener(NotifyDecisionChannel);
   AddDecisionAnsweredListener(DeliverDecisionAnswer);
 

@@ -283,14 +283,11 @@ begin
          the board flag meant a fresh install answered "tile the open
          windows" with a model that had no way to do it. *)
       RegisterDesktopTool(Reg);
-      { project/task -- the BOARD, which is a different question: this is
-        the flag for letting the model manage it. Opt-in, same reasoning
-        as the cron tool above. }
-      if Cfg.DesktopToolsEnabled then RegisterProjectTools(Reg);
-      { agent -- standing colleagues and the mailbox between them.
-        Its own flag: managing the board and creating colleagues are
-        different powers to hand a model. }
-      if Cfg.AgentToolsEnabled then RegisterAgentTools(Reg);
+      (* project/task/rule and agent: always for a standing agent's turn
+         (a team is those tools; starting one is the opt-in), and for an
+         ordinary chat's model only when its flag is on. See Cmd.Gateway. *)
+      RegisterProjectTools(Reg, not Cfg.DesktopToolsEnabled);
+      RegisterAgentTools(Reg, not Cfg.AgentToolsEnabled);
       SetTeamActionsAllowed(Cfg.AgentToolsEnabled);
       SetClaimLeaseMinutes(Cfg.TeamsClaimLeaseMinutes);
       Skills := LoadSkillManifests(GetHome);

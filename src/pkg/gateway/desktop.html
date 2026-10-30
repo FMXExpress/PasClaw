@@ -1988,6 +1988,7 @@ const RESTORERS = {
   shell:   () => openShell(),
   log:     () => openLog(),
   needs:   () => openNeedsYou(),
+  factory: a  => openFactory(a || undefined),
 };
 
 let saveTimer = null;
@@ -2074,6 +2075,7 @@ async function restoreDesktop() {
 
 const MENU = [
   { label: "Ask PasClaw",       icon: "brain",  fn: () => openShell() },
+  { label: "Software Factory",  icon: "brain",  fn: () => openFactory() },
   { label: "New Project...",    icon: "folder", fn: newProject },
   { label: "Projects",          icon: "disk",   fn: openTree },
   { sep: true },
@@ -2255,8 +2257,29 @@ function paintNeedsYou(w) {
   if (NEEDS.asks.length) head("Permission asks");
   NEEDS.asks.forEach(p => {
     const r = row();
-    r.appendChild(el("div", null, `${p.tool} wants ${p.resource || "(no resource)"}`));
-    if (p.reason) r.appendChild(el("div", "muted", p.reason));
+    /* What the call would do. A tool with no resource -- the board and
+       agent tools, the desktop's team_up -- is described by its arguments
+       ("task: create, title Add a search box"), not "(no resource)". */
+    let what = p.resource;
+    if (!what) {
+      try {
+        const a = JSON.parse(p.args || "{}");
+        const parts = [];
+        if (a.action) parts.push(a.action);
+        ["title", "name", "project", "text", "question"].forEach(k => {
+          if (a[k]) parts.push(k + " " + String(a[k]).slice(0, 80));
+        });
+        (a.actions || []).forEach(x => x && x.do && parts.push(x.do +
+          (x.brief ? " " + String(x.brief).slice(0, 80) : "")));
+        what = parts.join(", ");
+      } catch {}
+    }
+    r.appendChild(el("div", null, `${p.tool}: ${what || "(no details)"}`));
+    if (p.reason) {
+      const why = el("div", "muted", p.reason);
+      why.style.whiteSpace = "normal";
+      r.appendChild(why);
+    }
     const a = acts();
     const say = ans => api(`/v1/permissions/${p.id}`,
                            { method: "POST", body: { answer: ans } });
@@ -2750,6 +2773,11 @@ const ASK_KINDS = {
               where: "New project. Plans first -- nothing is built until you approve." },
   build:    { label: "Build an app",
               where: "New project. Starts building straight away." },
+  /* The software factory: a team, not one agent. The lead plans the
+     sentence into tasks with checks, the developer builds, a reviewer
+     gives each one a verdict -- and the factory window opens on it. */
+  team:     { label: "Build with a team",
+              where: "New project. A team plans it into tasks, builds and reviews each one." },
   /* Shell only: the desktop itself is the thing being addressed. */
   control:  { label: "Control the desktop",
               where: "Arranges windows, opens apps, queues builds." },
@@ -2828,7 +2856,7 @@ const SHELL_ACTIONS = {
       const body = { template: a.template || "software-team" };
       if (a.project) body.project = a.project; else body.goal = a.brief || a.title || "";
       const j = await api("/v1/teams/up", { method: "POST", body });
-      openAgents();
+      openFactory(j.team);
       let msg = "team " + j.team + " is up on " + j.project;
       if (j.warning) msg += " -- WARNING: " + j.warning;
       return msg;
@@ -3137,9 +3165,34 @@ function openShell() {
   });
   kind.value = "auto";
   const where = el("span", "muted");
+  /* Which team "Build with a team" starts -- shown only for that choice. */
+  const tmpl = el("select", "fld");
+  tmpl.style.display = "none";
+  api("/v1/teams").then(j => {
+    (j.teams || []).forEach(t => {
+      const o = el("option", null, t.title);
+      o.value = t.name;
+      tmpl.appendChild(o);
+    });
+    if ([...tmpl.options].some(o => o.value === "software-team")) tmpl.value = "software-team";
+  }).catch(() => {});
+  /* "Tell the ... team": one entry per team at work. After "Build with a
+     team" the shell switches to it, so what you type next goes to that
+     team's lead rather than starting something new. */
+  const teams = new Map();
+  async function refreshTeamKinds() {
+    [...kind.options].filter(o => o.value.startsWith("tell:")).forEach(o => o.remove());
+    teams.clear();
+    (await teamStatusList()).filter(teamIsLive).forEach(t => {
+      teams.set(t.name, t);
+      const o = el("option", null, "Tell the " + (t.title || t.name) + " team");
+      o.value = "tell:" + t.name;
+      kind.appendChild(o);
+    });
+  }
   const go = el("button", "btn", "Go");
   const turn = makeTurnControl(go, "Go");
-  row.appendChild(where); row.appendChild(kind); row.appendChild(go);
+  row.appendChild(where); row.appendChild(kind); row.appendChild(tmpl); row.appendChild(go);
   composer.appendChild(ta); composer.appendChild(row);
   const chips = el("div", "shellchips");
   wrap.appendChild(log); wrap.appendChild(chips); wrap.appendChild(composer);
@@ -3157,11 +3210,19 @@ function openShell() {
   const note = t => say("desktop", t, "");
 
   const paintWhere = () => {
+    tmpl.style.display = kind.value === "team" ? "" : "none";
+    if (kind.value.startsWith("tell:")) {
+      const t = teams.get(kind.value.slice(5));
+      const lead = t && (t.leads || [])[0];
+      where.textContent = t ? `Goes to ${lead || "the lead"}, who runs ${t.project}.` : "";
+      return;
+    }
     const k = ASK_KINDS[kind.value];
     where.textContent = k ? k.where : "";
   };
   kind.addEventListener("change", paintWhere);
   paintWhere();
+  refreshTeamKinds().then(paintWhere);
 
   /* The four intents keep their meanings -- the shell is where they live
      now, not a second copy of them. The field they read is this window's
@@ -3173,10 +3234,12 @@ function openShell() {
     const k = kind.value;
     if (k !== "control" && k !== "auto") ta.value = "";
     say("you", text, "u");
+    if (k.startsWith("tell:")) return tellTeam(k.slice(5), text);
     switch (k) {
       case "research": return askWith(text, "research");
       case "plan":     return buildWith(text, true);
       case "build":    return buildWith(text, false);
+      case "team":     return teamWith(text);
       case "ask":      return askWith(text, "search");
       /* auto and control are the same journey -- a turn with the state
          and the tools -- and differ only in what the prompt tells the
@@ -3198,6 +3261,34 @@ function openShell() {
     note(plan ? "Planning a new project..." : "Starting a new project...");
     const made = await createAppFrom(text, plan);
     if (made) note("Project: " + made);
+  }
+
+  async function teamWith(text) {
+    note("Starting a team...");
+    try {
+      const j = await api("/v1/teams/up", { method: "POST",
+        body: { template: tmpl.value || "software-team", goal: text } });
+      const lead = (j.leads || [])[0] || "the lead";
+      note(`${j.title || j.team} is on ${j.project}: ${lead} is planning it into ` +
+           `tasks. What you type next goes to ${lead} -- or talk to the team in ` +
+           `the factory window.`);
+      if (j.warning) note("Warning: " + j.warning);
+      await refreshTeamKinds();
+      kind.value = "tell:" + j.team;
+      paintWhere();
+      openFactory(j.team);
+    } catch (e) { note("Could not start the team: " + e.message); }
+  }
+
+  async function tellTeam(name, text) {
+    const t = teams.get(name);
+    const lead = t && (t.leads || [])[0];
+    if (!lead) { note("That team has no lead to talk to."); return; }
+    try {
+      await api(`/v1/agents/${encodeURIComponent(lead)}/send`,
+                { method: "POST", body: { from: "operator", text } });
+      note(`Sent to ${lead}. The factory window shows the work.`);
+    } catch (e) { note("Not sent: " + e.message); }
   }
 
   /* Talking TO the desktop. Its own turn, with the shell prompt and no
@@ -3893,21 +3984,8 @@ function paintTree() {
          asks for the reason its builder will read. Recorded as yours. */
       if (t.status === "review") {
         const verdict = async (accept) => {
-          let reason = "";
-          if (accept) {
-            const msg = `Accept ${t.id} "${t.title}"?\n\n` +
-              (t.criteria ? `Criteria:\n${t.criteria}\n\n` : "") +
-              `Submitted by ${t.submitted_by}:\n${t.evidence || "(no evidence)"}`;
-            if (!confirm(msg)) return;
-          } else {
-            reason = prompt(`Reject ${t.id}: what is wrong? ` +
-                            `(${t.submitted_by} reads this)`, "");
-            if (!reason) return;
-          }
           try {
-            await api(`/v1/projects/${p.name}/tasks/${t.id}/verdict`,
-              { method: "POST",
-                body: { verdict: accept ? "accept" : "reject", reason } });
+            if (!(await verdictPrompt(p.name, t, accept))) return;
             await loadTasks(p.name);
             await loadProjects();
           } catch (err) { alert(err.message); }
@@ -6967,13 +7045,377 @@ async function newTeam() {
     try {
       const j = await api("/v1/teams/up", { method: "POST", body });
       closeWindow(w);
-      openAgents();
+      openFactory(j.team);
       if (j.warning) alert("The team is up, but: " + j.warning);
     } catch (e) {
       status.textContent = e.message;
       go.disabled = false;
     }
   });
+}
+
+/* ==========================================================================
+   Software Factory -- one sentence in, a team building it, one window to
+   watch and steer it from.
+
+   The pieces existed: a team plans a goal into tasks, builds them and
+   reviews each one; the board shows the tasks; the lead has a mailbox.
+   What was missing was one place to say what you want and see it happen
+   -- the team was started in one window, watched in a second, and talked
+   to in a third. The factory window is the conversation with the team's
+   lead beside its live board, and the Ask shell can start one and keep
+   talking to it.
+   ========================================================================== */
+
+async function teamStatusList() {
+  try { return (await api("/v1/teams/status")).teams || []; } catch { return []; }
+}
+
+/* A team is worth offering while it is on, or still has open work. */
+function teamIsLive(t) { return t.enabled || (t.open_tasks || 0) > 0; }
+
+function feedTime(at) { return (at || "").replace("T", " ").slice(5, 16); }
+
+/* The operator's verdict on a task in review -- the confirm or the reason,
+   then the route. One copy, for the board tree and the factory. */
+async function verdictPrompt(project, t, accept) {
+  let reason = "";
+  if (accept) {
+    const msg = `Accept ${t.id} "${t.title}"?\n\n` +
+      (t.criteria ? `Criteria:\n${t.criteria}\n\n` : "") +
+      `Submitted by ${t.submitted_by}:\n${t.evidence || "(no evidence)"}`;
+    if (!confirm(msg)) return false;
+  } else {
+    reason = prompt(`Reject ${t.id}: what is wrong? ` +
+                    `(${t.submitted_by} reads this)`, "");
+    if (!reason) return false;
+  }
+  await api(`/v1/projects/${project}/tasks/${t.id}/verdict`,
+    { method: "POST", body: { verdict: accept ? "accept" : "reject", reason } });
+  return true;
+}
+
+/* No team named: the launcher -- start one from a sentence, or open one
+   that is already working. */
+async function openFactoryLauncher() {
+  const w = createWindow({ key: "factory-launcher", title: "Software Factory",
+                           icon: "brain", width: 480, height: 380 });
+  if (w.__wired) { restoreWindow(w); focusWindow(w); return w; }
+  w.__wired = true;
+  const wrap = el("div");
+  wrap.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:8px";
+  wrap.appendChild(el("div", "muted",
+    "Say what to build. A team plans it into tasks with checks, builds " +
+    "them, and reviews each one; you watch and steer it in one window."));
+  const goal = el("textarea", "fld");
+  goal.rows = 4;
+  goal.placeholder = "e.g. A habit tracker: daily check-ins, streaks, a weekly chart";
+  wrap.appendChild(goal);
+  const row = el("div");
+  row.style.cssText = "display:flex;gap:6px;align-items:center;justify-content:flex-end";
+  const tmpl = el("select", "fld");
+  tmpl.style.width = "auto";
+  try {
+    ((await api("/v1/teams")).teams || []).forEach(t => {
+      const o = el("option", null, t.title + " (" + (t.agents || []).length + ")");
+      o.value = t.name;
+      tmpl.appendChild(o);
+    });
+  } catch {}
+  if ([...tmpl.options].some(o => o.value === "software-team")) tmpl.value = "software-team";
+  const status = el("span", "muted");
+  const go = el("button", "btn", "Build it");
+  row.appendChild(status); row.appendChild(tmpl); row.appendChild(go);
+  wrap.appendChild(row);
+
+  const list = el("div");
+  list.style.cssText = "display:flex;flex-direction:column;gap:2px;overflow:auto";
+  wrap.appendChild(list);
+  w.body.appendChild(wrap);
+  const teams = (await teamStatusList()).filter(teamIsLive);
+  if (teams.length) list.appendChild(el("div", "muted", "Working now:"));
+  teams.forEach(t => {
+    const r = el("div", "node");
+    r.appendChild(el("span", null, (t.title || t.name) + " -- " + t.project +
+      "  (" + (t.open_tasks || 0) + " open)"));
+    const open = el("button", "btn", "Open");
+    open.style.cssText = "padding:0 6px;font-size:10px;line-height:14px";
+    open.addEventListener("click", () => openFactory(t.name));
+    r.appendChild(open);
+    list.appendChild(r);
+  });
+
+  go.addEventListener("click", async () => {
+    if (!goal.value.trim()) { status.textContent = "say what to build"; return; }
+    go.disabled = true;
+    status.textContent = "starting the team...";
+    try {
+      const j = await api("/v1/teams/up", { method: "POST",
+        body: { template: tmpl.value, goal: goal.value.trim() } });
+      closeWindow(w);
+      openFactory(j.team);
+      if (j.warning) alert("The team is up, but: " + j.warning);
+    } catch (e) { status.textContent = e.message; go.disabled = false; }
+  });
+  goal.focus();
+  return w;
+}
+
+async function openFactory(team) {
+  if (!team) return openFactoryLauncher();
+  const r = desktopRect();
+  const key = "factory:" + team;
+  const w = createWindow({ key, title: "Factory -- " + team, icon: "brain", pad: false,
+    width: Math.round(r.width * 0.85), height: Math.round(r.height * 0.85),
+    restore: { fn: "factory", arg: team } });
+  if (w.__wired) { restoreWindow(w); focusWindow(w); return w; }
+  w.__wired = true;
+
+  const root = el("div");
+  root.style.cssText = "display:flex;flex-direction:column;height:100%";
+  const head = el("div");
+  head.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 6px";
+  const asks = el("div");
+  asks.style.cssText = "padding:0 6px";
+  const cols = el("div");
+  cols.style.cssText = "display:flex;gap:6px;flex:1 1 auto;min-height:0;padding:0 6px 6px";
+  const left = el("div");
+  left.style.cssText = "display:flex;flex-direction:column;flex:3 1 0;min-width:0";
+  const feed = el("div", "log in factory-feed");
+  feed.style.cssText = "flex:1 1 auto;overflow:auto;min-height:0";
+  const composer = el("div", "composer");
+  composer.style.cssText = "display:flex;gap:4px;padding-top:4px";
+  const ta = el("textarea", "fld");
+  ta.rows = 2;
+  ta.style.cssText = "flex:1 1 auto;resize:none";
+  const send = el("button", "btn", "Send");
+  composer.appendChild(ta); composer.appendChild(send);
+  left.appendChild(feed); left.appendChild(composer);
+  const right = el("div");
+  right.style.cssText = "flex:2 1 0;min-width:0;display:flex;flex-direction:column";
+  const boardHead = el("div");
+  boardHead.style.cssText = "display:flex;gap:6px;align-items:center;padding-bottom:3px";
+  const board = el("div", "log in factory-board");
+  board.style.cssText = "flex:1 1 auto;overflow:auto;min-height:0;padding:3px";
+  right.appendChild(boardHead); right.appendChild(board);
+  cols.appendChild(left); cols.appendChild(right);
+  root.appendChild(head); root.appendChild(asks); root.appendChild(cols);
+  w.body.appendChild(root);
+
+  let state = null;
+  let showDone = false;
+  const small = b => { b.style.cssText = "padding:0 6px;font-size:10px;line-height:14px"; return b; };
+
+  function paintHead(j) {
+    const title = "Factory -- " + j.title;
+    if (w.title !== title) {
+      w.title = title;
+      const t = w.bar.querySelector(".t");
+      if (t) t.textContent = title;
+      paintTaskbar();
+    }
+    head.textContent = "";
+    head.appendChild(el("b", null, j.project));
+    const busy = (j.members || []).some(m => m.busy);
+    const st = j.paused ? "paused -- nothing runs until resumed" :
+               !j.enabled && j.auto_parked ? "finished -- parked until there is new work" :
+               !j.enabled ? "parked" : busy ? "working" : "waiting";
+    head.appendChild(el("span", "badge", st));
+    (j.members || []).forEach(m => {
+      const c = el("span", "badge" + (m.busy ? " st-active" : ""),
+        m.name + (m.busy ? " ●" : "") + (m.pending ? " ✉" + m.pending : ""));
+      c.title = (m.title || m.name) + (m.busy ? " -- working" : " -- idle") +
+                (m.pending ? ", " + m.pending + " message(s) waiting" : "");
+      head.appendChild(c);
+    });
+    const sp = el("span"); sp.style.flex = "1 1 auto"; head.appendChild(sp);
+    const app = small(el("button", "btn", "Open app"));
+    app.addEventListener("click", () => openApp(j.project));
+    head.appendChild(app);
+    if (j.enabled) {
+      const park = small(el("button", "btn", "Park"));
+      park.title = "Stop waking the team; agents, board and conversation stay";
+      park.addEventListener("click", async () => {
+        try { await api("/v1/teams/down", { method: "POST", body: { team } }); }
+        catch (e) { alert(e.message); }
+        paintAll();
+      });
+      head.appendChild(park);
+    } else {
+      const resume = small(el("button", "btn", "Resume"));
+      resume.title = "Put the team back on this board";
+      resume.addEventListener("click", async () => {
+        try {
+          await api("/v1/teams/up", { method: "POST", body: { template: team, project: j.project } });
+        } catch (e) { alert(e.message); }
+        paintAll();
+      });
+      head.appendChild(resume);
+    }
+    const lead = (j.leads || [])[0] || "the lead";
+    ta.placeholder = `Tell ${lead} what you want -- it plans the work and hands it out`;
+  }
+
+  function paintAsks(j) {
+    asks.textContent = "";
+    (j.asks || []).forEach(a => {
+      const r = el("div", "node st-review");
+      r.appendChild(el("span", null, "❓ " + a.asked_by + " asks: " + a.question));
+      const b = small(el("button", "btn", "Answer"));
+      b.addEventListener("click", () => openNeedsYou());
+      r.appendChild(b);
+      asks.appendChild(r);
+    });
+  }
+
+  function paintFeed(j) {
+    const atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
+    feed.textContent = "";
+    const items = j.feed || [];
+    if (!items.length)
+      feed.appendChild(el("div", "muted", "Nothing yet -- the lead is reading the goal."));
+    items.forEach(it => {
+      if (it.kind === "board") {
+        const d = el("div", "muted factory-event");
+        d.style.cssText = "padding:1px 6px;font-size:11px";
+        d.textContent = feedTime(it.at) + "  " + it.text;
+        feed.appendChild(d);
+        return;
+      }
+      const m = el("div", "msg" + (it.kind === "you" ? " u" : ""));
+      m.appendChild(el("div", "who",
+        (it.kind === "you" ? "you → " + it.who : it.who) + "  " + feedTime(it.at) +
+        (it.event === "failed" ? "  (failed)" : "")));
+      const b = el("div", "body");
+      if (it.kind === "lead") paintAssistant(b, it.text, null);
+      else b.textContent = it.text;
+      m.appendChild(b);
+      feed.appendChild(m);
+    });
+    if (atEnd || !state) feed.scrollTop = feed.scrollHeight;
+  }
+
+  async function paintBoard(j) {
+    let tasks = [];
+    try { tasks = (await api(`/v1/projects/${j.project}/tasks`)).tasks || []; } catch {}
+    boardHead.textContent = "";
+    const counts = {};
+    tasks.forEach(t => { counts[t.status] = (counts[t.status] || 0) + 1; });
+    boardHead.appendChild(el("b", null, "Board"));
+    boardHead.appendChild(el("span", "muted",
+      tasks.length ? `${counts.done || 0}/${tasks.length} done` +
+                     (counts.review ? `, ${counts.review} in review` : "") : "no tasks yet"));
+    const sp = el("span"); sp.style.flex = "1 1 auto"; boardHead.appendChild(sp);
+    const add = small(el("button", "btn", "+ Task"));
+    add.addEventListener("click", () => taskForm(j.project, null));
+    boardHead.appendChild(add);
+
+    board.textContent = "";
+    const groups = [["review", "In review"], ["active", "Working"], ["todo", "To do"],
+                    ["blocked", "Blocked"], ["done", "Done"]];
+    groups.forEach(([st, label]) => {
+      const rows = tasks.filter(t => t.status === st);
+      if (!rows.length) return;
+      const h = el("div", "muted");
+      h.style.cssText = "padding:4px 2px 1px;font-size:11px";
+      h.textContent = label + " (" + rows.length + ")" +
+                      (st === "done" ? (showDone ? "  ▼" : "  ▶") : "");
+      if (st === "done") {
+        h.style.cursor = "pointer";
+        h.addEventListener("click", () => { showDone = !showDone; paintBoard(j); });
+      }
+      board.appendChild(h);
+      if (st === "done" && !showDone) return;
+      rows.forEach(t => {
+        const r = el("div", "node");
+        const waiting = (t.waiting_on || []).length && t.status === "todo";
+        const lbl = el("span", "st-" + t.status,
+          t.id + "  " + t.title + (t.assignee ? "  @" + t.assignee : "") +
+          (waiting ? "  -- waits on " + t.waiting_on.join(", ") : ""));
+        lbl.style.cssText = "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis" +
+                            (waiting ? ";opacity:.6" : "");
+        r.title = [lbl.textContent, t.notes, t.criteria ? "Criteria:\n" + t.criteria : "",
+                   t.evidence ? "Evidence:\n" + t.evidence : ""].filter(Boolean).join("\n\n");
+        r.appendChild(lbl);
+        if (t.status === "review") {
+          [["Accept", true], ["Reject", false]].forEach(([txt, ok]) => {
+            const b = small(el("button", "btn", txt));
+            b.addEventListener("click", async e => {
+              e.stopPropagation();
+              try { if (await verdictPrompt(j.project, t, ok)) paintAll(); }
+              catch (err) { alert(err.message); }
+            });
+            r.appendChild(b);
+          });
+        }
+        if (t.status !== "done") {
+          const ed = small(el("button", "btn", "Edit"));
+          ed.addEventListener("click", e => { e.stopPropagation(); taskForm(j.project, t); });
+          r.appendChild(ed);
+        }
+        board.appendChild(r);
+      });
+    });
+  }
+
+  async function paintAll() {
+    if (!WINS.get(key)) return;
+    let j;
+    try { j = await api(`/v1/teams/${encodeURIComponent(team)}/feed?limit=300`); }
+    catch (e) { head.textContent = e.message; return; }
+    paintHead(j); paintAsks(j); paintFeed(j);
+    state = j;
+    await paintBoard(j);
+  }
+
+  /* The window repaints on what the board and the agents publish -- it
+     does not poll. Bursts (a submit is a task event, an agent event and
+     a message) collapse into one repaint. */
+  let soon = 0;
+  const schedule = () => {
+    if (soon) return;
+    soon = setTimeout(() => { soon = 0; paintAll(); }, 300);
+  };
+  const isMember = name => state && (state.members || []).some(m => m.name === name);
+  onDesktopEvent("task", ev => {
+    if (ev && state && ev.project === state.project && WINS.get(key)) schedule();
+  });
+  onDesktopEvent("agent", ev => {
+    if (ev && isMember(ev.name) && WINS.get(key)) schedule();
+  });
+  /* Live narration while an agent works: ephemeral, replaced by the
+     record on the next repaint. */
+  onDesktopEvent("agent-activity", ev => {
+    if (!ev || !WINS.get(key) || !isMember(ev.name)) return;
+    const d = el("div", "muted");
+    d.style.cssText = "padding:1px 6px;font-size:11px";
+    d.textContent = "⏺ " + ev.name + ": " + ev.tool + (ev.detail ? "(" + ev.detail + ")" : "()");
+    feed.appendChild(d);
+    feed.scrollTop = feed.scrollHeight;
+  });
+
+  async function submit() {
+    const text = ta.value.trim();
+    if (!text || !state) return;
+    const lead = (state.leads || [])[0];
+    if (!lead) { alert("This team has no lead to talk to."); return; }
+    send.disabled = true;
+    try {
+      await api(`/v1/agents/${encodeURIComponent(lead)}/send`,
+                { method: "POST", body: { from: "operator", text } });
+      ta.value = "";
+      await paintAll();
+    } catch (e) { alert(e.message); }
+    send.disabled = false;
+  }
+  send.addEventListener("click", submit);
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+  });
+
+  await paintAll();
+  ta.focus();
+  return w;
 }
 
 /* ==========================================================================

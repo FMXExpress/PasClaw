@@ -263,6 +263,41 @@ begin
   end;
 end;
 
+(* A standing agent's tool (the board, the agents) asks the operator
+   before an ordinary caller uses it, and an MCP client has no operator to
+   ask: it is not exposed, even with mutating tools allowed. *)
+procedure TestAskOutsideAgentsNotExposed;
+var
+  Reg: TToolRegistry;
+  Srv: TMCPServerCore;
+  T: TTool;
+  Resp: string;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    RegisterFakeTools(Reg);
+    T := Default(TTool);
+    T.Name        := 'agent_board';
+    T.Description := 'a standing agent''s tool';
+    T.Schema      := '{"type":"object"}';
+    T.Category    := tcMutating;
+    T.Handler     := ShellHandler;
+    Reg.RegisterAskOutsideAgents(T);
+    Srv := TMCPServerCore.Create(Reg, True, '');
+    try
+      Resp := Srv.HandleRequest('{"jsonrpc":"2.0","id":2,"method":"tools/list"}');
+      AssertTrue(Pos('"name":"agent_board"', Resp) = 0, 'not listed to an MCP client');
+      Resp := Srv.HandleRequest('{"jsonrpc":"2.0","id":3,"method":"tools/call",' +
+        '"params":{"name":"agent_board","arguments":{}}}');
+      AssertContains(Resp, 'not exposed', 'nor callable by one');
+    finally
+      Srv.Free;
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
 procedure TestToolsCallHappyPath;
 var
   Reg: TToolRegistry;
@@ -628,6 +663,7 @@ begin
   TestInitializedNotificationHasNoResponse; WriteLn('  ok: initialized notification (no response)');
   TestToolsListFiltersMutating;             WriteLn('  ok: tools/list filters mutating');
   TestToolsListWithMutatingAllowed;         WriteLn('  ok: tools/list with mutating allowed');
+  TestAskOutsideAgentsNotExposed;           WriteLn('  ok: a standing agent''s tool is not exposed');
   TestToolsCallHappyPath;                   WriteLn('  ok: tools/call happy path');
   TestToolsCallToolErrorLandsAsIsError;     WriteLn('  ok: tools/call tool-error -> isError');
   TestToolsCallMutatingGateBlocks;          WriteLn('  ok: tools/call mutating gate blocks');

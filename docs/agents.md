@@ -93,16 +93,13 @@ failure of the two.
 
 ## The `agent` tool
 
-Off by default, behind its own flag:
-
-```json
-{ "agent_tools_enabled": true }
-```
-
-Separate from `desktop_tools_enabled` rather than folded into it: that
-flag answers "may the model manage the project board", this one answers
-"may the model create colleagues and message them", and an operator can
-reasonably want either without the other.
+A standing agent always has it — an agent with a mailbox and no way to
+answer is not one. An ordinary chat finds it with `tool_search` and **asks
+you** before using it ("This chat wants to work with standing agents (agent
+create) …"; Allow once / for this session / Deny), the way a permissions
+`ask` rule does; with nobody to ask, the call is refused. A permissions
+`allow` rule for `agent` — or the old `agent_tools_enabled` switch — says
+yes in advance. See [teams](./teams.md#flags-none--it-asks).
 
 Registered wherever the agent loop runs — `gateway`, `serve` and the CLI —
 so the flag means the same thing on all three.
