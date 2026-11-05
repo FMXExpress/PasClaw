@@ -502,12 +502,13 @@ var
   BR: TBackupResult;
   Kind: string;
   CoreNames: array[0..4] of string;
-  SinceLearn, SinceLoad, Updated: Int64;
+  SinceLearn, Updated: Int64;
   Patterns: TErrorPatternArray;
   Miner: TPatternMiner;
   Names, AnchorOf: TArray<string>;
   Probs: TProblemLineArray;
-  InLearn, Failed, Misused, WriteIt: Boolean;
+  InLearn, InSkills, InStats, Failed, Misused, SampleBare, WriteIt: Boolean;
+  Sample: string;
   ScarsFile: string;
 begin
   Result := False;
@@ -559,8 +560,6 @@ begin
   SinceStats  := O.NowUnix - Int64(O.SinceDays) * 86400;
   SinceSkills := O.NowUnix - Int64(O.UnusedSkillDays) * 86400;
   SinceLearn  := O.NowUnix - Int64(O.LearnDays) * 86400;
-  SinceLoad := SinceStats;
-  if SinceSkills < SinceLoad then SinceLoad := SinceSkills;
   Patterns := nil;
   Miner := nil;
   if O.LearnDays > 0 then Miner := TPatternMiner.Create;
@@ -580,60 +579,77 @@ begin
     end;
     for i := 0 to High(Sessions) do
     begin
-      Updated := Sessions[i].UpdatedAt;
-      { The learn window's rule is PasClaw.Learn's, so `pasclaw learn
-        --since N` and this pass mine the same sessions -- one with no
-        timestamp included. }
-      InLearn := (Miner <> nil) and InWindow(Updated, SinceLearn);
-      if (Updated < SinceLoad) and not InLearn then Continue;
+      { Aged by PasClaw.Learn's rule, so `pasclaw learn --since N` and this
+        pass mine the same sessions, and one saved without timestamps ages
+        by its file. }
+      Updated := SessionStamp(Sessions[i]);
+      InLearn  := (Miner <> nil) and InWindow(Updated, SinceLearn);
+      InSkills := InWindow(Updated, SinceSkills);
+      InStats  := InWindow(Updated, SinceStats);
+      if not (InLearn or InSkills or InStats) then Continue;
       Sess := TSession.Create(Sessions[i].Id);
       try
         Names := ResultToolNames(Sess);
-        { Recurring patterns: the learn window. }
-        if InLearn then Miner.Scan(Sess, Names);
-        { Skill usage: every skill_<name> call in the skill window. }
-        if Updated >= SinceSkills then
-          for j := 0 to High(Sess.Messages) do
-            if Sess.Messages[j].Role = mrAssistant then
-              for k := 0 to High(Sess.Messages[j].ToolCalls) do
-              begin
-                Name := Sess.Messages[j].ToolCalls[k].Func.Name;
-                if Pos('skill_', Name) = 1 then Used.Add(Copy(Name, 7, MaxInt));
-              end;
-        { Stats: the --since window. }
-        if Updated >= SinceStats then
+        if InStats then
         begin
           Inc(R.SessionsScanned);
           Inc(R.InputTokens,  Sess.Meta.Stats.InputTokens);
           Inc(R.OutputTokens, Sess.Meta.Stats.OutputTokens);
-          for j := 0 to High(Sess.Messages) do
-            case Sess.Messages[j].Role of
-              mrUser: Inc(R.Turns);
-              mrAssistant: Inc(R.ToolCalls, Length(Sess.Messages[j].ToolCalls));
-              mrTool:
+        end;
+        { One walk of the messages for all three; each tool result is
+          classified once, for the recurring patterns and the stats both. }
+        for j := 0 to High(Sess.Messages) do
+          case Sess.Messages[j].Role of
+            mrUser:
+              if InStats then Inc(R.Turns);
+            mrAssistant:
+              begin
+                if InStats then Inc(R.ToolCalls, Length(Sess.Messages[j].ToolCalls));
+                { Skill usage: every skill_<name> call in the skill window. }
+                if InSkills then
+                  for k := 0 to High(Sess.Messages[j].ToolCalls) do
+                  begin
+                    Name := Sess.Messages[j].ToolCalls[k].Func.Name;
+                    if Pos('skill_', Name) = 1 then Used.Add(Copy(Name, 7, MaxInt));
+                  end;
+              end;
+            mrTool:
+              if InLearn or InStats then
+              begin
+                if j <= High(Names) then Name := Names[j] else Name := '';
+                Probs := ProblemLines(Name, Sess.Messages[j].Content);
+                if InLearn then Miner.Add(Probs, Name, Sess);
+                if InStats then
                 begin
-                  { At most one failure and one misuse per tool result;
-                    keep the failing line. }
-                  if j <= High(Names) then Name := Names[j] else Name := '';
-                  Probs := ProblemLines(Name, Sess.Messages[j].Content);
+                  { At most one failure and one misuse per tool result. The
+                    sample says how it failed when a line does ("exit=1"
+                    only says that it did). }
                   Failed := False;
                   Misused := False;
+                  Sample := '';
+                  SampleBare := True;
                   for n := 0 to High(Probs) do
-                    if (Probs[n].Kind = pkFailure) and not Failed then
+                    if Probs[n].Kind = pkFailure then
                     begin
+                      if not Failed or (SampleBare and not Probs[n].Bare) then
+                      begin
+                        Sample := Probs[n].Line;
+                        SampleBare := Probs[n].Bare;
+                      end;
                       Failed := True;
-                      Inc(R.ToolFailures);
-                      if Length(R.FailureSamples) < MaxFailureSamples then
-                        AddStr(R.FailureSamples, Clip(Probs[n].Line));
                     end
-                    else if (Probs[n].Kind = pkMisuse) and not Misused then
-                    begin
+                    else
                       Misused := True;
-                      Inc(R.ToolMisuses);
-                    end;
+                  if Failed then
+                  begin
+                    Inc(R.ToolFailures);
+                    if Length(R.FailureSamples) < MaxFailureSamples then
+                      AddStr(R.FailureSamples, Clip(Sample));
+                  end;
+                  if Misused then Inc(R.ToolMisuses);
                 end;
-            end;
-        end;
+              end;
+          end;
       finally
         Sess.Free;
       end;

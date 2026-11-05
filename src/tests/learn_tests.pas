@@ -32,9 +32,28 @@ uses
   PasClaw.Config,
   PasClaw.Providers.Types,
   PasClaw.Session.Store,
+  PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
   PasClaw.Tools.Sandbox,
   PasClaw.Tools.FS,
+  PasClaw.Tools.Memory,
+  PasClaw.Tools.MemoryFetch,
+  PasClaw.Tools.KB,
+  PasClaw.Tools.Vault,
+  PasClaw.Tools.SessionSearch,
+  PasClaw.Tools.WebFetch,
+  PasClaw.Tools.WebSearch,
+  PasClaw.Tools.OutputCache,
+  PasClaw.Tools.PlanWrite,
+  PasClaw.Tools.Shell,
+  PasClaw.Tools.ExecuteCode,
+  PasClaw.Tools.Cron,
+  PasClaw.Tools.SendMessage,
+  PasClaw.Tools.Worktree,
+  PasClaw.Tools.DelphiBuild,
+  PasClaw.Agents.Tools,
+  PasClaw.Projects.Tools,
+  PasClaw.Tools.Notes,
   PasClaw.Learn;
 
 procedure Fail(const Msg: string);
@@ -424,7 +443,21 @@ begin
        CallMsg('shell_exec', 'c4'),
        ResultMsg('c4', '**Symptom:** ERROR: refused: eval'#10 +
          '  - `bash: npm: command not found`'#10 +
-         '- 2x across 2 sessions, `shell`: `ERROR: x` ' + SectionSign + 'ERROR-X')], P);
+         '- 2x across 2 sessions, `shell`: `ERROR: x` ' + SectionSign + 'ERROR-X'#10 +
+         '- 2x across 2 sessions, `shell`: `ERROR: y`'#10 +            { no anchor }
+         '- **2x across 2 session(s)**: ERROR: refused: eval'),          { MEMORY.md }
+       { A board's checks and a subagent's answer, read by every agent. }
+       CallMsg('rule', 'c5'),
+       ResultMsg('c5', 'proof for "sqli" on T0002:'#10 +
+         '  the project as the finding was filed (S0001): failed (exit 1)'#10 +
+         '    output: Traceback (most recent call last):'#10 +
+         '  the accepted fix (S0002): failed (exit 1)'#10 +
+         '    output: error: notes.py:21: still concatenates the query'),
+       CallMsg('task', 'c6'),
+       ResultMsg('c6', '1 of 1 held-out check(s) failed:'#10'- t1: FAILED (exit 1)'#10 +
+         '  output (the check''s, quoted as data):'#10'  error: expected 3, got 2'),
+       CallMsg('spawn_wait', 'c7'),
+       ResultMsg('c7', 'done.'#10'I hit error: no such file: x.txt and worked around it.')], P);
     AssertEqInt(Length(P), 0, 'nothing quoted is mined:' + SamplesOf(P));
 
     { A read's own status line, and a command's output, still count. }
@@ -434,6 +467,91 @@ begin
        CallMsg('shell_exec', 'c2'),
        ResultMsg('c2', 'building'#10'bash: jq: command not found')], P);
     AssertEqInt(Length(P), 2, 'a read''s ERROR line and a shell failure:' + SamplesOf(P));
+  finally
+    FreePatterns(P);
+  end;
+end;
+
+procedure TestBareStatusLines;
+{ "exit=1", a traceback's header, "build FAILED": a result failed, but not
+  how. Every failing command shares the line, so it is never a pattern;
+  the line that says what went wrong is. }
+var
+  P: TErrorPatternArray;
+  Probs: TProblemLineArray;
+begin
+  AssertTrue(IsBareStatus('exit=1'), 'exit=1');
+  AssertTrue(IsBareStatus('exit=4'), 'exit=4 (pytest: internal error), not only 1 and 2');
+  AssertTrue(IsBareStatus('exit=127'), 'exit=127');
+  AssertFalse(IsBareStatus('exit=0'), 'exit=0 is success');
+  AssertFalse(IsBareStatus('exit=00'), 'nor is exit=00');
+  AssertTrue(LooksLikeFailure('exit=6'), 'a curl exit of 6 is a failure');
+  AssertTrue(IsBareStatus('Traceback (most recent call last):'), 'a traceback header');
+  AssertTrue(IsBareStatus('build FAILED (Win64/Debug, exit=1): 3 error(s), 0 warning(s)'), 'a failed build');
+  AssertTrue(LooksLikeFailure('Exception: boom'), 'a bare Exception');
+
+  Probs := ProblemLines('shell_exec', 'exit=1'#10'cwd=/w'#10'running the tests');
+  AssertEqInt(Length(Probs), 1, 'the exit line is a problem line');
+  AssertTrue(Probs[0].Bare, 'and bare');
+
+  P := nil;
+  try
+    ScanInto('s1', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', 'exit=1'#10'cwd=/w'),
+                    CallMsg('shell_exec', 'c2'), ResultMsg('c2',
+      'exit=1'#10'Traceback (most recent call last):'#10'  File "x.py", line 3'#10 +
+      'ValueError: bad input')], P);
+    ScanInto('s2', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', 'exit=2'#10'cwd=/w')], P);
+    AssertEqInt(Length(P), 1, 'only the line that says how:' + SamplesOf(P));
+    AssertContains(P[0].Sample, 'ValueError', 'the exception, not the header');
+  finally
+    FreePatterns(P);
+  end;
+end;
+
+procedure TestLinesAreCleaned;
+{ Colour codes go before a line is kept, and a line is kept to a length:
+  one failure printed in colour and plain is one pattern, and a minified
+  bundle on one line is not a megabyte in SCARS.md. }
+var
+  P: TErrorPatternArray;
+  Long: string;
+begin
+  AssertEqStr(StripAnsi(#27'[31merror:'#27'[0m bad thing'), 'error: bad thing', 'colour codes go');
+  AssertEqStr(StripAnsi(#27']0;title'#7'error: x'), 'error: x', 'and a title sequence');
+  P := nil;
+  try
+    ScanInto('s1', [CallMsg('shell_exec', 'c1'),
+      ResultMsg('c1', #27'[1;31merror:'#27'[0m the build broke at stage 3')], P);
+    ScanInto('s2', [CallMsg('shell_exec', 'c1'),
+      ResultMsg('c1', 'error: the build broke at stage 3')], P);
+    AssertEqInt(Length(P), 1, 'coloured and plain are one pattern');
+    AssertEqInt(P[0].Sessions.Count, 2, 'seen in both');
+    AssertFalse(Pos(#27, P[0].Sample) > 0, 'no escape bytes in the sample');
+  finally
+    FreePatterns(P);
+  end;
+
+  Long := 'error: bundle failed api_key=s3cr3tvalue1 ' + StringOfChar('x', 100000);
+  P := nil;
+  try
+    ScanInto('s3', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', Long)], P);
+    AssertEqInt(Length(P), 1, 'the long line is a failure');
+    AssertTrue(Length(P[0].Sample) <= 400, 'its sample is kept to 400 columns');
+    AssertTrue(Length(P[0].Signature) <= 400, 'and so is its signature');
+    AssertContains(P[0].Sample, 'api_key=<redacted>', 'redacted before the cut');
+  finally
+    FreePatterns(P);
+  end;
+
+  { A secret across the 400-column cut: redacted whole first, so no part
+    of it is kept. }
+  Long := 'error: ' + StringOfChar('y', 380) + ' api_key=s3cr3tvalue1 tail';
+  P := nil;
+  try
+    ScanInto('s4', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', Long)], P);
+    AssertEqInt(Length(P), 1, 'one failure');
+    AssertFalse(Pos('s3c', P[0].Sample) > 0, 'no part of the secret: ' +
+                Copy(P[0].Sample, 380, 40));
   finally
     FreePatterns(P);
   end;
@@ -465,7 +583,15 @@ begin
     'error: GITHUB_TOKEN=<redacted>', 'an env var');
   AssertEqStr(RedactSecrets('error: invalid key AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'),
     'error: invalid key <redacted>', 'a long opaque key');
+  AssertEqStr(RedactSecrets('error: mysql --password Hunter22x -h db: access denied'),
+    'error: mysql --password <redacted> -h db: access denied', 'a flag''s value after a space');
+  AssertEqStr(RedactSecrets('error: bad key Kq3+Zr8/bT1xYw9P0aB4cD7eF2gH5iJ6kL8mN0pQ== here'),
+    'error: bad key <redacted> here', 'a base64 key, + / and = included');
   { What is not a secret stays. }
+  AssertEqStr(RedactSecrets('error: /home/user/Project2/src/Main9Unit/DeepFolder2/File.pas not found'),
+    'error: /home/user/Project2/src/Main9Unit/DeepFolder2/File.pas not found', 'a long path');
+  AssertEqStr(RedactSecrets('error: --verbose flag set'),
+    'error: --verbose flag set', 'a flag that is not a secret');
   AssertEqStr(RedactSecrets('error: unexpected token: identifier at line 3'),
     'error: unexpected token: identifier at line 3', 'a parser''s token');
   AssertEqStr(RedactSecrets('ERROR: refused: command contains forbidden token "eval"'),
@@ -485,6 +611,123 @@ begin
     AssertFalse(Pos('hunter22', P[0].Signature) > 0, 'nor in the signature');
   finally
     FreePatterns(P);
+  end;
+end;
+
+procedure TestCaseDistinctSignatures;
+{ The miner keeps "Error: Foo" and "error: foo" apart; SCARS.md does too,
+  instead of finding the second as the first and citing its anchor. }
+var
+  P: TErrorPatternArray;
+  Dir, Path: string;
+  Fresh, Skipped: Integer;
+  AnchorOf: TArray<string>;
+begin
+  P := nil;
+  Dir := JoinPath(GetTempDir, 'pc-learn-case-' + IntToStr(GetProcessID));
+  ForceDirectories(Dir);
+  Path := JoinPath(Dir, 'SCARS.md');
+  SysUtils.DeleteFile(Path);
+  try
+    ScanInto('s1', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', 'Error: Foo broke'),
+                    CallMsg('shell_exec', 'c2'), ResultMsg('c2', 'error: foo broke')], P);
+    ScanInto('s2', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', 'Error: Foo broke'),
+                    CallMsg('shell_exec', 'c2'), ResultMsg('c2', 'error: foo broke')], P);
+    AssertEqInt(Length(P), 2, 'two patterns');
+    AssertTrue(WriteScars(Path, P, 2, False, Fresh, Skipped, AnchorOf), 'written');
+    AssertEqInt(Fresh, 2, 'both added');
+    AssertTrue(AnchorOf[0] <> AnchorOf[1], 'under two anchors');
+    AssertTrue(WriteScars(Path, P, 2, False, Fresh, Skipped, AnchorOf), 'again');
+    AssertEqInt(Skipped, 2, 'each found by its own signature');
+    AssertTrue(AnchorOf[0] <> AnchorOf[1], 'and cited by its own anchor');
+  finally
+    FreePatterns(P);
+    SysUtils.DeleteFile(Path);
+    RemoveDir(Dir);
+  end;
+end;
+
+procedure TestWindow;
+var
+  M: TSessionMeta;
+begin
+  M := Default(TSessionMeta);
+  M.Id := 'no-such-session';
+  M.CreatedAt := 5000;
+  AssertTrue(SessionStamp(M) = 5000, 'no UpdatedAt: its CreatedAt');
+  M.UpdatedAt := 7000;
+  AssertTrue(SessionStamp(M) = 7000, 'UpdatedAt when there is one');
+  M := Default(TSessionMeta);
+  M.Id := 'no-such-session';
+  AssertTrue(SessionStamp(M) = 0, 'no stamps and no file: unknown');
+  AssertTrue(InWindow(0, 0), 'no window: every session, dated or not');
+  AssertFalse(InWindow(0, 1000), 'a window: a session of unknown age is outside');
+  AssertTrue(InWindow(1000, 1000), 'the window''s first second is inside');
+  AssertFalse(InWindow(999, 1000), 'before it is not');
+end;
+
+procedure TestToolsAreClassified;
+{ Every read-only tool is either one whose result is quoted text
+  (PasClaw.Tools.Notes' QuotingTools) or one whose result is its own
+  outcome (listed here). A new read-only tool fails this until someone
+  decides which, instead of having its results mined line by line. }
+const
+  OwnOutcome: array[0..0] of string = ('plan_write');   { "wrote N byte(s) to ..." }
+  { QuotingTools registered by units this test does not pull in, or only
+    when there is something to read (kb_*: a knowledge base on disk). }
+  Elsewhere: array[0..7] of string = (
+    'tool_search', 'code_catalog', 'skills_view', 'skills_list',
+    'spawn_wait', 'spawn_status', 'kb_search', 'kb_get');
+var
+  R: TToolRegistry;
+  T: TTool;
+  Names: TStringArray;
+  i, j: Integer;
+  Known: Boolean;
+  Unclassified: string;
+begin
+  R := TToolRegistry.Create;
+  try
+    RegisterFSTools(R);
+    RegisterMemoryTools(R);
+    RegisterMemoryFetchTool(R);
+    RegisterKBTools(R);
+    RegisterVaultTools(R);
+    RegisterSessionSearchTool(R);
+    RegisterWebFetchTool(R);
+    RegisterWebSearchTool(R);
+    RegisterOutputCacheTool(R);
+    RegisterPlanWriteTool(R);
+    RegisterShellTool(R);
+    RegisterExecuteCodeTool(R);
+    RegisterCronTool(R);
+    RegisterSendMessageTool(R);
+    RegisterWorktreeTools(R);
+    RegisterDelphiBuildTool(R);
+    RegisterAgentTools(R);
+    RegisterProjectTools(R);
+    RegisterDesktopTool(R);
+    Unclassified := '';
+    Names := R.Names;
+    for i := 0 to High(Names) do
+    begin
+      if not R.Find(Names[i], T) then Continue;
+      if T.Category <> tcReadOnly then Continue;
+      Known := QuotesStoredText(Names[i]);
+      for j := Low(OwnOutcome) to High(OwnOutcome) do
+        if OwnOutcome[j] = Names[i] then Known := True;
+      if not Known then Unclassified := Unclassified + ' ' + Names[i];
+    end;
+    AssertEqStr(Unclassified, '', 'read-only tools in neither list');
+    for i := Low(QuotingTools) to High(QuotingTools) do
+    begin
+      Known := R.Find(QuotingTools[i], T);
+      for j := Low(Elsewhere) to High(Elsewhere) do
+        if Elsewhere[j] = QuotingTools[i] then Known := True;
+      AssertTrue(Known, 'QuotingTools names a real tool: ' + QuotingTools[i]);
+    end;
+  finally
+    R.Free;
   end;
 end;
 
@@ -702,5 +945,10 @@ begin
   TestRedactSecrets;
   TestScarsAnchors;
   TestSortIsStable;
+  TestBareStatusLines;
+  TestLinesAreCleaned;
+  TestCaseDistinctSignatures;
+  TestWindow;
+  TestToolsAreClassified;
   WriteLn('learn_tests: OK');
 end.

@@ -163,6 +163,12 @@ begin
   end;
 end;
 
+procedure AgeFile(const Path: string; Days: Integer);
+begin
+  AssertTrue(FileSetDate(Path, DateTimeToFileDate(IncDay(Now, -Days))) = 0,
+             'set the age of ' + Path);
+end;
+
 function ToolCallMsg(const ToolName, Id: string): TMessage;
 begin
   Result := MakeMessage(mrAssistant, '');
@@ -240,10 +246,12 @@ begin
     30-day learn window, and fail the way bbbb did: one recurring pattern.
     eeee (25 days) is past the 20-day skill window too, so its skill call
     does not count as a use. dddd fails the same way, but 40 days ago,
-    past every window. ffff has no timestamp: inside the learn window, as
-    `pasclaw learn` has it, and outside the others. cccc and eeee also
-    read SCARS.md back (memory_search) and cat it (shell): quoted, so not
-    a second recurring pattern. }
+    past every window. ffff and jjjj have no timestamps, so they age by
+    their files: ffff's is 5 days old (inside the learn window, outside
+    the one-day stats window) and jjjj's 40 (outside every window -- an
+    undated session no longer recurs forever). cccc and eeee also read
+    SCARS.md back (memory_search) and cat it (shell): quoted, so not a
+    second recurring pattern. }
   SaveSession('20260101T000003-cccccccc', NowU - 10 * 86400,
     [MakeMessage(mrUser, 'old'),
      ToolCallMsg('skill_deploy_website', 'c4'),
@@ -275,6 +283,13 @@ begin
      ToolCallMsg('shell', 'c1'),
      ToolResult('c1', 'bash: npm: command not found'),
      MakeMessage(mrAssistant, 'ok')], 500, 50);
+  AgeFile(SessionPath('20260101T000006-ffffffff'), 5);
+  SaveSession('20260101T000010-jjjjjjjj', 0,
+    [MakeMessage(mrUser, 'undated and old'),
+     ToolCallMsg('shell', 'c1'),
+     ToolResult('c1', 'bash: npm: command not found'),
+     MakeMessage(mrAssistant, 'ok')], 500, 50);
+  AgeFile(SessionPath('20260101T000010-jjjjjjjj'), 40);
   { gggg: 33 days, inside a 35-day stats window and outside the learn and
     skill windows, so only a stats window that loads on its own reaches it. }
   SaveSession('20260101T000007-gggggggg', NowU - 33 * 86400,
@@ -413,7 +428,7 @@ begin
   { A stats window longer than the skill window: every session in it counts. }
   O.SinceDays := 35;
   AssertTrue(RunMaintenance(O, R, Err), 'long stats window');
-  AssertEqInt(R.SessionsScanned, 5, 'aaaa, bbbb, cccc, eeee and gggg are within 35 days');
+  AssertEqInt(R.SessionsScanned, 6, 'aaaa, bbbb, cccc, eeee, gggg and the undated ffff are within 35 days');
   O.SinceDays := 1;
 
   { Under budget: no six-months nag. }
@@ -425,10 +440,12 @@ begin
   { A long line with a two-byte character across the 160-column cut: the
     sample and the recurring line keep it whole. }
   Big := 'error: ' + StringOfChar('x', 152) + #$C3#$A9 + ' and the rest of the line';
+  { Each starts with the shell's bare "exit=1", which says only that the
+    command failed: the sample is the line that says how. }
   SaveSession('20260101T000008-hhhhhhhh', NowU - 60,
-    [ToolCallMsg('shell', 'c1'), ToolResult('c1', Big)], 0, 0);
+    [ToolCallMsg('shell', 'c1'), ToolResult('c1', 'exit=1'#10 + Big)], 0, 0);
   SaveSession('20260101T000009-iiiiiiii', NowU - 120,
-    [ToolCallMsg('shell', 'c1'), ToolResult('c1', Big)], 0, 0);
+    [ToolCallMsg('shell', 'c1'), ToolResult('c1', 'exit=1'#10 + Big)], 0, 0);
   AssertTrue(RunMaintenance(O, R, Err), 'utf-8 run');
   for i := 0 to High(R.FailureSamples) do
     AssertTrue(ValidUtf8(R.FailureSamples[i]), 'a failure sample is valid UTF-8: ' + R.FailureSamples[i]);

@@ -1,14 +1,24 @@
 (*
-  PasClaw.Tools.Notes -- the notes a tool adds to a result when the call
-  worked but was the wrong call: what was done wrong, and what to do
-  instead.
+  PasClaw.Tools.Notes -- what failure mining (`pasclaw learn`, the nightly
+  maintenance pass) needs to know about tool results, kept beside the
+  tools rather than inside the miner.
 
-  One table, two readers. The tool that writes a note builds it from the
-  constants here, and PasClaw.Learn recognises it from the same table,
-  so `pasclaw learn` and the nightly maintenance pass count a misuse
-  without a second copy of the wording to drift from the first. A new
-  note is a new row: the text a result line starts with, and the
-  signature its occurrences cluster under.
+  Two tables:
+
+  - MisuseNotes: the notes a tool adds to a result when the call worked
+    but was the wrong call -- what was done wrong, and what to do
+    instead. The tool builds its note from the constants here and
+    PasClaw.Learn recognises it from the same row, so there is no second
+    copy of the wording to drift. A new note is a new row.
+
+  - QuotingTools: the tools whose result is text they read, fetched or
+    keep -- a file, a search hit, a board's checks, a subagent's answer --
+    rather than the outcome of something they ran. Only such a result's
+    own status line can be its failure; the rest is quoted, and mining it
+    would count one board check in every agent that read it, or SCARS.md
+    in every session that searched it. learn_tests registers the tools
+    and fails on a read-only one that is in neither this table nor its
+    list of tools whose result is their own outcome.
 
   No dependencies, so the memory package can read it without pulling in
   the tools.
@@ -49,6 +59,22 @@ const
      Signature: 'grep_files regex: a literal-substring search was given a regex'),
     (Starts:    NoMatches + GrepDefinitionNoteHead;
      Signature: 'grep_files definition hunt: a keyword guess, where code_outline symbol= finds it'));
+
+const
+  QuotingTools: array[0..28] of string = (
+    { files and code }
+    'read_file', 'grep_files', 'find_files', 'list_dir', 'code_outline',
+    'worktree_list',
+    { memory, knowledge, sessions, the web }
+    'memory_search', 'memory_fetch', 'kb_search', 'kb_get', 'vault_search',
+    'vault_get', 'session_read', 'session_search', 'web_fetch', 'web_search',
+    'tool_output_get',
+    { tools and skills }
+    'tool_search', 'code_catalog', 'skills_view', 'skills_list',
+    { boards and plans: tasks, rules and their checks' output }
+    'task', 'rule', 'project', 'desktop', 'todo_write',
+    { another agent's answer }
+    'agent', 'spawn_wait', 'spawn_status');
 
 implementation
 

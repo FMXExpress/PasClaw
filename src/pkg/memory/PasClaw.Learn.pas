@@ -14,11 +14,15 @@
 
   What is NOT mined is as important, now that the nightly pass writes
   SCARS.md unattended: text a tool merely returns -- a file read_file
-  read, a grep hit, a memory_search snippet of SCARS.md itself -- is
-  quoted, not failed, and only such a result's own status line counts.
-  Otherwise SCARS.md, once read, would come back as new failures, and
-  the next night would write anchors for its own Symptom lines. Lines
-  are masked for secrets before they are kept (RedactSecrets).
+  read, a grep hit, a memory_search snippet of SCARS.md itself, a board
+  check's output in a task, a subagent's answer -- is quoted, not
+  failed, and only such a result's own status line counts (the tools are
+  QuotingTools in PasClaw.Tools.Notes). Otherwise SCARS.md, once read,
+  would come back as new failures, and the next night would write
+  anchors for its own Symptom lines. A line that only says a result
+  failed ("exit=1", a traceback's header) counts it as failed but is
+  never a pattern. Lines are stripped of colour codes, masked for
+  secrets (RedactSecrets) and cut to a length before they are kept.
 
   Two callers: `pasclaw learn` (PasClaw.Cmd.Learn: the report, MEMORY.md,
   SCARS.md on request) and the nightly pass (PasClaw.Maintain: a
@@ -72,8 +76,12 @@ type
   { One problem line of one tool result. }
   TProblemLine = record
     Kind:      TPatternKind;
-    Line:      string;        { trimmed, secrets masked }
+    Line:      string;        { trimmed, colour codes gone, secrets masked, clipped }
     Signature: string;
+    (* The line says the result failed but not how: "exit=1", a traceback's
+       header, "build FAILED (...)". It counts the result as failed and is
+       never a pattern: every failing command in every session shares it. *)
+    Bare:      Boolean;
   end;
   TProblemLineArray = array of TProblemLine;
 
@@ -96,6 +104,11 @@ type
     destructor Destroy; override;
     { Take over Patterns (Patterns becomes nil) and keep adding to them. }
     procedure Adopt(var Patterns: TErrorPatternArray);
+    { One tool result's problem lines (ProblemLines), for a caller that
+      classifies each result once and uses it for more than mining. Bare
+      lines are not patterns and are skipped. }
+    procedure Add(const Probs: TProblemLineArray; const Tool: string;
+                  const Sess: TSession);
     { Add one session's problem lines. Names is ResultToolNames(Sess), for
       a caller that already has it. }
     procedure Scan(const Sess: TSession); overload;
@@ -116,6 +129,15 @@ function NormalizeErrorSignature(const Raw: string): string;
    The one definition of a failed tool result: `pasclaw learn` clusters
    by it and `pasclaw maintain` counts by it. *)
 function LooksLikeFailure(const Line: string): Boolean;
+
+(* True for a line that says a result failed but not how -- a nonzero
+   "exit=N" (the shell and execute_code tools' first line), a Python
+   traceback's header, "build FAILED (...)". LooksLikeFailure is True for
+   it too; ProblemLines marks it Bare. *)
+function IsBareStatus(const Line: string): Boolean;
+
+{ Line without its ANSI escape sequences (colour, cursor). }
+function StripAnsi(const Line: string): string;
 
 (* The cluster key for a misuse line -- a result line that starts with one
    of the notes in PasClaw.Tools.Notes -- or '' for any other line. One
@@ -138,9 +160,9 @@ function LooksLikeMisuse(const Line: string): Boolean;
    export` copies it into rule files that get committed. *)
 function RedactSecrets(const Line: string): string;
 
-(* True for a tool whose result is text it fetched or stored rather than
-   the outcome of something it ran: read_file, grep_files, memory_search,
-   web_fetch ... Only the first line of such a result can be its own
+(* True for a tool whose result is text it read, fetched or keeps rather
+   than the outcome of something it ran (PasClaw.Tools.Notes'
+   QuotingTools). Only the first line of such a result can be its own
    failure ('ERROR: ...', the tool loop's prefix) or misuse note; the
    rest is quoted. *)
 function QuotesStoredText(const ToolName: string): Boolean;
@@ -158,11 +180,17 @@ function ProblemLines(const ToolName, Content: string): TProblemLineArray;
    unique within a turn. *)
 function ResultToolNames(const Sess: TSession): TArray<string>;
 
-(* Is a session last updated at UpdatedAt inside the window that starts at
-   SinceUnix? SinceUnix <= 0 is no window. A session with no timestamp is
-   inside every window: its age is unknown, and leaving it out would hide
-   its failures. The one rule for both callers. *)
-function InWindow(UpdatedAt, SinceUnix: Int64): Boolean;
+(* When a session last changed, in unix seconds: its UpdatedAt, else its
+   CreatedAt, else its file's modification time -- so a session saved by
+   an older build with no timestamps still ages out of a window. 0 only
+   when none of them can be had. *)
+function SessionStamp(const Meta: TSessionMeta): Int64;
+
+(* Is a session stamped Stamp (SessionStamp) inside the window that starts
+   at SinceUnix? SinceUnix <= 0 is no window, and everything is in it.
+   With a window, a session of unknown age is outside: counted forever it
+   would recur forever. The one rule for both callers. *)
+function InWindow(Stamp, SinceUnix: Int64): Boolean;
 
 (* Derive a stable SCARS §ANCHOR-NAME from a normalised pattern
    signature. Exposed so a regression test can pin the contract --
@@ -384,9 +412,72 @@ begin
     (Pos('undefined symbol',      L) > 0) or
     (Pos('module not found',      L) > 0) or
     (Pos('cannot read',           L) > 0) or
-    (Pos('traceback (most recent call last)', L) > 0) or
-    (Pos('exit=1',                L) = 1) or
-    (Pos('exit=2',                L) = 1);
+    (Pos('exception:',            L) > 0) or
+    IsBareStatus(Line);
+end;
+
+function IsBareStatus(const Line: string): Boolean;
+{ "exit=" then a code that is not 0 -- every one, where only exit=1 and
+  exit=2 counted before (pytest's 4 and 5, curl's 6 and 7 did not). }
+var
+  L: string;
+  i: Integer;
+  NonZero: Boolean;
+begin
+  L := LowerCase(TrimLeft(Line));
+  if Pos('exit=', L) = 1 then
+  begin
+    i := 6;
+    NonZero := False;
+    while (i <= Length(L)) and (L[i] >= '0') and (L[i] <= '9') do
+    begin
+      if L[i] <> '0' then NonZero := True;
+      Inc(i);
+    end;
+    Exit(NonZero);
+  end;
+  Result := (Pos('traceback (most recent call last)', L) = 1) or
+            (Pos('build failed', L) = 1);
+end;
+
+function StripAnsi(const Line: string): string;
+{ CSI (ESC [ ... final byte), OSC (ESC ] ... BEL or ESC \), and the
+  two-byte escapes. A coloured and a plain run of the same failure must
+  give one signature, and SCARS.md has no use for escape bytes. }
+var
+  i, N: Integer;
+begin
+  if Pos(#27, Line) = 0 then Exit(Line);
+  Result := '';
+  N := Length(Line);
+  i := 1;
+  while i <= N do
+  begin
+    if Line[i] <> #27 then
+    begin
+      Result := Result + Line[i];
+      Inc(i);
+      Continue;
+    end;
+    Inc(i);
+    if i > N then Break;
+    if Line[i] = '[' then
+    begin
+      Inc(i);
+      while (i <= N) and not ((Line[i] >= '@') and (Line[i] <= '~')) do Inc(i);
+      Inc(i);
+    end
+    else if Line[i] = ']' then
+    begin
+      Inc(i);
+      while (i <= N) and (Line[i] <> #7) and
+            not ((Line[i] = #27) and (i < N) and (Line[i + 1] = '\')) do
+        Inc(i);
+      if (i <= N) and (Line[i] = #27) then Inc(i, 2) else Inc(i);
+    end
+    else
+      Inc(i);
+  end;
 end;
 
 function MisuseSignature(const Line: string): string;
@@ -479,6 +570,33 @@ begin
     if not ((V[i] >= 'a') and (V[i] <= 'z')) then Exit(True);
 end;
 
+function IsBase64Char(c: Char): Boolean;
+begin
+  Result := IsWordChar(c) or (c = '+') or (c = '/') or (c = '=');
+end;
+
+function LooksLikeBase64Secret(const R: string): Boolean;
+{ A long run that only base64 makes: a '+', or '=' padding at its end,
+  with mixed case and digits. The word rule sees such a run in pieces
+  ('+' and '/' end a word), each too short to catch. A path has '/'
+  but neither mark, and KEY=value has '=' in the middle. }
+var
+  i: Integer;
+  Up, Lo, Dig: Boolean;
+begin
+  Result := False;
+  if Length(R) < 32 then Exit;
+  if (Pos('+', R) = 0) and (R[Length(R)] <> '=') then Exit;
+  Up := False; Lo := False; Dig := False;
+  for i := 1 to Length(R) do
+    case R[i] of
+      'A'..'Z': Up := True;
+      'a'..'z': Lo := True;
+      '0'..'9': Dig := True;
+    end;
+  Result := Up and Lo and Dig;
+end;
+
 function IsValueEnd(c: Char): Boolean;
 begin
   Result := (c = ' ') or (c = #9) or (c = '"') or (c = '''') or (c = '&') or
@@ -498,6 +616,18 @@ begin
   i := 1;
   while i <= N do
   begin
+    { A base64 key, whole. }
+    if IsBase64Char(Line[i]) and ((i = 1) or not IsBase64Char(Line[i - 1])) then
+    begin
+      k := i;
+      while (k <= N) and IsBase64Char(Line[k]) do Inc(k);
+      if LooksLikeBase64Secret(Copy(Line, i, k - i)) then
+      begin
+        Result := Result + Mark;
+        i := k;
+        Continue;
+      end;
+    end;
     { scheme://user[:password]@host -- the userinfo goes, whatever it is. }
     if (Line[i] = ':') and (i + 2 <= N) and (Line[i + 1] = '/') and (Line[i + 2] = '/') then
     begin
@@ -543,12 +673,25 @@ begin
         end;
         Continue;
       end;
-      { key=value, key: value, key="value" }
+      { key=value, key: value, key="value"; and a flag's value after a
+        space: --password Hunter22, --token abc... }
       if IsSecretKey(W) then
       begin
         j := i;
         while (j <= N) and (Line[j] = ' ') do Inc(j);
-        if (j <= N) and ((Line[j] = '=') or (Line[j] = ':')) then
+        if (W[1] = '-') and (j > i) and (j <= N) and
+           (Line[j] <> '=') and (Line[j] <> ':') and (Line[j] <> '-') then
+        begin
+          k := j;
+          while (k <= N) and not IsValueEnd(Line[k]) do Inc(k);
+          V := Copy(Line, j, k - j);
+          if LooksLikeSecretValue(V) then
+          begin
+            Result := Result + Copy(Line, i, j - i) + Mark;
+            i := k;
+          end;
+        end
+        else if (j <= N) and ((Line[j] = '=') or (Line[j] = ':')) then
         begin
           Inc(j);
           while (j <= N) and (Line[j] = ' ') do Inc(j);
@@ -579,18 +722,11 @@ end;
 { ------------------------------------------------------------- results }
 
 function QuotesStoredText(const ToolName: string): Boolean;
-const
-  Readers: array[0..18] of string = (
-    'read_file', 'grep_files', 'find_files', 'list_dir', 'code_outline',
-    'code_catalog', 'memory_search', 'memory_fetch', 'kb_search', 'kb_get',
-    'vault_search', 'vault_get', 'session_read', 'session_search',
-    'web_fetch', 'web_search', 'tool_output_get', 'skills_view',
-    'skills_list');
 var
   i: Integer;
 begin
-  for i := Low(Readers) to High(Readers) do
-    if ToolName = Readers[i] then Exit(True);
+  for i := Low(QuotingTools) to High(QuotingTools) do
+    if ToolName = QuotingTools[i] then Exit(True);
   Result := False;
 end;
 
@@ -603,8 +739,11 @@ begin
     (Pos('**Symptom:**', Line) = 1) or
     (Pos('<!-- signature:', Line) = 1) or
     (Pos('- `', Line) = 1) or                      { a report's failure sample }
-    ((Pos('- ', Line) = 1) and (Pos(' across ', Line) > 0) and
-     (Pos(SectionSign, Line) > 0));                { a report's recurring line }
+    { "- 2x across 2 sessions, ..." (a report's recurring line, with or
+      without its anchor) and "- **2x across 2 session(s)**: ..." (the
+      Patterns block `pasclaw learn --write` puts in MEMORY.md) }
+    ((Pos('- ', Line) = 1) and (Pos('x across ', Line) > 0) and
+     (Pos(' session', Line) > 0));
 end;
 
 procedure SplitToolBody(const Body: string; out Lines: TArray<string>);
@@ -639,12 +778,29 @@ begin
   SetLength(Lines, N);
 end;
 
+function ClipTo(const S: string; Cols: Integer): string;
+{ At most Cols columns, cut between characters, never inside one. }
+var
+  Rest: string;
+begin
+  if Length(S) <= Cols then Exit(S);
+  Result := TruncateVisible(S, Cols, Rest);
+end;
+
+const
+  { How much of a line is redacted, and then kept. A failure line can be a
+    whole minified bundle; the sample and the signature of one are not.
+    Redacting a wider span first means no secret is cut in half before
+    the redactor has seen it whole. }
+  RedactSpan = 4000;
+  KeptSpan   = 400;
+
 function ProblemLines(const ToolName, Content: string): TProblemLineArray;
 var
   Lines: TArray<string>;
   j, N: Integer;
   Line, Sig: string;
-  Quoting: Boolean;
+  Quoting, Bare: Boolean;
   Kind: TPatternKind;
 begin
   Result := nil;
@@ -655,8 +811,9 @@ begin
   for j := 0 to High(Lines) do
   begin
     if Quoting and (j > 0) then Break;     { the rest is what it read }
-    Line := Trim(Lines[j]);
+    Line := Trim(StripAnsi(Lines[j]));
     if (Line = '') or IsRecordedLine(Line) then Continue;
+    Bare := False;
     Sig := MisuseSignature(Line);
     if Sig <> '' then
       Kind := pkMisuse
@@ -666,16 +823,20 @@ begin
       Kind := pkFailure;
     end
     else if LooksLikeFailure(Line) then
-      Kind := pkFailure
+    begin
+      Kind := pkFailure;
+      Bare := IsBareStatus(Line);
+    end
     else
       Continue;
-    Line := RedactSecrets(Line);
+    Line := ClipTo(RedactSecrets(ClipTo(Line, RedactSpan)), KeptSpan);
     if Kind = pkFailure then Sig := NormalizeErrorSignature(Line);
     if Sig = '' then Continue;
     if N = Length(Result) then SetLength(Result, 2 * N + 2);
     Result[N].Kind      := Kind;
     Result[N].Line      := Line;
     Result[N].Signature := Sig;
+    Result[N].Bare      := Bare;
     Inc(N);
   end;
   SetLength(Result, N);
@@ -726,9 +887,22 @@ begin
   end;
 end;
 
-function InWindow(UpdatedAt, SinceUnix: Int64): Boolean;
+function SessionStamp(const Meta: TSessionMeta): Int64;
+var
+  Dt: TDateTime;
+  Path: string;
 begin
-  Result := (SinceUnix <= 0) or (UpdatedAt <= 0) or (UpdatedAt >= SinceUnix);
+  if Meta.UpdatedAt > 0 then Exit(Meta.UpdatedAt);
+  if Meta.CreatedAt > 0 then Exit(Meta.CreatedAt);
+  Result := 0;
+  Path := SessionPath(Meta.Id);
+  if (Path <> '') and FileAge(Path, Dt) then
+    Result := DateTimeToUnix(Dt, False);
+end;
+
+function InWindow(Stamp, SinceUnix: Int64): Boolean;
+begin
+  Result := (SinceUnix <= 0) or ((Stamp > 0) and (Stamp >= SinceUnix));
 end;
 
 { ------------------------------------------------------------- patterns }
@@ -838,6 +1012,7 @@ procedure TPatternMiner.AddLine(const P: TProblemLine; const Tool: string;
 var
   Idx, Pos_: Integer;
 begin
+  if P.Bare then Exit;
   if FIndex.Find(P.Signature, Pos_) then
   begin
     Idx := NativeInt(FIndex.Objects[Pos_]);
@@ -872,6 +1047,14 @@ begin
     FPatterns[Idx].FirstSeen := Sess.Meta.UpdatedAt;
 end;
 
+procedure TPatternMiner.Add(const Probs: TProblemLineArray; const Tool: string;
+                            const Sess: TSession);
+var
+  j: Integer;
+begin
+  for j := 0 to High(Probs) do AddLine(Probs[j], Tool, Sess);
+end;
+
 procedure TPatternMiner.Scan(const Sess: TSession);
 begin
   Scan(Sess, ResultToolNames(Sess));
@@ -879,7 +1062,7 @@ end;
 
 procedure TPatternMiner.Scan(const Sess: TSession; const Names: TArray<string>);
 var
-  i, j: Integer;
+  i: Integer;
   Tool: string;
   Probs: TProblemLineArray;
 begin
@@ -892,7 +1075,7 @@ begin
       annotation than to mis-attribute. }
     if i <= High(Names) then Tool := Names[i] else Tool := '';
     Probs := ProblemLines(Tool, Sess.Messages[i].Content);
-    for j := 0 to High(Probs) do AddLine(Probs[j], Tool, Sess);
+    Add(Probs, Tool, Sess);
   end;
 end;
 
@@ -939,7 +1122,7 @@ begin
     Sessions := ListSessions;
     for i := 0 to High(Sessions) do
     begin
-      if not InWindow(Sessions[i].UpdatedAt, SinceUnix) then Continue;
+      if not InWindow(SessionStamp(Sessions[i]), SinceUnix) then Continue;
       if Assigned(Progress) then Progress(Sessions[i].Id);
       Sess := TSession.Create(Sessions[i].Id);
       try
@@ -1053,60 +1236,56 @@ const
     returned, so the matcher silently failed. }
   AnchorPrefix = '## ' + SectionSign;
 
-function NewNameList: TStringList;
+function NewNameList(CaseSensitive: Boolean): TStringList;
+{ Anchors compare without case (they are upper case, and an operator may
+  not be); signatures with it, as the miner keeps them -- otherwise
+  "Error: X" would be found as "error: x" and cited under its anchor. }
 begin
   Result := TStringList.Create;
+  Result.CaseSensitive := CaseSensitive;
   Result.Sorted     := True;
   Result.Duplicates := dupIgnore;
 end;
 
-procedure ParseScars(const Path: string; Anchors, Signed, Sigs: TStringList;
+procedure ParseScars(Sl: TStrings; Anchors, Signed, Sigs: TStringList;
                      var SigAnchor: TArray<string>);
 { Anchors: every `## §NAME`. Signed: the anchors whose block carries a
   signature marker. Sigs: each marker's signature, its Objects an index
   into SigAnchor, the anchor of the block it sits in -- which is how a
-  renamed anchor is followed. Raises when the file is there but cannot be
-  read. }
+  renamed anchor is followed. Sl is the file's text, read once by the
+  caller. }
 var
-  Sl: TStringList;
   i, P: Integer;
   Line, Name, Sig, Current: string;
   EndPos: Integer;
 begin
-  if not FileExists(Path) then Exit;
-  Sl := TStringList.Create;
-  try
-    Sl.Text := ReadFileText(Path);
-    Current := '';
-    for i := 0 to Sl.Count - 1 do
+  Current := '';
+  for i := 0 to Sl.Count - 1 do
+  begin
+    Line := Trim(Sl[i]);
+    if Pos(AnchorPrefix, Line) = 1 then
     begin
-      Line := Trim(Sl[i]);
-      if Pos(AnchorPrefix, Line) = 1 then
+      Name := Trim(Copy(Line, Length(AnchorPrefix) + 1, MaxInt));
+      { Drop any trailing description / annotation after the name. }
+      if Pos(' ', Name) > 0 then
+        Name := Copy(Name, 1, Pos(' ', Name) - 1);
+      Current := Name;
+      if Name <> '' then Anchors.Add(Name);
+    end
+    else if Pos(SigMarker, Line) = 1 then
+    begin
+      Sig := Trim(Copy(Line, Length(SigMarker) + 1, MaxInt));
+      EndPos := Pos('-->', Sig);
+      if EndPos > 0 then Sig := Trim(Copy(Sig, 1, EndPos - 1));
+      if Sig = '' then Continue;
+      if Current <> '' then Signed.Add(Current);
+      if not Sigs.Find(Sig, P) then
       begin
-        Name := Trim(Copy(Line, Length(AnchorPrefix) + 1, MaxInt));
-        { Drop any trailing description / annotation after the name. }
-        if Pos(' ', Name) > 0 then
-          Name := Copy(Name, 1, Pos(' ', Name) - 1);
-        Current := Name;
-        if Name <> '' then Anchors.Add(Name);
-      end
-      else if Pos(SigMarker, Line) = 1 then
-      begin
-        Sig := Trim(Copy(Line, Length(SigMarker) + 1, MaxInt));
-        EndPos := Pos('-->', Sig);
-        if EndPos > 0 then Sig := Trim(Copy(Sig, 1, EndPos - 1));
-        if Sig = '' then Continue;
-        if Current <> '' then Signed.Add(Current);
-        if not Sigs.Find(Sig, P) then
-        begin
-          SetLength(SigAnchor, Length(SigAnchor) + 1);
-          SigAnchor[High(SigAnchor)] := Current;
-          Sigs.AddObject(Sig, TObject(NativeInt(High(SigAnchor))));
-        end;
+        SetLength(SigAnchor, Length(SigAnchor) + 1);
+        SigAnchor[High(SigAnchor)] := Current;
+        Sigs.AddObject(Sig, TObject(NativeInt(High(SigAnchor))));
       end;
     end;
-  finally
-    Sl.Free;
   end;
 end;
 
@@ -1122,22 +1301,28 @@ procedure ReadExistingScars(const Path: string;
   renamed entry got duplicated on the next learn run. A file that
   cannot be read reads as empty. }
 var
-  Signed: TStringList;
+  Signed, Sl: TStringList;
   SigAnchor: TArray<string>;
 begin
-  Anchors    := NewNameList;
-  Signatures := NewNameList;
-  Signed     := NewNameList;
+  Anchors    := NewNameList(False);
+  Signatures := NewNameList(True);
+  Signed     := NewNameList(False);
+  Sl         := TStringList.Create;
   SigAnchor  := nil;
   try
     try
-      ParseScars(Path, Anchors, Signed, Signatures, SigAnchor);
+      if FileExists(Path) then
+      begin
+        Sl.Text := ReadFileText(Path);
+        ParseScars(Sl, Anchors, Signed, Signatures, SigAnchor);
+      end;
     except
       Anchors.Clear;
       Signatures.Clear;
     end;
   finally
     Signed.Free;
+    Sl.Free;
   end;
 end;
 
@@ -1169,14 +1354,17 @@ begin
   Skipped := 0;
   SigAnchor := nil;
   Sl := TStringList.Create;
-  Anchors := NewNameList;
-  Signed := NewNameList;
-  Sigs := NewNameList;
+  Anchors := NewNameList(False);
+  Signed := NewNameList(False);
+  Sigs := NewNameList(True);
   try
     try
-      ParseScars(Path, Anchors, Signed, Sigs, SigAnchor);
+      { One read: what is parsed is what is appended to. }
       if FileExists(Path) then
-        Sl.Text := ReadFileText(Path)
+      begin
+        Sl.Text := ReadFileText(Path);
+        ParseScars(Sl, Anchors, Signed, Sigs, SigAnchor);
+      end
       else
       begin
         { Fresh file -- write the header preamble. }
