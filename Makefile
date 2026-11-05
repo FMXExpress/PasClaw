@@ -686,7 +686,8 @@ test-shell-filters: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/shell_filters_tests.pas -o$(BUILDDIR)/shell_filters_tests
 	@$(BUILDDIR)/shell_filters_tests
 
-# PasClaw.Cmd.Learn — session-failure normaliser + LooksLikeFailure pre-filter.
+# PasClaw.Learn — session-failure normaliser, LooksLikeFailure pre-filter, misuse notes
+# (checked against grep_files' own output), tool attribution, SCARS.md writes.
 test-learn: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/learn_tests.pas -o$(BUILDDIR)/learn_tests

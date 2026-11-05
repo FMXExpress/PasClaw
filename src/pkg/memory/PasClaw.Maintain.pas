@@ -16,13 +16,23 @@
                     notes against memory_core_budget_bytes and say which
                     are over.
     3. Sessions  -- walk the sessions of the last N days: turns, tool
-                    calls, tool failures (with samples), tokens.
+                    calls, tool failures (with samples) and misuses,
+                    tokens. A failure is what PasClaw.Learn calls one, so
+                    this count and the Recurring list agree.
+       Recurring -- PasClaw.Learn over a longer window (30 days): the
+                    failures, and the misuses a tool pointed out, that
+                    came back in two or more sessions. One that SCARS.md
+                    lacks gets an anchor there (what `pasclaw learn
+                    --write-scars` does by hand), so the record of what
+                    keeps going wrong stays current without anyone
+                    remembering to run it.
     4. Skills    -- callable skills no session has invoked within
                     unused_skill_days; pairs whose name+description
                     overlap enough to be the same skill twice. Reported,
                     never deleted.
     5. Review    -- optional: one call to the background model with the
-                    numbers and the failure samples, asking for a short
+                    numbers, the failure samples and the recurring
+                    patterns, asking for a short
                     critique and what to change tomorrow. The "dream log".
     6. Backup    -- optional: PasClaw.Backup with rotation.
     7. Report    -- everything above as Markdown, written to
@@ -32,8 +42,9 @@
   Entry points: RunMaintenance for the CLI (`pasclaw maintain`) and
   RunMaintenanceForCron for the gateway scheduler, which fires it when a
   cron entry names the reserved skill "@maintain". The pure pieces --
-  the report renderer, the overlap finder, the failure heuristic -- are
-  exported so they can be tested without a model or a clock.
+  the report renderer, the overlap finder -- are exported so they can be
+  tested without a model or a clock; the failure heuristic is
+  PasClaw.Learn's.
 *)
 unit PasClaw.Maintain;
 
@@ -60,6 +71,7 @@ const
     skill twice. Same threshold the skill distiller refuses to create at. }
   SkillOverlapThreshold = 0.8;
   MaxFailureSamples = 12;
+  MaxRecurringShown = 12;
 
 type
   TCoreFileStat = record
@@ -86,16 +98,28 @@ type
     BackupDir:  string;
     Version:    string;
     KeepDaily, KeepWeekly, KeepMonthly: Integer;
-    DryRun:     Boolean;       { report only: no sweep, no backup, no model call, no report file }
+    { Recurring patterns: sessions of the last LearnDays, seen in at least
+      LearnMinSessions of them; Scars adds the new ones to SCARS.md. }
+    LearnDays, LearnMinSessions: Integer;
+    Scars:      Boolean;
+    DryRun:     Boolean;       { report only: no sweep, no backup, no model call,
+                                 no SCARS.md write, no report file }
   end;
 
   TMaintainReport = record
     FactsAvailable: Boolean;
     FactsTotalBefore, FactsRemoved, FactsActive: Integer;
     Core: array of TCoreFileStat;
-    SessionsScanned, Turns, ToolCalls, ToolFailures: Integer;
+    SessionsScanned, Turns, ToolCalls, ToolFailures, ToolMisuses: Integer;
     InputTokens, OutputTokens: Int64;
     FailureSamples: TArray<string>;
+    { One line per recurring pattern, most frequent first, at most
+      MaxRecurringShown; RecurringCount is how many there were. }
+    Recurring:      TArray<string>;
+    RecurringCount: Integer;
+    ScarsNew, ScarsKnown: Integer;   { anchors added to / already in SCARS.md }
+    ScarsWouldAdd:  Integer;         { a dry run: what a real one would add }
+    ScarsPath:      string;          { set when SCARS.md was refreshed }
     SkillsTotal, SkillsCallable: Integer;
     UnusedSkills:  TArray<string>;
     OverlapPairs:  TArray<string>;
@@ -125,9 +149,6 @@ function RenderMaintenanceReport(const O: TMaintainOptions;
 function SkillOverlapPairs(const Skills: TSkillSpecArray;
                            Threshold: Double): TArray<string>;
 
-{ Heuristic: does a tool-result line report a failure? Pure. }
-function LooksLikeToolFailure(const Line: string): Boolean;
-
 { What the gateway's cron scheduler calls for an "@maintain" entry: build
   options from Cfg (with a provider when maintenance.review is on), run,
   and return a one-paragraph summary for the cron sinks. Err set when the
@@ -145,27 +166,10 @@ uses
   PasClaw.Providers.Factory,
   PasClaw.Memory.Facts,
   PasClaw.Session.Store,
+  PasClaw.Learn,
   PasClaw.Backup;
 
 { ------------------------------------------------------------- pure }
-
-function LooksLikeToolFailure(const Line: string): Boolean;
-const
-  Marks: array[0..8] of string = (
-    'error:', 'error ', 'exception', 'traceback', 'command not found',
-    'permission denied', 'no such file', 'exit code', 'failed');
-var
-  L: string;
-  i: Integer;
-begin
-  L := LowerCase(Trim(Line));
-  if L = '' then Exit(False);
-  if Pos('exit code 0', L) > 0 then Exit(False);
-  if Pos('0 failed', L) > 0 then Exit(False);
-  for i := Low(Marks) to High(Marks) do
-    if Pos(Marks[i], L) > 0 then Exit(True);
-  Result := False;
-end;
 
 function TokenSetOf(const S: string): TStringList;
 var
@@ -249,6 +253,7 @@ var
   L: TStringList;
   i: Integer;
   Over: Integer;
+  Line: string;
 begin
   L := TStringList.Create;
   try
@@ -298,11 +303,14 @@ begin
 
     L.Add(Format('## Sessions (last %s)', [Plural(O.SinceDays, 'day', 'days')]));
     L.Add('');
-    L.Add(Format('- %s, %s, %s, %s',
-                 [Plural(R.SessionsScanned, 'session', 'sessions'),
-                  Plural(R.Turns, 'turn', 'turns'),
-                  Plural(R.ToolCalls, 'tool call', 'tool calls'),
-                  Plural(R.ToolFailures, 'tool failure', 'tool failures')]));
+    Line := Format('- %s, %s, %s, %s',
+                   [Plural(R.SessionsScanned, 'session', 'sessions'),
+                    Plural(R.Turns, 'turn', 'turns'),
+                    Plural(R.ToolCalls, 'tool call', 'tool calls'),
+                    Plural(R.ToolFailures, 'tool failure', 'tool failures')]);
+    if R.ToolMisuses > 0 then
+      Line := Line + ', ' + Plural(R.ToolMisuses, 'misuse', 'misuses');
+    L.Add(Line);
     L.Add(Format('- tokens: %d in, %d out', [R.InputTokens, R.OutputTokens]));
     if Length(R.FailureSamples) > 0 then
     begin
@@ -311,6 +319,29 @@ begin
         L.Add('  - `' + R.FailureSamples[i] + '`');
     end;
     L.Add('');
+
+    if O.LearnDays > 0 then
+    begin
+      L.Add(Format('## Recurring (last %s, %d+ sessions)',
+                   [Plural(O.LearnDays, 'day', 'days'), O.LearnMinSessions]));
+      L.Add('');
+      if R.RecurringCount = 0 then
+        L.Add(Format('- nothing went wrong the same way in %d or more sessions', [O.LearnMinSessions]))
+      else
+      begin
+        for i := 0 to High(R.Recurring) do L.Add('- ' + R.Recurring[i]);
+        if R.RecurringCount > Length(R.Recurring) then
+          L.Add(Format('- and %d more (`pasclaw learn --since %d`)',
+                       [R.RecurringCount - Length(R.Recurring), O.LearnDays]));
+        if R.ScarsPath <> '' then
+          L.Add(Format('- SCARS.md: %s added, %d already there',
+                       [Plural(R.ScarsNew, 'new anchor', 'new anchors'), R.ScarsKnown]))
+        else if O.DryRun and O.Scars then
+          L.Add(Format('- SCARS.md not refreshed (dry run): %s would be added',
+                       [Plural(R.ScarsWouldAdd, 'new anchor', 'new anchors')]));
+      end;
+      L.Add('');
+    end;
 
     L.Add('## Skills');
     L.Add('');
@@ -394,6 +425,9 @@ begin
     Result.KeepDaily := 7; Result.KeepWeekly := 4; Result.KeepMonthly := 6;
     Result.BackupWithSecrets := True;
   end;
+  Result.LearnDays        := 30;
+  Result.LearnMinSessions := 2;
+  Result.Scars            := True;
   if Result.BackupDir = '' then Result.BackupDir := JoinPath(Result.Home, 'backups');
 end;
 
@@ -409,6 +443,32 @@ begin
     Result := F.Size;
     FindClose(F);
   end;
+end;
+
+function Clip(const S: string): string;
+{ At most 160 columns, cut between characters: a byte Copy could split a
+  multi-byte one and leave invalid UTF-8 in the report and in the review
+  prompt sent to the provider. }
+var
+  Rest: string;
+begin
+  Result := TruncateVisible(S, 160, Rest);
+end;
+
+function RecurringLine(const P: TErrorPattern; const Anchor: string): string;
+{ Anchor is the one the pattern has in SCARS.md (WriteScars' AnchorOf):
+  the operator's if they renamed it, none yet if a dry run left it new. }
+begin
+  Result := Format('%dx across %d sessions', [P.Count, P.Sessions.Count]);
+  if P.Context <> '' then
+  begin
+    Result := Result + ', `' + P.Context + '`';
+    if P.Kind = pkMisuse then Result := Result + ' (misused)';
+  end
+  else if P.Kind = pkMisuse then
+    Result := Result + ' (a misuse)';
+  Result := Result + ': `' + Clip(P.Sample) + '`';
+  if Anchor <> '' then Result := Result + ' ' + SectionSign + Anchor;
 end;
 
 function ReviewPrompt(const O: TMaintainOptions; const R: TMaintainReport): string;
@@ -432,17 +492,24 @@ var
   Store: IFactStore;
   Sessions: TSessionMetaArray;
   Sess: TSession;
-  i, j, k, n, LineFailures: Integer;
+  i, j, k, n: Integer;
   SinceStats, SinceSkills: Int64;
   Used: TStringList;
   Skills: TSkillSpecArray;
-  Lines: TStringList;
   Resp: TLLMResponse;
   Opts: TChatOptions;
   Msgs: array of TMessage;
   BR: TBackupResult;
   Kind: string;
   CoreNames: array[0..4] of string;
+  SinceLearn, Updated: Int64;
+  Patterns: TErrorPatternArray;
+  Miner: TPatternMiner;
+  Names, AnchorOf: TArray<string>;
+  Probs: TProblemLineArray;
+  InLearn, InSkills, InStats, Failed, Misused, SampleBare, WriteIt: Boolean;
+  Sample: string;
+  ScarsFile: string;
 begin
   Result := False;
   Err := '';
@@ -487,11 +554,16 @@ begin
       R.Core[i].Bytes := SafeReadSize(JoinPath(MemDir, CoreNames[i]));
   end;
 
-  { 3 + 4a. Sessions: stats over SinceDays, skill usage over UnusedSkillDays. }
+  { 3 + 3b + 4a. Sessions: stats over SinceDays, recurring patterns over
+    LearnDays, skill usage over UnusedSkillDays -- one read of each
+    session for all three, each window checked on its own. }
   SinceStats  := O.NowUnix - Int64(O.SinceDays) * 86400;
   SinceSkills := O.NowUnix - Int64(O.UnusedSkillDays) * 86400;
+  SinceLearn  := O.NowUnix - Int64(O.LearnDays) * 86400;
+  Patterns := nil;
+  Miner := nil;
+  if O.LearnDays > 0 then Miner := TPatternMiner.Create;
   Used := TStringList.Create;
-  Lines := TStringList.Create;
   try
     Used.Sorted := True;
     Used.Duplicates := dupIgnore;
@@ -507,47 +579,111 @@ begin
     end;
     for i := 0 to High(Sessions) do
     begin
-      if Sessions[i].UpdatedAt < SinceSkills then Continue;
+      { Aged by PasClaw.Learn's rule, so `pasclaw learn --since N` and this
+        pass mine the same sessions, and one saved without timestamps ages
+        by its file. }
+      Updated := SessionStamp(Sessions[i]);
+      InLearn  := (Miner <> nil) and InWindow(Updated, SinceLearn);
+      InSkills := InWindow(Updated, SinceSkills);
+      InStats  := InWindow(Updated, SinceStats);
+      if not (InLearn or InSkills or InStats) then Continue;
       Sess := TSession.Create(Sessions[i].Id);
       try
-        { Skill usage: every skill_<name> call in the long window. }
-        for j := 0 to High(Sess.Messages) do
-          if Sess.Messages[j].Role = mrAssistant then
-            for k := 0 to High(Sess.Messages[j].ToolCalls) do
-            begin
-              Name := Sess.Messages[j].ToolCalls[k].Func.Name;
-              if Pos('skill_', Name) = 1 then Used.Add(Copy(Name, 7, MaxInt));
-            end;
-        if Sessions[i].UpdatedAt < SinceStats then Continue;
-        { Stats: the short window. }
-        Inc(R.SessionsScanned);
-        Inc(R.InputTokens,  Sess.Meta.Stats.InputTokens);
-        Inc(R.OutputTokens, Sess.Meta.Stats.OutputTokens);
-        for j := 0 to High(Sess.Messages) do
+        Names := ResultToolNames(Sess);
+        if InStats then
         begin
+          Inc(R.SessionsScanned);
+          Inc(R.InputTokens,  Sess.Meta.Stats.InputTokens);
+          Inc(R.OutputTokens, Sess.Meta.Stats.OutputTokens);
+        end;
+        { One walk of the messages for all three; each tool result is
+          classified once, for the recurring patterns and the stats both. }
+        for j := 0 to High(Sess.Messages) do
           case Sess.Messages[j].Role of
-            mrUser: Inc(R.Turns);
-            mrAssistant: Inc(R.ToolCalls, Length(Sess.Messages[j].ToolCalls));
-            mrTool:
+            mrUser:
+              if InStats then Inc(R.Turns);
+            mrAssistant:
               begin
-                { One failure per tool result at most; keep the line. }
-                Lines.Text := Sess.Messages[j].Content;
-                LineFailures := 0;
-                for n := 0 to Lines.Count - 1 do
-                  if LooksLikeToolFailure(Lines[n]) then
+                if InStats then Inc(R.ToolCalls, Length(Sess.Messages[j].ToolCalls));
+                { Skill usage: every skill_<name> call in the skill window. }
+                if InSkills then
+                  for k := 0 to High(Sess.Messages[j].ToolCalls) do
                   begin
-                    LineFailures := 1;
-                    if Length(R.FailureSamples) < MaxFailureSamples then
-                      AddStr(R.FailureSamples, Copy(Trim(Lines[n]), 1, 160));
-                    Break;
+                    Name := Sess.Messages[j].ToolCalls[k].Func.Name;
+                    if Pos('skill_', Name) = 1 then Used.Add(Copy(Name, 7, MaxInt));
                   end;
-                Inc(R.ToolFailures, LineFailures);
+              end;
+            mrTool:
+              if InLearn or InStats then
+              begin
+                if j <= High(Names) then Name := Names[j] else Name := '';
+                Probs := ProblemLines(Name, Sess.Messages[j].Content);
+                if InLearn then Miner.Add(Probs, Name, Sess);
+                if InStats then
+                begin
+                  { At most one failure and one misuse per tool result. The
+                    sample says how it failed when a line does ("exit=1"
+                    only says that it did). }
+                  Failed := False;
+                  Misused := False;
+                  Sample := '';
+                  SampleBare := True;
+                  for n := 0 to High(Probs) do
+                    if Probs[n].Kind = pkFailure then
+                    begin
+                      if not Failed or (SampleBare and not Probs[n].Bare) then
+                      begin
+                        Sample := Probs[n].Line;
+                        SampleBare := Probs[n].Bare;
+                      end;
+                      Failed := True;
+                    end
+                    else
+                      Misused := True;
+                  if Failed then
+                  begin
+                    Inc(R.ToolFailures);
+                    if Length(R.FailureSamples) < MaxFailureSamples then
+                      AddStr(R.FailureSamples, Clip(Sample));
+                  end;
+                  if Misused then Inc(R.ToolMisuses);
+                end;
               end;
           end;
-        end;
       finally
         Sess.Free;
       end;
+    end;
+
+    { 3b. Recurring: give SCARS.md the new ones, then report them with the
+      anchors they have there. }
+    if Miner <> nil then Patterns := Miner.Take;
+    for i := 0 to High(Patterns) do
+      if PassesThreshold(Patterns[i], O.LearnMinSessions) then Inc(R.RecurringCount);
+    if R.RecurringCount > 0 then
+    begin
+      ScarsFile := JoinPath(MemDir, 'SCARS.md');
+      WriteIt := O.Scars and not O.DryRun;
+      { Not writing still reads the file, to cite the anchors it has. }
+      if WriteScars(ScarsFile, Patterns, O.LearnMinSessions, not WriteIt,
+                    R.ScarsNew, R.ScarsKnown, AnchorOf) then
+      begin
+        if WriteIt then
+          R.ScarsPath := ScarsFile
+        else
+        begin
+          R.ScarsWouldAdd := R.ScarsNew;
+          R.ScarsNew := 0;
+        end;
+      end
+      else if WriteIt then
+        AddStr(R.Warnings, 'SCARS.md could not be written: ' + ScarsFile)
+      else
+        AddStr(R.Warnings, 'SCARS.md could not be read: ' + ScarsFile);
+      for i := 0 to High(Patterns) do
+        if PassesThreshold(Patterns[i], O.LearnMinSessions) and
+           (Length(R.Recurring) < MaxRecurringShown) then
+          AddStr(R.Recurring, RecurringLine(Patterns[i], AnchorOf[i]));
     end;
 
     { 4b. Skills. }
@@ -562,7 +698,8 @@ begin
     end;
     R.OverlapPairs := SkillOverlapPairs(Skills, SkillOverlapThreshold);
   finally
-    Lines.Free;
+    FreePatterns(Patterns);
+    Miner.Free;
     Used.Free;
   end;
 
@@ -643,9 +780,10 @@ begin
   end;
   if not RunMaintenance(O, R, Err) then Exit;
   Result := Format('maintenance %s: %d facts removed (%d active); %d sessions, %d tool calls, ' +
-                   '%d failures; %d unused skills, %d overlapping pairs',
+                   '%d failures; %d recurring (%d new in SCARS.md); %d unused skills, %d overlapping pairs',
                    [O.Today, R.FactsRemoved, R.FactsActive, R.SessionsScanned, R.ToolCalls,
-                    R.ToolFailures, Length(R.UnusedSkills), Length(R.OverlapPairs)]);
+                    R.ToolFailures, R.RecurringCount, R.ScarsNew,
+                    Length(R.UnusedSkills), Length(R.OverlapPairs)]);
   if R.BackupPath <> '' then Result := Result + '; backup ' + ExtractFileName(R.BackupPath);
   if R.ReportPath <> '' then Result := Result + '; report ' + R.ReportPath;
   if Length(R.Warnings) > 0 then

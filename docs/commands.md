@@ -340,7 +340,7 @@ pasclaw learn --write           # append a dated block to MEMORY.md
 pasclaw learn --write-scars     # also emit SCARS.md with stable §ANCHOR ids
 ```
 
-Mines `workspace/sessions/*.json` for recurring tool failures, normalises into clustering signatures (paths/pids/hashes stripped), groups by pattern.
+Mines `workspace/sessions/*.json` for recurring tool failures, and for misuses a tool pointed out in its own result, normalises into clustering signatures (paths/pids/hashes stripped), groups by pattern. The nightly `pasclaw maintain` does the same over 30 days and keeps `SCARS.md` current. See [Memory](./memory.md#pasclaw-learn--failure-mining).
 
 ## export
 
@@ -470,7 +470,7 @@ pasclaw maintain --dry-run                # report only: delete nothing, call no
 pasclaw cron add nightly "0 3 * * *" @maintain   # schedule it (runs inside `pasclaw gateway`)
 ```
 
-One pass: sweep expired facts and superseded facts older than `maintenance.keep_superseded_days`; size `SOUL.md` / `USER.md` / `MEMORY.md` / the two daily notes against `memory_core_budget_bytes`; walk the last N days of sessions (turns, tool calls, failures with samples, tokens); list callable skills nothing invoked in `maintenance.unused_skill_days` and pairs that look like the same skill twice; optionally ask `background_model` for a short critique; optionally back up. The report lands in `workspace/memory/maintenance/<date>.md`, in the searchable tier, never the always-loaded one. Exit code 2 when the report carries warnings. See [Maintenance](./maintenance.md).
+One pass: sweep expired facts and superseded facts older than `maintenance.keep_superseded_days`; size `SOUL.md` / `USER.md` / `MEMORY.md` / the two daily notes against `memory_core_budget_bytes`; walk the last N days of sessions (turns, tool calls, failures with samples, tokens); list what went wrong the same way in two or more sessions of the last 30 days and add the new patterns to `SCARS.md`; list callable skills nothing invoked in `maintenance.unused_skill_days` and pairs that look like the same skill twice; optionally ask `background_model` for a short critique; optionally back up. The report lands in `workspace/memory/maintenance/<date>.md`, in the searchable tier, never the always-loaded one. Exit code 2 when the report carries warnings. See [Maintenance](./maintenance.md).
 
 ## backup
 

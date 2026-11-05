@@ -1,8 +1,9 @@
 program learn_tests;
 (*
-  Covers PasClaw.Cmd.Learn's pattern-extraction primitives:
-  NormalizeErrorSignature (the clustering key) and LooksLikeFailure
-  (the line-level pre-filter).
+  Covers PasClaw.Learn's pattern-extraction primitives:
+  NormalizeErrorSignature (the clustering key), LooksLikeFailure (the
+  line-level pre-filter), the misuse notes, and which tool a result is
+  attributed to.
 
   Pinned because the whole `pasclaw learn` value proposition rides
   on "same root cause -> same signature": if the normaliser drifts,
@@ -10,10 +11,9 @@ program learn_tests;
   LooksLikeFailure drifts the other way, the report fills with
   noise the operator has to wade through.
 
-  The end-to-end Session-walk path is covered by the smoke target
-  (build + invoke on an empty PASCLAW_HOME); behaviour-driven
-  coverage of the cluster-on-disk write-back would require a
-  fixture session JSON, deferred.
+  ScanSession runs on sessions built in memory; WriteScars on a temp
+  file. The walk over saved sessions, and the nightly refresh of
+  SCARS.md, are covered by maintain_tests.
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -26,8 +26,35 @@ program learn_tests;
 {$ENDIF}
 
 uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes,
-  PasClaw.Cmd.Learn;
+  PasClaw.Utils,
+  PasClaw.Config,
+  PasClaw.Providers.Types,
+  PasClaw.Session.Store,
+  PasClaw.Tools.Types,
+  PasClaw.Tools.Registry,
+  PasClaw.Tools.Sandbox,
+  PasClaw.Tools.FS,
+  PasClaw.Tools.Memory,
+  PasClaw.Tools.MemoryFetch,
+  PasClaw.Tools.KB,
+  PasClaw.Tools.Vault,
+  PasClaw.Tools.SessionSearch,
+  PasClaw.Tools.WebFetch,
+  PasClaw.Tools.WebSearch,
+  PasClaw.Tools.OutputCache,
+  PasClaw.Tools.PlanWrite,
+  PasClaw.Tools.Shell,
+  PasClaw.Tools.ExecuteCode,
+  PasClaw.Tools.Cron,
+  PasClaw.Tools.SendMessage,
+  PasClaw.Tools.Worktree,
+  PasClaw.Tools.DelphiBuild,
+  PasClaw.Agents.Tools,
+  PasClaw.Projects.Tools,
+  PasClaw.Tools.Notes,
+  PasClaw.Learn;
 
 procedure Fail(const Msg: string);
 begin
@@ -50,6 +77,71 @@ procedure AssertFalse(Cond: Boolean; const Msg: string);
 begin
   if Cond then Fail(Msg);
 end;
+
+procedure AssertEqInt(Got, Want: Integer; const Msg: string);
+begin
+  if Got <> Want then
+    Fail(Msg + Format(' (got %d, want %d)', [Got, Want]));
+end;
+
+procedure AssertContains(const Hay, Needle, Msg: string);
+begin
+  if Pos(Needle, Hay) = 0 then Fail(Msg + ' -- missing "' + Needle + '"');
+end;
+
+{ ------------------------------------------------------- session fixtures }
+
+function CallMsg(const ToolName, Id: string): TMessage;
+begin
+  Result := MakeMessage(mrAssistant, '');
+  SetLength(Result.ToolCalls, 1);
+  Result.ToolCalls[0].Id := Id;
+  Result.ToolCalls[0].Func.Name := ToolName;
+  Result.ToolCalls[0].Func.Arguments := '{}';
+end;
+
+function ResultMsg(const Id, Content: string): TMessage;
+begin
+  Result := MakeMessage(mrTool, Content);
+  Result.ToolCallId := Id;
+end;
+
+function MkSession(const Id: string; const Msgs: array of TMessage): TSession;
+var
+  i: Integer;
+begin
+  Result := TSession.Create;   { no id: nothing is read from disk }
+  Result.Meta.Id := Id;
+  Result.Meta.UpdatedAt := 1000;
+  SetLength(Result.Messages, Length(Msgs));
+  for i := 0 to High(Msgs) do Result.Messages[i] := Msgs[i];
+end;
+
+procedure ScanInto(const Id: string; const Msgs: array of TMessage;
+                   var Patterns: TErrorPatternArray);
+var
+  S: TSession;
+begin
+  S := MkSession(Id, Msgs);
+  try
+    ScanSession(S, Patterns);
+  finally
+    S.Free;
+  end;
+end;
+
+function PatternWith(const Patterns: TErrorPatternArray; const Needle: string): Integer;
+var
+  i: Integer;
+begin
+  for i := 0 to High(Patterns) do
+    if Pos(Needle, Patterns[i].Sample) > 0 then Exit(i);
+  Result := -1;
+end;
+
+const
+  RegexNote = '(no matches) -- note: grep_files matches a LITERAL substring, ' +
+    'not a regex. Search one plain term (e.g. "to_csv"), or run it once per alternative.';
 
 procedure TestNormalizeCollapsesDigitRuns;
 { Line numbers, byte counts, pids -- anything 2+ digits -- becomes
@@ -141,6 +233,8 @@ begin
              'cannot find ...');
   AssertTrue(LooksLikeFailure('connection refused'),
              'connection refused');
+  AssertTrue(LooksLikeFailure('Traceback (most recent call last):'),
+             'a Python traceback');
 end;
 
 procedure TestReadExistingScarsRecognisesRenamedAnchors;
@@ -257,6 +351,567 @@ begin
     'casing normalises to upper, dashes between tokens');
 end;
 
+procedure TestAttributionWhenIdsRepeat;
+{ Some servers number calls per turn (the relay provider, several local
+  OpenAI-compatible servers), so "c1" comes back every turn. A result
+  belongs to the latest call with its id; keeping the first sent the
+  live security run's shell_exec refusal to the turn-one grep_files. }
+var
+  P: TErrorPatternArray;
+  i: Integer;
+begin
+  P := nil;
+  try
+    ScanInto('s1',
+      [MakeMessage(mrUser, 'sweep it'),
+       CallMsg('grep_files', 'c1'),
+       ResultMsg('c1', RegexNote),
+       CallMsg('shell_exec', 'c1'),
+       ResultMsg('c1', 'ERROR: refused: the command runs eval on its input'),
+       MakeMessage(mrAssistant, 'done')], P);
+    AssertEqInt(Length(P), 2, 'a misuse and a failure');
+    i := PatternWith(P, 'refused');
+    AssertTrue(i >= 0, 'the refusal is a pattern');
+    AssertEqStr(P[i].Context, 'shell_exec', 'the refusal is the turn-two call''s');
+    AssertTrue(P[i].Kind = pkFailure, 'a failure');
+    i := PatternWith(P, 'LITERAL substring');
+    AssertTrue(i >= 0, 'the misuse note is a pattern');
+    AssertEqStr(P[i].Context, 'grep_files', 'the note is the turn-one call''s');
+    AssertTrue(P[i].Kind = pkMisuse, 'a misuse');
+  finally
+    FreePatterns(P);
+  end;
+
+  { Calls of one turn split over two assistant messages, results after
+    both: each id still finds its call. }
+  P := nil;
+  try
+    ScanInto('s2',
+      [CallMsg('read_file', 'c1'),
+       CallMsg('shell_exec', 'c2'),
+       ResultMsg('c1', 'ERROR: no such file: notes.txt'),
+       ResultMsg('c2', 'bash: jq: command not found')], P);
+    i := PatternWith(P, 'no such file');
+    AssertTrue((i >= 0) and (P[i].Context = 'read_file'), 'c1 is read_file''s');
+    i := PatternWith(P, 'command not found');
+    AssertTrue((i >= 0) and (P[i].Context = 'shell_exec'), 'c2 is shell_exec''s');
+  finally
+    FreePatterns(P);
+  end;
+
+  { An id with '=' in it (base64 padding) still finds its call. }
+  P := nil;
+  try
+    ScanInto('s3',
+      [CallMsg('shell_exec', 'Y2FsbF8x=='),
+       ResultMsg('Y2FsbF8x==', 'bash: jq: command not found')], P);
+    AssertEqInt(Length(P), 1, 'one failure');
+    AssertEqStr(P[0].Context, 'shell_exec', 'attributed through an id with =');
+  finally
+    FreePatterns(P);
+  end;
+end;
+
+function SamplesOf(const P: TErrorPatternArray): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 0 to High(P) do Result := Result + ' [' + P[i].Sample + ']';
+end;
+
+procedure TestQuotedTextIsNotMined;
+{ What a tool only returns is quoted, not failed. Mining it is the loop
+  the nightly pass would otherwise close: SCARS.md read back in two
+  sessions came back as new patterns, and the next night wrote anchors
+  for its own Symptom lines. }
+var
+  P: TErrorPatternArray;
+begin
+  P := nil;
+  try
+    ScanInto('s1',
+      [CallMsg('read_file', 'c1'),
+       ResultMsg('c1', '1:ab|error: the build broke'#10'2:cd|bash: x: command not found'),
+       CallMsg('memory_search', 'c2'),
+       ResultMsg('c2', 'SCARS.md (score 1.2)'#10'  **Symptom:** ERROR: refused: eval'#10 +
+         '  **Symptom:** ' + RegexNote + #10 +
+         'notes.md (score 0.8)'#10'  ERROR: the deploy failed on Tuesday'),
+       CallMsg('grep_files', 'c3'),
+       ResultMsg('c3', 'src/FS.pas:954:  Result := ''' + RegexNote + '''' + #10 +
+         'src/b.pas:3:  raise Exception.Create(''error: bad input'');'),
+       CallMsg('shell_exec', 'c4'),
+       ResultMsg('c4', '**Symptom:** ERROR: refused: eval'#10 +
+         '  - `bash: npm: command not found`'#10 +
+         '- 2x across 2 sessions, `shell`: `ERROR: x` ' + SectionSign + 'ERROR-X'#10 +
+         '- 2x across 2 sessions, `shell`: `ERROR: y`'#10 +            { no anchor }
+         '- **2x across 2 session(s)**: ERROR: refused: eval'),          { MEMORY.md }
+       { A board's checks and a subagent's answer, read by every agent. }
+       CallMsg('rule', 'c5'),
+       ResultMsg('c5', 'proof for "sqli" on T0002:'#10 +
+         '  the project as the finding was filed (S0001): failed (exit 1)'#10 +
+         '    output: Traceback (most recent call last):'#10 +
+         '  the accepted fix (S0002): failed (exit 1)'#10 +
+         '    output: error: notes.py:21: still concatenates the query'),
+       CallMsg('task', 'c6'),
+       ResultMsg('c6', '1 of 1 held-out check(s) failed:'#10'- t1: FAILED (exit 1)'#10 +
+         '  output (the check''s, quoted as data):'#10'  error: expected 3, got 2'),
+       CallMsg('spawn_wait', 'c7'),
+       ResultMsg('c7', 'done.'#10'I hit error: no such file: x.txt and worked around it.')], P);
+    AssertEqInt(Length(P), 0, 'nothing quoted is mined:' + SamplesOf(P));
+
+    { A read's own status line, and a command's output, still count. }
+    ScanInto('s2',
+      [CallMsg('read_file', 'c1'),
+       ResultMsg('c1', 'ERROR: no such file: notes.txt'),
+       CallMsg('shell_exec', 'c2'),
+       ResultMsg('c2', 'building'#10'bash: jq: command not found')], P);
+    AssertEqInt(Length(P), 2, 'a read''s ERROR line and a shell failure:' + SamplesOf(P));
+  finally
+    FreePatterns(P);
+  end;
+end;
+
+procedure TestBareStatusLines;
+{ "exit=1", a traceback's header, "build FAILED": a result failed, but not
+  how. Every failing command shares the line, so it is never a pattern;
+  the line that says what went wrong is. }
+var
+  P: TErrorPatternArray;
+  Probs: TProblemLineArray;
+begin
+  AssertTrue(IsBareStatus('exit=1'), 'exit=1');
+  AssertTrue(IsBareStatus('exit=4'), 'exit=4 (pytest: internal error), not only 1 and 2');
+  AssertTrue(IsBareStatus('exit=127'), 'exit=127');
+  AssertFalse(IsBareStatus('exit=0'), 'exit=0 is success');
+  AssertFalse(IsBareStatus('exit=00'), 'nor is exit=00');
+  AssertTrue(LooksLikeFailure('exit=6'), 'a curl exit of 6 is a failure');
+  AssertTrue(IsBareStatus('Traceback (most recent call last):'), 'a traceback header');
+  AssertTrue(IsBareStatus('build FAILED (Win64/Debug, exit=1): 3 error(s), 0 warning(s)'), 'a failed build');
+  AssertTrue(LooksLikeFailure('Exception: boom'), 'a bare Exception');
+
+  Probs := ProblemLines('shell_exec', 'exit=1'#10'cwd=/w'#10'running the tests');
+  AssertEqInt(Length(Probs), 1, 'the exit line is a problem line');
+  AssertTrue(Probs[0].Bare, 'and bare');
+
+  P := nil;
+  try
+    ScanInto('s1', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', 'exit=1'#10'cwd=/w'),
+                    CallMsg('shell_exec', 'c2'), ResultMsg('c2',
+      'exit=1'#10'Traceback (most recent call last):'#10'  File "x.py", line 3'#10 +
+      'ValueError: bad input')], P);
+    ScanInto('s2', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', 'exit=2'#10'cwd=/w')], P);
+    AssertEqInt(Length(P), 1, 'only the line that says how:' + SamplesOf(P));
+    AssertContains(P[0].Sample, 'ValueError', 'the exception, not the header');
+  finally
+    FreePatterns(P);
+  end;
+end;
+
+procedure TestLinesAreCleaned;
+{ Colour codes go before a line is kept, and a line is kept to a length:
+  one failure printed in colour and plain is one pattern, and a minified
+  bundle on one line is not a megabyte in SCARS.md. }
+var
+  P: TErrorPatternArray;
+  Long: string;
+begin
+  AssertEqStr(StripAnsi(#27'[31merror:'#27'[0m bad thing'), 'error: bad thing', 'colour codes go');
+  AssertEqStr(StripAnsi(#27']0;title'#7'error: x'), 'error: x', 'and a title sequence');
+  P := nil;
+  try
+    ScanInto('s1', [CallMsg('shell_exec', 'c1'),
+      ResultMsg('c1', #27'[1;31merror:'#27'[0m the build broke at stage 3')], P);
+    ScanInto('s2', [CallMsg('shell_exec', 'c1'),
+      ResultMsg('c1', 'error: the build broke at stage 3')], P);
+    AssertEqInt(Length(P), 1, 'coloured and plain are one pattern');
+    AssertEqInt(P[0].Sessions.Count, 2, 'seen in both');
+    AssertFalse(Pos(#27, P[0].Sample) > 0, 'no escape bytes in the sample');
+  finally
+    FreePatterns(P);
+  end;
+
+  Long := 'error: bundle failed api_key=s3cr3tvalue1 ' + StringOfChar('x', 100000);
+  P := nil;
+  try
+    ScanInto('s3', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', Long)], P);
+    AssertEqInt(Length(P), 1, 'the long line is a failure');
+    AssertTrue(Length(P[0].Sample) <= 400, 'its sample is kept to 400 columns');
+    AssertTrue(Length(P[0].Signature) <= 400, 'and so is its signature');
+    AssertContains(P[0].Sample, 'api_key=<redacted>', 'redacted before the cut');
+  finally
+    FreePatterns(P);
+  end;
+
+  { A secret across the 400-column cut: redacted whole first, so no part
+    of it is kept. }
+  Long := 'error: ' + StringOfChar('y', 380) + ' api_key=s3cr3tvalue1 tail';
+  P := nil;
+  try
+    ScanInto('s4', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', Long)], P);
+    AssertEqInt(Length(P), 1, 'one failure');
+    AssertFalse(Pos('s3c', P[0].Sample) > 0, 'no part of the secret: ' +
+                Copy(P[0].Sample, 380, 40));
+  finally
+    FreePatterns(P);
+  end;
+end;
+
+procedure TestRedactSecrets;
+{ SCARS.md is written unattended and exported into committed rule files,
+  so a credential in a failure line must not reach it. }
+var
+  P: TErrorPatternArray;
+begin
+  AssertEqStr(RedactSecrets('fatal: unable to access ''https://eli:hunter22@github.com/x.git/'': error'),
+    'fatal: unable to access ''https://<redacted>@github.com/x.git/'': error', 'URL userinfo');
+  AssertEqStr(RedactSecrets('remote: https://ghp_abcdefghijklmnop1234@github.com'),
+    'remote: https://<redacted>@github.com', 'a token as userinfo');
+  AssertEqStr(RedactSecrets('error: bad credentials ghp_AbCdEf0123456789xyz'),
+    'error: bad credentials <redacted>', 'a GitHub token');
+  AssertEqStr(RedactSecrets('error: key sk-ant-api03-abcdefghijklmnop rejected'),
+    'error: key <redacted> rejected', 'an API key');
+  AssertEqStr(RedactSecrets('error: AKIAIOSFODNN7EXAMPLE is not authorized'),
+    'error: <redacted> is not authorized', 'an AWS key id');
+  AssertEqStr(RedactSecrets('curl: (22) https://api.x.com/v1?api_key=s3cr3tvalue&q=1 failed'),
+    'curl: (22) https://api.x.com/v1?api_key=<redacted>&q=1 failed', 'a key=value');
+  AssertEqStr(RedactSecrets('error: password: Hunter2! rejected'),
+    'error: password: <redacted> rejected', 'a key: value');
+  AssertEqStr(RedactSecrets('error: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc denied'),
+    'error: Authorization: Bearer <redacted> denied', 'a bearer token');
+  AssertEqStr(RedactSecrets('error: GITHUB_TOKEN=ghp_AbCdEf0123456789xyz'),
+    'error: GITHUB_TOKEN=<redacted>', 'an env var');
+  AssertEqStr(RedactSecrets('error: invalid key AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'),
+    'error: invalid key <redacted>', 'a long opaque key');
+  AssertEqStr(RedactSecrets('error: mysql --password Hunter22x -h db: access denied'),
+    'error: mysql --password <redacted> -h db: access denied', 'a flag''s value after a space');
+  AssertEqStr(RedactSecrets('error: bad key Kq3+Zr8/bT1xYw9P0aB4cD7eF2gH5iJ6kL8mN0pQ== here'),
+    'error: bad key <redacted> here', 'a base64 key, + / and = included');
+  { What is not a secret stays. }
+  AssertEqStr(RedactSecrets('error: /home/user/Project2/src/Main9Unit/DeepFolder2/File.pas not found'),
+    'error: /home/user/Project2/src/Main9Unit/DeepFolder2/File.pas not found', 'a long path');
+  AssertEqStr(RedactSecrets('error: --verbose flag set'),
+    'error: --verbose flag set', 'a flag that is not a secret');
+  AssertEqStr(RedactSecrets('error: unexpected token: identifier at line 3'),
+    'error: unexpected token: identifier at line 3', 'a parser''s token');
+  AssertEqStr(RedactSecrets('ERROR: refused: command contains forbidden token "eval"'),
+    'ERROR: refused: command contains forbidden token "eval"', 'the shell refusal');
+  AssertEqStr(RedactSecrets('fatal: bad object 3f2a9c1e0b7d4a6f8e2c1b0a9d8e7f6a5b4c3d2e'),
+    'fatal: bad object 3f2a9c1e0b7d4a6f8e2c1b0a9d8e7f6a5b4c3d2e', 'a commit hash');
+  AssertEqStr(RedactSecrets('error: https://github.com/FMXExpress/PasClaw/pull/628 failed'),
+    'error: https://github.com/FMXExpress/PasClaw/pull/628 failed', 'a plain URL');
+
+  { Mined lines are masked in the sample and in the signature. }
+  P := nil;
+  try
+    ScanInto('s1', [CallMsg('shell_exec', 'c1'), ResultMsg('c1',
+      'fatal: unable to access ''https://eli:hunter22@github.com/x.git/'': error: 403')], P);
+    AssertEqInt(Length(P), 1, 'one failure');
+    AssertFalse(Pos('hunter22', P[0].Sample) > 0, 'no password in the sample');
+    AssertFalse(Pos('hunter22', P[0].Signature) > 0, 'nor in the signature');
+  finally
+    FreePatterns(P);
+  end;
+end;
+
+procedure TestCaseDistinctSignatures;
+{ The miner keeps "Error: Foo" and "error: foo" apart; SCARS.md does too,
+  instead of finding the second as the first and citing its anchor. }
+var
+  P: TErrorPatternArray;
+  Dir, Path: string;
+  Fresh, Skipped: Integer;
+  AnchorOf: TArray<string>;
+begin
+  P := nil;
+  Dir := JoinPath(GetTempDir, 'pc-learn-case-' + IntToStr(GetProcessID));
+  ForceDirectories(Dir);
+  Path := JoinPath(Dir, 'SCARS.md');
+  SysUtils.DeleteFile(Path);
+  try
+    ScanInto('s1', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', 'Error: Foo broke'),
+                    CallMsg('shell_exec', 'c2'), ResultMsg('c2', 'error: foo broke')], P);
+    ScanInto('s2', [CallMsg('shell_exec', 'c1'), ResultMsg('c1', 'Error: Foo broke'),
+                    CallMsg('shell_exec', 'c2'), ResultMsg('c2', 'error: foo broke')], P);
+    AssertEqInt(Length(P), 2, 'two patterns');
+    AssertTrue(WriteScars(Path, P, 2, False, Fresh, Skipped, AnchorOf), 'written');
+    AssertEqInt(Fresh, 2, 'both added');
+    AssertTrue(AnchorOf[0] <> AnchorOf[1], 'under two anchors');
+    AssertTrue(WriteScars(Path, P, 2, False, Fresh, Skipped, AnchorOf), 'again');
+    AssertEqInt(Skipped, 2, 'each found by its own signature');
+    AssertTrue(AnchorOf[0] <> AnchorOf[1], 'and cited by its own anchor');
+  finally
+    FreePatterns(P);
+    SysUtils.DeleteFile(Path);
+    RemoveDir(Dir);
+  end;
+end;
+
+procedure TestWindow;
+var
+  M: TSessionMeta;
+begin
+  M := Default(TSessionMeta);
+  M.Id := 'no-such-session';
+  M.CreatedAt := 5000;
+  AssertTrue(SessionStamp(M) = 5000, 'no UpdatedAt: its CreatedAt');
+  M.UpdatedAt := 7000;
+  AssertTrue(SessionStamp(M) = 7000, 'UpdatedAt when there is one');
+  M := Default(TSessionMeta);
+  M.Id := 'no-such-session';
+  AssertTrue(SessionStamp(M) = 0, 'no stamps and no file: unknown');
+  AssertTrue(InWindow(0, 0), 'no window: every session, dated or not');
+  AssertFalse(InWindow(0, 1000), 'a window: a session of unknown age is outside');
+  AssertTrue(InWindow(1000, 1000), 'the window''s first second is inside');
+  AssertFalse(InWindow(999, 1000), 'before it is not');
+end;
+
+procedure TestToolsAreClassified;
+{ Every read-only tool is either one whose result is quoted text
+  (PasClaw.Tools.Notes' QuotingTools) or one whose result is its own
+  outcome (listed here). A new read-only tool fails this until someone
+  decides which, instead of having its results mined line by line. }
+const
+  OwnOutcome: array[0..0] of string = ('plan_write');   { "wrote N byte(s) to ..." }
+  { QuotingTools registered by units this test does not pull in, or only
+    when there is something to read (kb_*: a knowledge base on disk). }
+  Elsewhere: array[0..7] of string = (
+    'tool_search', 'code_catalog', 'skills_view', 'skills_list',
+    'spawn_wait', 'spawn_status', 'kb_search', 'kb_get');
+var
+  R: TToolRegistry;
+  T: TTool;
+  Names: TStringArray;
+  i, j: Integer;
+  Known: Boolean;
+  Unclassified: string;
+begin
+  R := TToolRegistry.Create;
+  try
+    RegisterFSTools(R);
+    RegisterMemoryTools(R);
+    RegisterMemoryFetchTool(R);
+    RegisterKBTools(R);
+    RegisterVaultTools(R);
+    RegisterSessionSearchTool(R);
+    RegisterWebFetchTool(R);
+    RegisterWebSearchTool(R);
+    RegisterOutputCacheTool(R);
+    RegisterPlanWriteTool(R);
+    RegisterShellTool(R);
+    RegisterExecuteCodeTool(R);
+    RegisterCronTool(R);
+    RegisterSendMessageTool(R);
+    RegisterWorktreeTools(R);
+    RegisterDelphiBuildTool(R);
+    RegisterAgentTools(R);
+    RegisterProjectTools(R);
+    RegisterDesktopTool(R);
+    Unclassified := '';
+    Names := R.Names;
+    for i := 0 to High(Names) do
+    begin
+      if not R.Find(Names[i], T) then Continue;
+      if T.Category <> tcReadOnly then Continue;
+      Known := QuotesStoredText(Names[i]);
+      for j := Low(OwnOutcome) to High(OwnOutcome) do
+        if OwnOutcome[j] = Names[i] then Known := True;
+      if not Known then Unclassified := Unclassified + ' ' + Names[i];
+    end;
+    AssertEqStr(Unclassified, '', 'read-only tools in neither list');
+    for i := Low(QuotingTools) to High(QuotingTools) do
+    begin
+      Known := R.Find(QuotingTools[i], T);
+      for j := Low(Elsewhere) to High(Elsewhere) do
+        if Elsewhere[j] = QuotingTools[i] then Known := True;
+      AssertTrue(Known, 'QuotingTools names a real tool: ' + QuotingTools[i]);
+    end;
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TestSortIsStable;
+{ Most occurrences first; equal counts keep the order they were found in. }
+var
+  P: TErrorPatternArray;
+  i: Integer;
+const
+  Counts: array[0..4] of Integer = (1, 3, 2, 3, 1);
+  Want: array[0..4] of string = ('b', 'd', 'c', 'a', 'e');
+begin
+  SetLength(P, 5);
+  for i := 0 to 4 do
+  begin
+    P[i].Count := Counts[i];
+    P[i].Signature := Chr(Ord('a') + i);
+    P[i].Sessions := nil;
+  end;
+  SortPatternsByCount(P);
+  for i := 0 to 4 do
+    AssertEqStr(P[i].Signature, Want[i], 'sorted position ' + IntToStr(i));
+end;
+
+procedure TestScarsAnchors;
+{ Anchors that collide, anchors the operator renamed, a hand-written block,
+  a dry run, and a file that cannot be written. }
+var
+  P: TErrorPatternArray;
+  Dir, Path, Text, Base, A0, A1: string;
+  Fresh, Skipped: Integer;
+  AnchorOf: TArray<string>;
+begin
+  P := nil;
+  Dir := JoinPath(GetTempDir, 'pc-learn-anchors-' + IntToStr(GetProcessID));
+  ForceDirectories(Dir);
+  Path := JoinPath(Dir, 'SCARS.md');
+  SysUtils.DeleteFile(Path);
+  try
+    { Two refusals of two commands derive one five-word anchor. }
+    ScanInto('s1', [CallMsg('shell_exec', 'c1'),
+      ResultMsg('c1', 'ERROR: refused: command contains forbidden token "eval"'),
+      CallMsg('shell_exec', 'c2'),
+      ResultMsg('c2', 'ERROR: refused: command contains forbidden token "rm"')], P);
+    ScanInto('s2', [CallMsg('shell_exec', 'c1'),
+      ResultMsg('c1', 'ERROR: refused: command contains forbidden token "eval"'),
+      CallMsg('shell_exec', 'c2'),
+      ResultMsg('c2', 'ERROR: refused: command contains forbidden token "rm"')], P);
+    AssertEqInt(Length(P), 2, 'two patterns');
+    Base := MakeAnchorName(P[0].Signature);
+    AssertEqStr(MakeAnchorName(P[1].Signature), Base, 'that derive one anchor');
+
+    AssertTrue(WriteScars(Path, P, 2, True, Fresh, Skipped, AnchorOf), 'dry run');
+    AssertEqInt(Fresh, 2, 'a dry run says two would be added');
+    AssertFalse(FileExists(Path), 'and writes nothing');
+    AssertTrue((AnchorOf[0] = '') and (AnchorOf[1] = ''), 'so nothing is cited yet');
+
+    AssertTrue(WriteScars(Path, P, 2, False, Fresh, Skipped, AnchorOf), 'written');
+    AssertEqInt(Fresh, 2, 'both added, neither dropped as already there');
+    AssertEqStr(AnchorOf[0], Base, 'the first under the anchor');
+    AssertEqStr(AnchorOf[1], Base + '-2', 'the second with a suffix');
+    A1 := AnchorOf[1];
+
+    { The operator renames the first: the next run follows the rename. }
+    Text := ReadFileText(Path);
+    AssertContains(Text, '## ' + SectionSign + Base + #10, 'the heading as written');
+    Text := StringReplace(Text, '## ' + SectionSign + Base + #10,
+                          '## ' + SectionSign + 'EVAL-DENIED' + #10, []);
+    WriteFileText(Path, Text);
+    AssertTrue(WriteScars(Path, P, 2, False, Fresh, Skipped, AnchorOf), 'third run');
+    AssertEqInt(Fresh, 0, 'nothing new');
+    AssertEqInt(Skipped, 2, 'both known');
+    AssertEqStr(AnchorOf[0], 'EVAL-DENIED', 'the renamed anchor is the one cited');
+    AssertEqStr(AnchorOf[1], A1, 'the other is unchanged');
+
+    { A hand-written block with no marker is its anchor's pattern -- once. }
+    WriteFileText(Path, '## ' + SectionSign + Base + #10 + 'written by hand'#10);
+    AssertTrue(WriteScars(Path, P, 2, False, Fresh, Skipped, AnchorOf), 'hand-written');
+    AssertEqInt(Skipped, 1, 'the hand-written block is the first');
+    AssertEqInt(Fresh, 1, 'the second is added');
+    AssertEqStr(AnchorOf[0], Base, 'cited by its hand-written anchor');
+    AssertEqStr(AnchorOf[1], Base + '-2', 'the second beside it');
+    A0 := ReadFileText(Path);
+    AssertContains(A0, 'written by hand', 'the operator''s text is kept');
+
+    { A file that cannot be written reports nothing added. }
+    ForceDirectories(JoinPath(Dir, 'adir'));
+    AssertFalse(WriteScars(JoinPath(Dir, 'adir'), P, 2, False, Fresh, Skipped, AnchorOf),
+                'a directory is not writable as SCARS.md');
+    AssertEqInt(Fresh, 0, 'no anchors reported added');
+    AssertEqInt(Skipped, 0, 'none reported known');
+    AssertEqStr(AnchorOf[0], '', 'none cited');
+    RemoveDir(JoinPath(Dir, 'adir'));
+  finally
+    FreePatterns(P);
+    SysUtils.DeleteFile(Path);
+    RemoveDir(Dir);
+  end;
+end;
+
+procedure TestMisuseClusters;
+{ The definition hint names the symbol searched for. Two sessions hunting
+  two different names are one recurring misuse, not two one-offs. }
+var
+  P: TErrorPatternArray;
+  Dir, Path, Text: string;
+  Fresh, Skipped: Integer;
+  AnchorOf: TArray<string>;
+begin
+  AssertTrue(MisuseSignature('(no matches)') = '', 'a plain miss is no misuse');
+  AssertTrue(MisuseSignature('error: no such file') = '', 'a failure is no misuse');
+  AssertTrue(MisuseSignature(RegexNote) <> '', 'the regex note is');
+  P := nil;
+  try
+    ScanInto('s1', [CallMsg('grep_files', 'c1'), ResultMsg('c1',
+      '(no matches) -- to find where a name is defined, whatever its keyword or owner: ' +
+      'code_outline symbol="TFoo.Make".')], P);
+    ScanInto('s2', [CallMsg('grep_files', 'c1'), ResultMsg('c1',
+      '(no matches) -- to find where a name is defined, whatever its keyword or owner: ' +
+      'code_outline symbol="ParseArgs".')], P);
+    AssertEqInt(Length(P), 1, 'one pattern for both names');
+    AssertEqInt(P[0].Sessions.Count, 2, 'seen in two sessions');
+    AssertTrue(PassesThreshold(P[0], 2), 'so it recurs');
+    AssertEqStr(MakeAnchorName(P[0].Signature), 'GREP-FILES-DEFINITION-HUNT-KEYWORD',
+                'its anchor reads as what went wrong');
+
+    Dir := JoinPath(GetTempDir, 'pc-learn-tests-' + IntToStr(GetProcessID));
+    ForceDirectories(Dir);
+    Path := JoinPath(Dir, 'SCARS.md');
+    SysUtils.DeleteFile(Path);
+    AssertTrue(WriteScars(Path, P, 2, False, Fresh, Skipped, AnchorOf), 'SCARS.md written');
+    AssertEqInt(Fresh, 1, 'one new anchor');
+    Text := ReadFileText(Path);
+    AssertContains(Text, SectionSign + 'GREP-FILES-DEFINITION-HUNT-KEYWORD', 'the anchor');
+    AssertContains(Text, '**Kind:** misuse', 'marked a misuse');
+    AssertContains(Text, '**Where:** tool `grep_files`', 'and where');
+    AssertTrue(WriteScars(Path, P, 2, False, Fresh, Skipped, AnchorOf), 'second write');
+    AssertEqInt(Fresh, 0, 'nothing new the second time');
+    AssertEqInt(Skipped, 1, 'the anchor is already there');
+    SysUtils.DeleteFile(Path);
+    RemoveDir(Dir);
+  finally
+    FreePatterns(P);
+  end;
+end;
+
+procedure TestMisuseNotesMatchTheTool;
+{ MisuseSignature matches the notes' wording, so run the tool that writes
+  them: a reworded note fails here instead of going quietly uncounted. }
+var
+  Dir, Out_, Err: string;
+  R: TToolRegistry;
+  Pol: TSandboxPolicy;
+begin
+  Dir := JoinPath(GetTempDir, 'pc-learn-grep-' + IntToStr(GetProcessID));
+  ForceDirectories(Dir);
+  WriteFileText(JoinPath(Dir, 'a.txt'), 'nothing to see'#10);
+  Pol := Default(TSandboxPolicy);
+  ConfigureSandbox(Pol, Dir);
+  R := TToolRegistry.Create;
+  try
+    RegisterFSTools(R);
+    Out_ := R.RunTool('grep_files', '{"path":".","pattern":"foo|bar"}', Err);
+    AssertContains(Out_, 'LITERAL', 'grep_files notes a regex');
+    AssertTrue(LooksLikeMisuse(Out_), 'the regex note counts as a misuse: ' + Out_);
+    Out_ := R.RunTool('grep_files', '{"path":".","pattern":"function TFoo.Make"}', Err);
+    AssertContains(Out_, 'code_outline', 'grep_files notes a definition hunt');
+    AssertTrue(LooksLikeMisuse(Out_), 'the definition note counts as a misuse: ' + Out_);
+    AssertTrue(MisuseSignature(Out_) <> MisuseSignature(RegexNote), 'two different misuses');
+    Out_ := R.RunTool('grep_files', '{"path":".","pattern":"absent"}', Err);
+    AssertFalse(LooksLikeMisuse(Out_), 'an ordinary miss is not');
+    { A file that quotes the note is found, not misused. }
+    WriteFileText(JoinPath(Dir, 'b.txt'), 'x := ''' + RegexNote + ''';'#10);
+    Out_ := R.RunTool('grep_files', '{"path":".","pattern":"LITERAL"}', Err);
+    AssertContains(Out_, 'b.txt', 'the quoting file is found');
+    AssertEqInt(Length(ProblemLines('grep_files', Out_)), 0, 'and no misuse is counted: ' + Out_);
+  finally
+    R.Free;
+    SysUtils.DeleteFile(JoinPath(Dir, 'a.txt'));
+    SysUtils.DeleteFile(JoinPath(Dir, 'b.txt'));
+    RemoveDir(Dir);
+  end;
+end;
+
 procedure TestLooksLikeFailureNegatives;
 { Precision matters: ordinary output lines must not match. The
   cost of a false positive is a noisy report the operator has to
@@ -283,5 +938,17 @@ begin
   TestMakeAnchorName;
   TestReadExistingScarsRecognisesRenamedAnchors;
   TestReadExistingScarsMissingFile;
+  TestAttributionWhenIdsRepeat;
+  TestMisuseClusters;
+  TestMisuseNotesMatchTheTool;
+  TestQuotedTextIsNotMined;
+  TestRedactSecrets;
+  TestScarsAnchors;
+  TestSortIsStable;
+  TestBareStatusLines;
+  TestLinesAreCleaned;
+  TestCaseDistinctSignatures;
+  TestWindow;
+  TestToolsAreClassified;
   WriteLn('learn_tests: OK');
 end.
