@@ -54,6 +54,7 @@ uses
   PasClaw.Hashline,
   PasClaw.Tools.Sandbox,
   PasClaw.Tools.Outline,   { code_outline registers beside grep_files }
+  PasClaw.Tools.Notes,
   PasClaw.Checkpoints;
 
 var
@@ -947,19 +948,18 @@ begin
     end;
     if TotalMatches = 0 then
     begin
-      Result := '(no matches)';
+      { The notes' wording lives in PasClaw.Tools.Notes, where
+        `pasclaw learn` reads it to count these misuses. }
+      Result := NoMatches;
       { B3-style next-move hint: a 0-match regex-shaped pattern is almost
         always the model expecting regex from a literal-substring tool. }
       if LooksLikeRegexPattern(Pattern) then
-        Result := Result + ' -- note: grep_files matches a LITERAL substring, ' +
-          'not a regex. Search one plain term (e.g. "to_csv"), or run it once ' +
-          'per alternative.'
+        Result := Result + GrepRegexNote
       { A definition hunted by its keyword misses every spelling the guess
         did not: a method body (TFoo.Bar), two spaces, "class function".
         Measured in bench/codenav: 3 of 34 real lookups found nothing. }
       else if LooksLikeDefinitionSearch(Pattern) then
-        Result := Result + ' -- to find where a name is defined, whatever its ' +
-          'keyword or owner: code_outline symbol="' + DefinedName(Pattern) + '".';
+        Result := Result + GrepDefinitionNote + DefinedName(Pattern) + '".';
     end
     else
     begin

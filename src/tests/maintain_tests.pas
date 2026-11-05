@@ -2,7 +2,8 @@ program maintain_tests;
 (*
   PasClaw.Maintain -- the nightly pass, against a temp PASCLAW_HOME.
 
-    - LooksLikeToolFailure: positives and the negatives that matter
+    - LooksLikeFailure (PasClaw.Learn's, which the pass counts by): positives
+      and the negatives that matter
       ("exit code 0", "0 failed").
     - SkillOverlapPairs: near-duplicate pair found, distinct pair not.
     - RunMaintenance end to end with Review off and DryRun off:
@@ -57,6 +58,23 @@ begin
   Result := False;
 end;
 
+function ValidUtf8(const S: string): Boolean;
+var
+  i, n, k: Integer;
+begin
+  Result := False;
+  i := 1;
+  while i <= Length(S) do
+  begin
+    n := Utf8SeqLen(Ord(S[i]));
+    if (n = 0) or (i + n - 1 > Length(S)) then Exit;
+    for k := 1 to n - 1 do
+      if (Ord(S[i + k]) and $C0) <> $80 then Exit;
+    Inc(i, n);
+  end;
+  Result := True;
+end;
+
 function JoinArr(const L: array of string): string;
 var i: Integer;
 begin
@@ -73,13 +91,13 @@ var
   A, B: TSkillSpecArray;
   Pairs: TArray<string>;
 begin
-  AssertTrue(LooksLikeToolFailure('ERROR: npm test failed with exit code 1'), 'error line');
-  AssertTrue(LooksLikeToolFailure('bash: pnpm: command not found'), 'command not found');
-  AssertTrue(LooksLikeToolFailure('Traceback (most recent call last):'), 'traceback');
-  AssertTrue(not LooksLikeToolFailure('exit code 0'), 'exit code 0 is not a failure');
-  AssertTrue(not LooksLikeToolFailure('12 passed, 0 failed'), '0 failed is not a failure');
-  AssertTrue(not LooksLikeToolFailure('wrote 3 files'), 'plain success line');
-  AssertTrue(not LooksLikeToolFailure(''), 'empty line');
+  AssertTrue(LooksLikeFailure('ERROR: npm test failed with exit code 1'), 'error line');
+  AssertTrue(LooksLikeFailure('bash: pnpm: command not found'), 'command not found');
+  AssertTrue(LooksLikeFailure('Traceback (most recent call last):'), 'traceback');
+  AssertTrue(not LooksLikeFailure('exit code 0'), 'exit code 0 is not a failure');
+  AssertTrue(not LooksLikeFailure('12 passed, 0 failed'), '0 failed is not a failure');
+  AssertTrue(not LooksLikeFailure('wrote 3 files'), 'plain success line');
+  AssertTrue(not LooksLikeFailure(''), 'empty line');
 
   SetLength(A, 3);
   A[0].Name := 'deploy_site';     A[0].Description := 'Deploy the static site to the production bucket';
@@ -212,20 +230,33 @@ begin
      MakeMessage(mrUser, 'ok use pnpm'),
      ToolCallMsg('shell', 'c3'),
      ToolResult('c3', '12 passed, 0 failed'),
+     ToolCallMsg('grep_files', 'c8'),
+     ToolResult('c8', '(no matches) -- note: grep_files matches a LITERAL substring, ' +
+       'not a regex. Search one plain term (e.g. "to_csv"), or run it once per alternative.'),
+     ToolCallMsg('memory_search', 'c12'),
+     ToolResult('c12', 'notes.md'#10'  error: the build broke on Tuesday'),   { quoted }
      MakeMessage(mrAssistant, 'green')], 2000, 300);
   { cccc and eeee are outside the one-day stats window but inside the
     30-day learn window, and fail the way bbbb did: one recurring pattern.
     eeee (25 days) is past the 20-day skill window too, so its skill call
     does not count as a use. dddd fails the same way, but 40 days ago,
-    past every window. }
+    past every window. ffff has no timestamp: inside the learn window, as
+    `pasclaw learn` has it, and outside the others. cccc and eeee also
+    read SCARS.md back (memory_search) and cat it (shell): quoted, so not
+    a second recurring pattern. }
   SaveSession('20260101T000003-cccccccc', NowU - 10 * 86400,
     [MakeMessage(mrUser, 'old'),
      ToolCallMsg('skill_deploy_website', 'c4'),
      ToolResult('c4', 'ok'),
      ToolCallMsg('shell', 'c5'),
      ToolResult('c5', 'bash: npm: command not found'),
-     ToolCallMsg('read_file', 'c7'),
+     ToolCallMsg('shell', 'c7'),
      ToolResult('c7', 'error: disk quota exceeded'),   { once: not recurring }
+     ToolCallMsg('memory_search', 'c10'),
+     ToolResult('c10', 'SCARS.md'#10'  **Symptom:** ERROR: refused: eval'#10 +
+       'notes.md'#10'  error: the build broke on Tuesday'),
+     ToolCallMsg('shell', 'c11'),
+     ToolResult('c11', '**Symptom:** ERROR: refused: eval'),
      MakeMessage(mrAssistant, 'ok')], 500, 50);
   SaveSession('20260101T000005-eeeeeeee', NowU - 25 * 86400,
     [MakeMessage(mrUser, 'a while back'),
@@ -233,6 +264,21 @@ begin
      ToolResult('c1', 'rotated'),
      ToolCallMsg('shell', 'c2'),
      ToolResult('c2', 'bash: npm: command not found'),
+     ToolCallMsg('memory_search', 'c10'),
+     ToolResult('c10', 'SCARS.md'#10'  **Symptom:** ERROR: refused: eval'#10 +
+       'notes.md'#10'  error: the build broke on Tuesday'),
+     ToolCallMsg('shell', 'c11'),
+     ToolResult('c11', '**Symptom:** ERROR: refused: eval'),
+     MakeMessage(mrAssistant, 'ok')], 500, 50);
+  SaveSession('20260101T000006-ffffffff', 0,
+    [MakeMessage(mrUser, 'undated'),
+     ToolCallMsg('shell', 'c1'),
+     ToolResult('c1', 'bash: npm: command not found'),
+     MakeMessage(mrAssistant, 'ok')], 500, 50);
+  { gggg: 33 days, inside a 35-day stats window and outside the learn and
+    skill windows, so only a stats window that loads on its own reaches it. }
+  SaveSession('20260101T000007-gggggggg', NowU - 33 * 86400,
+    [MakeMessage(mrUser, 'a month ago'),
      MakeMessage(mrAssistant, 'ok')], 500, 50);
   SaveSession('20260101T000004-dddddddd', NowU - 40 * 86400,
     [MakeMessage(mrUser, 'ancient'),
@@ -268,8 +314,9 @@ begin
 
   AssertEqInt(R.SessionsScanned, 2, 'two sessions in the window');
   AssertEqInt(R.Turns, 3, 'three user turns');
-  AssertEqInt(R.ToolCalls, 3, 'three tool calls in the window');
+  AssertEqInt(R.ToolCalls, 5, 'five tool calls in the window');
   AssertEqInt(R.ToolFailures, 1, 'one failing tool result');
+  AssertEqInt(R.ToolMisuses, 1, 'one misused tool: grep_files given a regex');
   AssertEqInt(Length(R.FailureSamples), 1, 'one sample');
   AssertContains(R.FailureSamples[0], 'command not found', 'the sample is the failing line');
   AssertEqInt(Integer(R.InputTokens), 3000, 'input tokens summed over the window');
@@ -282,9 +329,10 @@ begin
   AssertTrue(not InList(R.UnusedSkills, 'deploy_website'), 'skill called 10 days ago counts as used');
   AssertTrue(not InList(R.UnusedSkills, 'notes_only'), 'knowledge-only skill is not "unused"');
 
-  { Recurring: npm missing in bbbb, cccc and eeee (dddd is past the window). }
+  { Recurring: npm missing in bbbb, cccc, eeee and the undated ffff (dddd is
+    past the window); what cccc and eeee only quoted is not a pattern. }
   AssertEqInt(R.RecurringCount, 1, 'one pattern recurs across sessions');
-  AssertContains(R.Recurring[0], '3x across 3 sessions', 'counted over the learn window only');
+  AssertContains(R.Recurring[0], '4x across 4 sessions', 'counted over the learn window only');
   AssertContains(R.Recurring[0], '`shell`', 'attributed to its tool');
   AssertContains(R.Recurring[0], 'npm: command not found', 'with its sample');
   AssertContains(R.Recurring[0], '` ' + SectionSign + 'BASH-NPM-COMMAND-NOT-FOUND', 'and its anchor');
@@ -310,7 +358,7 @@ begin
   AssertContains(Report, 'MEMORY.md:', 'report: MEMORY.md sized');
   AssertContains(Report, 'over the 500-byte budget', 'report: over budget flagged');
   AssertContains(Report, 'six-months test', 'report: six-months test when over budget');
-  AssertContains(Report, '2 sessions, 3 turns, 3 tool calls, 1 tool failure', 'report: session line');
+  AssertContains(Report, '2 sessions, 3 turns, 5 tool calls, 1 tool failure, 1 misuse', 'report: session line');
   AssertContains(Report, 'command not found', 'report: failure sample');
   AssertContains(Report, '## Recurring (last 30 days, 2+ sessions)', 'report: recurring section');
   AssertContains(Report, 'SCARS.md: 1 new anchor added, 0 already there', 'report: SCARS refresh');
@@ -339,27 +387,54 @@ begin
   AssertContains(Rendered, 'Dry run', 'rendered report says dry run');
   AssertEqInt(R.RecurringCount, 1, 'dry run still finds the pattern');
   AssertTrue(R.ScarsPath = '', 'dry run leaves SCARS.md alone');
-  AssertContains(Rendered, 'SCARS.md not refreshed (dry run)', 'and says so');
+  AssertContains(Rendered, 'SCARS.md not refreshed (dry run): 0 new anchors would be added', 'and says so');
+  AssertContains(R.Recurring[0], SectionSign + 'BASH-NPM-COMMAND-NOT-FOUND', 'citing the anchor SCARS.md has');
 
-  { A second real run finds the anchor already there. }
+  { A second real run finds the anchor already there -- under the name the
+    operator gave it, which is the one the report cites. }
+  Big := ReadFileText(JoinPath(MemDir, 'SCARS.md'));
+  Big := StringReplace(Big, '## ' + SectionSign + 'BASH-NPM-COMMAND-NOT-FOUND',
+                       '## ' + SectionSign + 'NPM-MISSING', []);
+  WriteF(JoinPath(MemDir, 'SCARS.md'), Big);
   O.DryRun := False;
   O.DoBackup := False;
   AssertTrue(RunMaintenance(O, R, Err), 'second run');
   AssertEqInt(R.ScarsNew, 0, 'nothing new for SCARS.md');
   AssertEqInt(R.ScarsKnown, 1, 'the anchor is already there');
+  AssertContains(R.Recurring[0], '` ' + SectionSign + 'NPM-MISSING', 'cited by its new name');
 
   { A skill window longer than the learn window: dddd is read for its
     skill calls, but its failure is still too old to count. }
   O.UnusedSkillDays := 60;
   AssertTrue(RunMaintenance(O, R, Err), 'long skill window');
-  AssertContains(R.Recurring[0], '3x across 3 sessions', 'the learn window still holds');
+  AssertContains(R.Recurring[0], '4x across 4 sessions', 'the learn window still holds');
   O.UnusedSkillDays := 20;
+
+  { A stats window longer than the skill window: every session in it counts. }
+  O.SinceDays := 35;
+  AssertTrue(RunMaintenance(O, R, Err), 'long stats window');
+  AssertEqInt(R.SessionsScanned, 5, 'aaaa, bbbb, cccc, eeee and gggg are within 35 days');
+  O.SinceDays := 1;
 
   { Under budget: no six-months nag. }
   O.CoreBudget := 0;
   AssertTrue(RunMaintenance(O, R, Err), 'uncapped run');
   Rendered := RenderMaintenanceReport(O, R);
   AssertNotContains(Rendered, 'six-months test', 'no nag when nothing is over budget');
+
+  { A long line with a two-byte character across the 160-column cut: the
+    sample and the recurring line keep it whole. }
+  Big := 'error: ' + StringOfChar('x', 152) + #$C3#$A9 + ' and the rest of the line';
+  SaveSession('20260101T000008-hhhhhhhh', NowU - 60,
+    [ToolCallMsg('shell', 'c1'), ToolResult('c1', Big)], 0, 0);
+  SaveSession('20260101T000009-iiiiiiii', NowU - 120,
+    [ToolCallMsg('shell', 'c1'), ToolResult('c1', Big)], 0, 0);
+  AssertTrue(RunMaintenance(O, R, Err), 'utf-8 run');
+  for i := 0 to High(R.FailureSamples) do
+    AssertTrue(ValidUtf8(R.FailureSamples[i]), 'a failure sample is valid UTF-8: ' + R.FailureSamples[i]);
+  for i := 0 to High(R.Recurring) do
+    AssertTrue(ValidUtf8(R.Recurring[i]), 'a recurring line is valid UTF-8: ' + R.Recurring[i]);
+  AssertContains(JoinArr(R.FailureSamples), #$C3#$A9, 'the character is kept, not cut');
 
   WriteLn('  ok: sweep / core sizes / sessions / skills / backup / report / dry run');
 end;

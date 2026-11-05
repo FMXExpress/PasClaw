@@ -12,6 +12,14 @@
   sessions. SCARS.md gets a stable `## §ANCHOR` block per recurring
   pattern; an operator's Root cause / Do / Do NOT survive re-runs.
 
+  What is NOT mined is as important, now that the nightly pass writes
+  SCARS.md unattended: text a tool merely returns -- a file read_file
+  read, a grep hit, a memory_search snippet of SCARS.md itself -- is
+  quoted, not failed, and only such a result's own status line counts.
+  Otherwise SCARS.md, once read, would come back as new failures, and
+  the next night would write anchors for its own Symptom lines. Lines
+  are masked for secrets before they are kept (RedactSecrets).
+
   Two callers: `pasclaw learn` (PasClaw.Cmd.Learn: the report, MEMORY.md,
   SCARS.md on request) and the nightly pass (PasClaw.Maintain: a
   "Recurring" section in the maintenance report, and SCARS.md refreshed)
@@ -45,22 +53,57 @@ const
   SectionSign = {$IFDEF FPC}#$C2#$A7{$ELSE}#$00A7{$ENDIF};
 
 type
+  (* pkFailure -- the call failed. pkMisuse -- it worked, but the tool's
+     own result says the model used it wrongly (MisuseSignature). *)
+  TPatternKind = (pkFailure, pkMisuse);
+
   TErrorPattern = record
-    Signature:  string;       { normalised cluster key }
+    Signature:  string;       { cluster key }
     Count:      Integer;      { total occurrences across all sessions }
     Sessions:   TStringList;  { distinct session ids that hit this }
-    Sample:     string;       { first verbatim line we saw }
-    (* 'failure' -- the call failed; 'misuse' -- it worked, but the tool's
-       result says the model used it wrongly (LooksLikeMisuse). *)
-    Kind:       string;
+    Sample:     string;       { first line seen, secrets masked }
+    Kind:       TPatternKind;
     Context:    string;       { the tool whose call produced it }
     FirstSeen:  Int64;        { unix seconds, earliest session UpdatedAt }
     LastSeen:   Int64;        { unix seconds, latest session UpdatedAt }
   end;
   TErrorPatternArray = array of TErrorPattern;
 
+  { One problem line of one tool result. }
+  TProblemLine = record
+    Kind:      TPatternKind;
+    Line:      string;        { trimmed, secrets masked }
+    Signature: string;
+  end;
+  TProblemLineArray = array of TProblemLine;
+
   { Called with each session's id as MinePatterns reads it. }
   TLearnProgress = procedure(const SessionId: string);
+
+  (* Patterns over many sessions, with one signature index for the whole
+     pass. A linear search per candidate line was quadratic in the number
+     of patterns, which the nightly pass over 30 days made matter. *)
+  TPatternMiner = class
+  private
+    FPatterns: TErrorPatternArray;
+    FCount:    Integer;
+    FIndex:    TStringList;   { signature -> index into FPatterns (Objects) }
+    procedure Reindex;
+    procedure AddLine(const P: TProblemLine; const Tool: string;
+                      const Sess: TSession);
+  public
+    constructor Create;
+    destructor Destroy; override;
+    { Take over Patterns (Patterns becomes nil) and keep adding to them. }
+    procedure Adopt(var Patterns: TErrorPatternArray);
+    { Add one session's problem lines. Names is ResultToolNames(Sess), for
+      a caller that already has it. }
+    procedure Scan(const Sess: TSession); overload;
+    procedure Scan(const Sess: TSession; const Names: TArray<string>); overload;
+    { The patterns, most occurrences first. The caller owns them now
+      (FreePatterns) and the miner is empty. }
+    function Take: TErrorPatternArray;
+  end;
 
 (* Normalise a failure-shaped line into a clustering key. Strips
    pids, line / column numbers, hex hashes, and absolute paths so
@@ -70,20 +113,56 @@ type
 function NormalizeErrorSignature(const Raw: string): string;
 
 (* Heuristic predicate: True iff Line looks like a failure marker.
-   Used to filter the per-tool output before normalisation; pinned
-   here so the matchers stay together with the rules they imply. *)
+   The one definition of a failed tool result: `pasclaw learn` clusters
+   by it and `pasclaw maintain` counts by it. *)
 function LooksLikeFailure(const Line: string): Boolean;
 
-(* True iff Line is a tool's own note that the model misused it -- the
-   call worked, nothing failed, and the result says how to do it right. *)
+(* The cluster key for a misuse line -- a result line that starts with one
+   of the notes in PasClaw.Tools.Notes -- or '' for any other line. One
+   fixed signature per kind of misuse, not the normalised line: a note can
+   carry the call's own argument (the definition hint names the symbol
+   searched for), and every name would otherwise be a one-off. Only the
+   start of a line counts, so a file or a memory note that quotes a note
+   is not a misuse. *)
+function MisuseSignature(const Line: string): string;
+
+{ MisuseSignature(Line) <> '' }
 function LooksLikeMisuse(const Line: string): Boolean;
 
-(* The cluster key for a misuse line: one fixed signature per kind of
-   misuse, '' for any other line. Not the normalised line -- a note can
-   carry the call's own argument (the definition hint names the symbol
-   searched for), and every name would otherwise be a pattern of its own
-   that never recurs. *)
-function MisuseSignature(const Line: string): string;
+(* Line with the credentials a failure line tends to carry replaced by
+   <redacted>: URL userinfo (https://user:pass@host), tokens with a known
+   prefix (ghp_, github_pat_, sk-, xoxb-, AKIA, AIza ...), the value after
+   a password= / token= / secret: style key or after Bearer, and long
+   mixed-case alphanumeric runs. Samples and signatures go through this
+   before they are kept: SCARS.md is written unattended, and `pasclaw
+   export` copies it into rule files that get committed. *)
+function RedactSecrets(const Line: string): string;
+
+(* True for a tool whose result is text it fetched or stored rather than
+   the outcome of something it ran: read_file, grep_files, memory_search,
+   web_fetch ... Only the first line of such a result can be its own
+   failure ('ERROR: ...', the tool loop's prefix) or misuse note; the
+   rest is quoted. *)
+function QuotesStoredText(const ToolName: string): Boolean;
+
+(* The problem lines of one tool result: its failures and misuse notes,
+   with what it only quotes left out -- the body of a read or a search,
+   and lines of SCARS.md or a maintenance report wherever they turn up --
+   and secrets masked. *)
+function ProblemLines(const ToolName, Content: string): TProblemLineArray;
+
+(* For each message of Sess, the name of the tool whose call a tool result
+   answers ('' for other messages and for a result that matches no call).
+   The latest call with an id wins: a result always follows its own call,
+   and some servers number calls per turn (c1, c2 ...), so an id is only
+   unique within a turn. *)
+function ResultToolNames(const Sess: TSession): TArray<string>;
+
+(* Is a session last updated at UpdatedAt inside the window that starts at
+   SinceUnix? SinceUnix <= 0 is no window. A session with no timestamp is
+   inside every window: its age is unknown, and leaving it out would hide
+   its failures. The one rule for both callers. *)
+function InWindow(UpdatedAt, SinceUnix: Int64): Boolean;
 
 (* Derive a stable SCARS §ANCHOR-NAME from a normalised pattern
    signature. Exposed so a regression test can pin the contract --
@@ -94,17 +173,16 @@ function MakeAnchorName(const Signature: string): string;
 
 (* Parse an existing SCARS.md and return the set of anchor names
    AND the set of signature markers found in `<!-- signature: ...
-   -->` lines. Re-runs skip a pattern whose anchor OR signature is
-   already present; the signature path is the rename-survival promise
-   from MakeAnchorName's docstring. (Codex P2 on PR #197.) Both lists
-   are caller-owned. *)
+   -->` lines. Re-runs skip a pattern whose signature is already
+   present; the signature path is the rename-survival promise from
+   MakeAnchorName's docstring. (Codex P2 on PR #197.) Both lists are
+   caller-owned. *)
 procedure ReadExistingScars(const Path: string;
                             out Anchors, Signatures: TStringList);
 
-(* One session's tool results, added into Patterns. Sessions older than
-   SinceUnix (when > 0) are skipped. *)
-procedure ScanSession(const Sess: TSession; SinceUnix: Int64;
-                     var Patterns: TErrorPatternArray);
+{ One session's problem lines added into Patterns. A TPatternMiner for one
+  session; across many, use the miner. }
+procedure ScanSession(const Sess: TSession; var Patterns: TErrorPatternArray);
 
 (* Every saved session (of the last SinceDays days; 0 = all), mined and
    sorted by occurrence count, most first. Scanned says how many sessions
@@ -113,6 +191,7 @@ procedure ScanSession(const Sess: TSession; SinceUnix: Int64;
 function MinePatterns(SinceDays: Integer; out Scanned: Integer;
   Progress: TLearnProgress = nil): TErrorPatternArray;
 
+{ Most occurrences first; equal counts keep their order. }
 procedure SortPatternsByCount(var Patterns: TErrorPatternArray);
 
 { Recurring means seen in at least MinSessions distinct sessions. }
@@ -123,12 +202,23 @@ procedure FreePatterns(var Patterns: TErrorPatternArray);
 { <home>/<workspace>/memory/SCARS.md }
 function ScarsPath: string;
 
-(* Add a `## §ANCHOR` block to the SCARS.md at Path for each recurring pattern it does
-   not already hold (by anchor or by signature); existing blocks, and the
-   operator's edits in them, are left alone. Writes only when there is
-   something new. False when the file could not be read or written. *)
+(* Bring the SCARS.md at Path up to date with the recurring patterns
+   (seen in at least MinSessions sessions):
+   - one the file already has is left alone and counted in SkippedCount.
+     It is found by its signature marker, so an anchor the operator
+     renamed is followed; a hand-written block with no marker is taken to
+     be the pattern whose anchor it has, as before markers existed;
+   - one it does not have gets a new `## §ANCHOR` block. An anchor another
+     pattern already holds gets a -2, -3 ... suffix rather than the new
+     pattern being dropped as "already there".
+   AnchorOf[i] is the anchor Patterns[i] has in the file afterwards, ''
+   when it has none (below the threshold, or new in a DryRun). DryRun
+   works it all out and writes nothing; FreshCount is then what a real run
+   would add. False, with both counts 0 and every anchor '', when the file
+   could not be read or written. *)
 function WriteScars(const Path: string; const Patterns: TErrorPatternArray;
-  MinSessions: Integer; out FreshCount, SkippedCount: Integer): Boolean;
+  MinSessions: Integer; DryRun: Boolean;
+  out FreshCount, SkippedCount: Integer; out AnchorOf: TArray<string>): Boolean;
 
 implementation
 
@@ -137,7 +227,8 @@ uses
   PasClaw.Config,
   PasClaw.Workspaces,
   PasClaw.Utils,
-  PasClaw.Providers.Types;
+  PasClaw.Providers.Types,
+  PasClaw.Tools.Notes;
 
 { ============================ normalisation ============================ }
 
@@ -293,30 +384,27 @@ begin
     (Pos('undefined symbol',      L) > 0) or
     (Pos('module not found',      L) > 0) or
     (Pos('cannot read',           L) > 0) or
+    (Pos('traceback (most recent call last)', L) > 0) or
     (Pos('exit=1',                L) = 1) or
     (Pos('exit=2',                L) = 1);
 end;
 
 function MisuseSignature(const Line: string): string;
-{ The call worked -- nothing failed -- but the tool's own result says
-  the model used it wrongly, and how to do it right: the next-move notes
-  tools add on a misuse. grep_files given a regex ("a|b" matches those
-  three characters) answers "(no matches)" with such a note, and before
-  this nothing counted it: the live security run's sweep lost a call to
-  it and no report saw. Matched on the notes' fixed wording
-  (PasClaw.Tools.FS; learn_tests runs the tool to keep the two in step),
-  so a new note needs its phrase added here -- precision over recall, as
-  in LooksLikeFailure. }
+{ The call worked -- nothing failed -- but the tool's own result says the
+  model used it wrongly, and how to do it right. grep_files given a regex
+  ("a|b" matches those three characters) answers "(no matches)" with
+  such a note, and before this nothing counted it: the live security
+  run's sweep lost a call to it and no report saw. The notes and their
+  signatures are one table in PasClaw.Tools.Notes, which the tool builds
+  its notes from; learn_tests runs the tool to keep the two in step. }
 var
   L: string;
+  i: Integer;
 begin
-  L := LowerCase(Line);
-  if Pos('-- note: grep_files matches a literal substring', L) > 0 then
-    Result := 'grep_files regex: a literal-substring search was given a regex'
-  else if Pos('-- to find where a name is defined', L) > 0 then
-    Result := 'grep_files definition hunt: a keyword guess, where code_outline symbol= finds it'
-  else
-    Result := '';
+  L := TrimLeft(Line);
+  for i := Low(MisuseNotes) to High(MisuseNotes) do
+    if Pos(MisuseNotes[i].Starts, L) = 1 then Exit(MisuseNotes[i].Signature);
+  Result := '';
 end;
 
 function LooksLikeMisuse(const Line: string): Boolean;
@@ -324,173 +412,372 @@ begin
   Result := MisuseSignature(Line) <> '';
 end;
 
-function FindPatternIndex(const Sig: string;
-                          const Patterns: TErrorPatternArray): Integer;
+{ ------------------------------------------------------------- secrets }
+
+function IsWordChar(c: Char): Boolean;
+begin
+  Result := ((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or
+            ((c >= '0') and (c <= '9')) or (c = '_') or (c = '-');
+end;
+
+function LooksLikeToken(const W: string): Boolean;
+{ A word that is a credential by its shape: a known vendor prefix with a
+  body after it, or a long run that mixes upper case, lower case and
+  digits the way generated keys do (a hex hash is one case, so it stays). }
+const
+  Prefixes: array[0..17] of string = (
+    'ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_', 'glpat-',
+    'sk-', 'xoxb-', 'xoxp-', 'xoxa-', 'xoxs-', 'xapp-', 'AKIA', 'ASIA',
+    'AIza', 'npm_', 'hf_');
+var
+  i: Integer;
+  Up, Lo, Dig: Boolean;
+begin
+  for i := Low(Prefixes) to High(Prefixes) do
+    if (Pos(Prefixes[i], W) = 1) and (Length(W) >= Length(Prefixes[i]) + 12) then
+      Exit(True);
+  Result := False;
+  if Length(W) < 32 then Exit;
+  Up := False; Lo := False; Dig := False;
+  for i := 1 to Length(W) do
+    case W[i] of
+      'A'..'Z': Up := True;
+      'a'..'z': Lo := True;
+      '0'..'9': Dig := True;
+    end;
+  Result := Up and Lo and Dig;
+end;
+
+function IsSecretKey(const W: string): Boolean;
+{ A key whose value is a secret: password=..., --token ..., API_KEY: ... }
+const
+  Tails: array[0..9] of string = (
+    'password', 'passwd', 'secret', 'token', 'apikey', 'api_key', 'api-key',
+    'secret_key', 'access_key', 'private_key');
+var
+  L: string;
+  i: Integer;
+begin
+  L := LowerCase(W);
+  if (L = 'pwd') or (L = 'auth') or (L = 'authorization') then Exit(True);
+  for i := Low(Tails) to High(Tails) do
+    if (Length(L) >= Length(Tails[i])) and
+       (Copy(L, Length(L) - Length(Tails[i]) + 1, MaxInt) = Tails[i]) then
+      Exit(True);
+  Result := False;
+end;
+
+function LooksLikeSecretValue(const V: string): Boolean;
+{ After a secret key: long enough, and not a plain lowercase word --
+  "unexpected token: identifier" is a parser talking, not a credential. }
 var
   i: Integer;
 begin
-  for i := 0 to High(Patterns) do
-    if Patterns[i].Signature = Sig then Exit(i);
-  Result := -1;
+  Result := False;
+  if Length(V) < 6 then Exit;
+  for i := 1 to Length(V) do
+    if not ((V[i] >= 'a') and (V[i] <= 'z')) then Exit(True);
 end;
 
-procedure SplitToolBody(const Body: string; out Lines: TArray<string>);
-{ Tool result bodies are often multi-line (shell stderr, JSON
-  parse errors). We want each candidate line separately so a
-  single "error:" anywhere in the body triggers detection, not
-  just on the first line. Pascal's TStringList.Text rewrites line
-  separators, which we don't want; hand-roll. }
-var
-  i, Start: Integer;
+function IsValueEnd(c: Char): Boolean;
 begin
-  SetLength(Lines, 0);
-  Start := 1;
-  for i := 1 to Length(Body) do
-  begin
-    if Body[i] = #10 then
-    begin
-      SetLength(Lines, Length(Lines) + 1);
-      Lines[High(Lines)] := Copy(Body, Start, i - Start);
-      { Strip trailing CR from CRLF line endings. }
-      if (Length(Lines[High(Lines)]) > 0) and
-         (Lines[High(Lines)][Length(Lines[High(Lines)])] = #13) then
-        SetLength(Lines[High(Lines)],
-                  Length(Lines[High(Lines)]) - 1);
-      Start := i + 1;
-    end;
-  end;
-  if Start <= Length(Body) then
-  begin
-    SetLength(Lines, Length(Lines) + 1);
-    Lines[High(Lines)] := Copy(Body, Start, Length(Body) - Start + 1);
-  end;
+  Result := (c = ' ') or (c = #9) or (c = '"') or (c = '''') or (c = '&') or
+            (c = ',') or (c = ';') or (c = ')') or (c = ']') or (c = '}') or
+            (c = '>') or (c = '<');
 end;
 
-procedure ScanSession(const Sess: TSession; SinceUnix: Int64;
-                     var Patterns: TErrorPatternArray);
+function RedactSecrets(const Line: string): string;
+const
+  Mark = '<redacted>';
 var
-  i, j, k, Idx, NameIdx: Integer;
-  Line, Sig, Context, CallId, Kind: string;
-  Lines: TArray<string>;
-  ToolNamesById: TStringList;
+  i, j, k, N: Integer;
+  W, V: string;
 begin
-  if (SinceUnix > 0) and (Sess.Meta.UpdatedAt > 0) and
-     (Sess.Meta.UpdatedAt < SinceUnix) then
-    Exit;
-
-  { Map ToolCallId -> Func.Name so a tool result is attributed to ITS
-    call (not just whichever call happened to be first in the last
-    assistant turn). The tool loop appends one assistant message with
-    all parallel calls, then one mrTool message per call; matching by
-    ToolCallId is the only correct attribution. Codex P2 #2 on PR #190.
-
-    The latest call with an id wins: a result always follows its own
-    call, and ids are only unique within a turn. Some servers number
-    calls per turn (c1, c2 ...; the relay provider, several local
-    OpenAI-compatible servers), and with the first call kept, every
-    later "c1" went to the first turn's tool -- a shell_exec refusal
-    was reported as grep_files'. }
-  ToolNamesById := TStringList.Create;
-  try
-    ToolNamesById.Sorted     := True;
-    ToolNamesById.Duplicates := dupIgnore;
-    for i := 0 to High(Sess.Messages) do
+  Result := '';
+  N := Length(Line);
+  i := 1;
+  while i <= N do
+  begin
+    { scheme://user[:password]@host -- the userinfo goes, whatever it is. }
+    if (Line[i] = ':') and (i + 2 <= N) and (Line[i + 1] = '/') and (Line[i + 2] = '/') then
     begin
-      if Sess.Messages[i].Role = mrAssistant then
+      j := i + 3;
+      k := j;
+      while (k <= N) and (Line[k] <> '/') and (Line[k] <> '@') and
+            not IsValueEnd(Line[k]) do
+        Inc(k);
+      Result := Result + '://';
+      if (k <= N) and (Line[k] = '@') and (k > j) then
       begin
-        for k := 0 to High(Sess.Messages[i].ToolCalls) do
+        Result := Result + Mark + '@';
+        i := k + 1;
+      end
+      else
+        i := j;
+      Continue;
+    end;
+    if IsWordChar(Line[i]) and ((i = 1) or not IsWordChar(Line[i - 1])) then
+    begin
+      k := i;
+      while (k <= N) and IsWordChar(Line[k]) do Inc(k);
+      W := Copy(Line, i, k - i);
+      if LooksLikeToken(W) then
+      begin
+        Result := Result + Mark;
+        i := k;
+        Continue;
+      end;
+      Result := Result + W;
+      i := k;
+      { Bearer <value>, Basic <value>. }
+      if SameText(W, 'bearer') or SameText(W, 'basic') then
+      begin
+        j := i;
+        while (j <= N) and (Line[j] = ' ') do Inc(j);
+        k := j;
+        while (k <= N) and not IsValueEnd(Line[k]) do Inc(k);
+        if (j > i) and (k - j >= 8) then
         begin
-          CallId := Sess.Messages[i].ToolCalls[k].Id;
-          if CallId = '' then Continue;
-          NameIdx := ToolNamesById.IndexOfName(CallId);
-          if NameIdx >= 0 then ToolNamesById.Delete(NameIdx);
-          ToolNamesById.Add(CallId + '=' +
-                            Sess.Messages[i].ToolCalls[k].Func.Name);
+          Result := Result + Copy(Line, i, j - i) + Mark;
+          i := k;
         end;
         Continue;
       end;
-      if Sess.Messages[i].Role <> mrTool then Continue;
-      if Sess.Messages[i].Content = '' then Continue;
-
-      { Per-tool-message context: look up by ToolCallId. Empty
-        when the result has no id (older session JSON, model
-        skipped the id field, etc.) -- safer to drop the tool
-        annotation than to mis-attribute. }
-      Context := '';
-      if Sess.Messages[i].ToolCallId <> '' then
+      { key=value, key: value, key="value" }
+      if IsSecretKey(W) then
       begin
-        NameIdx := ToolNamesById.IndexOfName(Sess.Messages[i].ToolCallId);
-        if NameIdx >= 0 then
-          Context := ToolNamesById.ValueFromIndex[NameIdx];
-      end;
-
-      SplitToolBody(Sess.Messages[i].Content, Lines);
-      for j := 0 to High(Lines) do
-      begin
-        Line := Trim(Lines[j]);
-        Sig := MisuseSignature(Line);
-        if Sig <> '' then Kind := 'misuse'
-        else if LooksLikeFailure(Line) then
+        j := i;
+        while (j <= N) and (Line[j] = ' ') do Inc(j);
+        if (j <= N) and ((Line[j] = '=') or (Line[j] = ':')) then
         begin
-          Kind := 'failure';
-          Sig := NormalizeErrorSignature(Line);
-        end
-        else Continue;
-        if Sig = '' then Continue;
-
-        Idx := FindPatternIndex(Sig, Patterns);
-        if Idx < 0 then
-        begin
-          SetLength(Patterns, Length(Patterns) + 1);
-          Idx := High(Patterns);
-          Patterns[Idx].Signature := Sig;
-          Patterns[Idx].Count     := 0;
-          Patterns[Idx].Sessions  := TStringList.Create;
-          Patterns[Idx].Sessions.Sorted     := True;
-          Patterns[Idx].Sessions.Duplicates := dupIgnore;
-          Patterns[Idx].Sample    := Line;
-          Patterns[Idx].Kind      := Kind;
-          Patterns[Idx].Context   := Context;
-          Patterns[Idx].FirstSeen := Sess.Meta.UpdatedAt;
-          Patterns[Idx].LastSeen  := Sess.Meta.UpdatedAt;
-        end
-        else if (Patterns[Idx].Context = '') and (Context <> '') then
-          { Backfill the tool name if the first hit didn't have a
-            ToolCallId but a later same-signature hit does. }
-          Patterns[Idx].Context := Context;
-        Inc(Patterns[Idx].Count);
-        Patterns[Idx].Sessions.Add(Sess.Meta.Id);
-        if Sess.Meta.UpdatedAt > Patterns[Idx].LastSeen then
-          Patterns[Idx].LastSeen := Sess.Meta.UpdatedAt;
-        if (Patterns[Idx].FirstSeen = 0) or
-           ((Sess.Meta.UpdatedAt > 0) and
-            (Sess.Meta.UpdatedAt < Patterns[Idx].FirstSeen)) then
-          Patterns[Idx].FirstSeen := Sess.Meta.UpdatedAt;
+          Inc(j);
+          while (j <= N) and (Line[j] = ' ') do Inc(j);
+          if (j <= N) and ((Line[j] = '"') or (Line[j] = '''')) then Inc(j);
+          k := j;
+          while (k <= N) and not IsValueEnd(Line[k]) do Inc(k);
+          V := Copy(Line, j, k - j);
+          { "Authorization: Bearer x": leave Bearer to its own rule. }
+          if SameText(V, 'bearer') or SameText(V, 'basic') then
+          begin
+            Result := Result + Copy(Line, i, j - i);
+            i := j;
+          end
+          else if LooksLikeSecretValue(V) then
+          begin
+            Result := Result + Copy(Line, i, j - i) + Mark;
+            i := k;
+          end;
+        end;
       end;
+      Continue;
     end;
-  finally
-    ToolNamesById.Free;
+    Result := Result + Line[i];
+    Inc(i);
   end;
 end;
 
-procedure SortPatternsByCount(var Patterns: TErrorPatternArray);
-{ Insertion sort descending on Count. Pattern count is typically
-  in the dozens; O(N^2) is fine. }
+{ ------------------------------------------------------------- results }
+
+function QuotesStoredText(const ToolName: string): Boolean;
+const
+  Readers: array[0..18] of string = (
+    'read_file', 'grep_files', 'find_files', 'list_dir', 'code_outline',
+    'code_catalog', 'memory_search', 'memory_fetch', 'kb_search', 'kb_get',
+    'vault_search', 'vault_get', 'session_read', 'session_search',
+    'web_fetch', 'web_search', 'tool_output_get', 'skills_view',
+    'skills_list');
 var
-  i, j: Integer;
-  Pivot: TErrorPattern;
+  i: Integer;
 begin
-  for i := 1 to High(Patterns) do
-  begin
-    Pivot := Patterns[i];
-    j := i - 1;
-    while (j >= 0) and (Patterns[j].Count < Pivot.Count) do
+  for i := Low(Readers) to High(Readers) do
+    if ToolName = Readers[i] then Exit(True);
+  Result := False;
+end;
+
+function IsRecordedLine(const Line: string): Boolean;
+{ A line of SCARS.md or of a maintenance report, wherever it turns up --
+  `cat` in a shell as much as a read. It quotes a failure; mining it
+  would turn the record of a failure into a new one. }
+begin
+  Result :=
+    (Pos('**Symptom:**', Line) = 1) or
+    (Pos('<!-- signature:', Line) = 1) or
+    (Pos('- `', Line) = 1) or                      { a report's failure sample }
+    ((Pos('- ', Line) = 1) and (Pos(' across ', Line) > 0) and
+     (Pos(SectionSign, Line) > 0));                { a report's recurring line }
+end;
+
+procedure SplitToolBody(const Body: string; out Lines: TArray<string>);
+{ Tool result bodies are often multi-line (shell stderr, JSON parse
+  errors). We want each candidate line separately so a single "error:"
+  anywhere in the body triggers detection, not just on the first line.
+  TStringList.Text rewrites line separators, which we don't want, so this
+  counts the lines first and fills the array once. }
+var
+  i, Start, N, Count: Integer;
+begin
+  Count := 1;
+  for i := 1 to Length(Body) do
+    if Body[i] = #10 then Inc(Count);
+  SetLength(Lines, Count);
+  N := 0;
+  Start := 1;
+  for i := 1 to Length(Body) + 1 do
+    if (i > Length(Body)) or (Body[i] = #10) then
     begin
-      Patterns[j + 1] := Patterns[j];
-      Dec(j);
+      Lines[N] := Copy(Body, Start, i - Start);
+      { Strip trailing CR from CRLF line endings. }
+      if (Length(Lines[N]) > 0) and (Lines[N][Length(Lines[N])] = #13) then
+        SetLength(Lines[N], Length(Lines[N]) - 1);
+      Inc(N);
+      Start := i + 1;
     end;
-    Patterns[j + 1] := Pivot;
+  { A body that ends in a newline has no last line after it. }
+  if (N > 0) and (Lines[N - 1] = '') and (Length(Body) > 0) and
+     (Body[Length(Body)] = #10) then
+    Dec(N);
+  SetLength(Lines, N);
+end;
+
+function ProblemLines(const ToolName, Content: string): TProblemLineArray;
+var
+  Lines: TArray<string>;
+  j, N: Integer;
+  Line, Sig: string;
+  Quoting: Boolean;
+  Kind: TPatternKind;
+begin
+  Result := nil;
+  if Content = '' then Exit;
+  Quoting := QuotesStoredText(ToolName);
+  SplitToolBody(Content, Lines);
+  N := 0;
+  for j := 0 to High(Lines) do
+  begin
+    if Quoting and (j > 0) then Break;     { the rest is what it read }
+    Line := Trim(Lines[j]);
+    if (Line = '') or IsRecordedLine(Line) then Continue;
+    Sig := MisuseSignature(Line);
+    if Sig <> '' then
+      Kind := pkMisuse
+    else if Quoting then
+    begin
+      if Pos('ERROR:', Line) <> 1 then Continue;
+      Kind := pkFailure;
+    end
+    else if LooksLikeFailure(Line) then
+      Kind := pkFailure
+    else
+      Continue;
+    Line := RedactSecrets(Line);
+    if Kind = pkFailure then Sig := NormalizeErrorSignature(Line);
+    if Sig = '' then Continue;
+    if N = Length(Result) then SetLength(Result, 2 * N + 2);
+    Result[N].Kind      := Kind;
+    Result[N].Line      := Line;
+    Result[N].Signature := Sig;
+    Inc(N);
   end;
+  SetLength(Result, N);
+end;
+
+function ResultToolNames(const Sess: TSession): TArray<string>;
+{ A sorted, case-sensitive list of ids, each pointing into Names. Not
+  Name=Value pairs: an id with '=' in it (base64 padding) would split
+  there and never be found. }
+var
+  Ids: TStringList;
+  Names: TArray<string>;
+  i, k, P, N: Integer;
+  Id: string;
+begin
+  Result := nil;
+  SetLength(Result, Length(Sess.Messages));
+  Names := nil;
+  N := 0;
+  Ids := TStringList.Create;
+  try
+    Ids.CaseSensitive := True;
+    Ids.Sorted := True;
+    for i := 0 to High(Sess.Messages) do
+      case Sess.Messages[i].Role of
+        mrAssistant:
+          for k := 0 to High(Sess.Messages[i].ToolCalls) do
+          begin
+            Id := Sess.Messages[i].ToolCalls[k].Id;
+            if Id = '' then Continue;
+            if Ids.Find(Id, P) then
+              Names[NativeInt(Ids.Objects[P])] := Sess.Messages[i].ToolCalls[k].Func.Name
+            else
+            begin
+              if N = Length(Names) then SetLength(Names, 2 * N + 4);
+              Names[N] := Sess.Messages[i].ToolCalls[k].Func.Name;
+              Ids.AddObject(Id, TObject(NativeInt(N)));
+              Inc(N);
+            end;
+          end;
+        mrTool:
+          if (Sess.Messages[i].ToolCallId <> '') and
+             Ids.Find(Sess.Messages[i].ToolCallId, P) then
+            Result[i] := Names[NativeInt(Ids.Objects[P])];
+      end;
+  finally
+    Ids.Free;
+  end;
+end;
+
+function InWindow(UpdatedAt, SinceUnix: Int64): Boolean;
+begin
+  Result := (SinceUnix <= 0) or (UpdatedAt <= 0) or (UpdatedAt >= SinceUnix);
+end;
+
+{ ------------------------------------------------------------- patterns }
+
+procedure SortPatternsByCount(var Patterns: TErrorPatternArray);
+{ A stable merge sort, most occurrences first: equal counts keep the order
+  they were found in. The insertion sort it replaces was quadratic. }
+var
+  Tmp: TErrorPatternArray;
+  Width, Lo, Mid, Hi, A, B, K, N: Integer;
+  Src, Dst: ^TErrorPatternArray;
+  Swap: Pointer;
+begin
+  N := Length(Patterns);
+  if N < 2 then Exit;
+  SetLength(Tmp, N);
+  Src := @Patterns;
+  Dst := @Tmp;
+  Width := 1;
+  while Width < N do
+  begin
+    Lo := 0;
+    while Lo < N do
+    begin
+      Mid := Lo + Width;
+      if Mid > N then Mid := N;
+      Hi := Lo + 2 * Width;
+      if Hi > N then Hi := N;
+      A := Lo; B := Mid; K := Lo;
+      while K < Hi do
+      begin
+        if (A < Mid) and ((B >= Hi) or (Src^[A].Count >= Src^[B].Count)) then
+        begin
+          Dst^[K] := Src^[A];
+          Inc(A);
+        end
+        else
+        begin
+          Dst^[K] := Src^[B];
+          Inc(B);
+        end;
+        Inc(K);
+      end;
+      Lo := Hi;
+    end;
+    Swap := Src; Src := Dst; Dst := Swap;
+    Width := Width * 2;
+  end;
+  if Src <> @Patterns then Patterns := Tmp;
 end;
 
 function PassesThreshold(const P: TErrorPattern; MinSessions: Integer): Boolean;
@@ -511,6 +798,128 @@ begin
   Patterns := nil;
 end;
 
+constructor TPatternMiner.Create;
+begin
+  inherited Create;
+  FIndex := TStringList.Create;
+  FIndex.CaseSensitive := True;
+  FIndex.Sorted := True;
+end;
+
+destructor TPatternMiner.Destroy;
+begin
+  SetLength(FPatterns, FCount);
+  FreePatterns(FPatterns);
+  FIndex.Free;
+  inherited Destroy;
+end;
+
+procedure TPatternMiner.Reindex;
+var
+  i: Integer;
+begin
+  FIndex.Clear;
+  for i := 0 to FCount - 1 do
+    FIndex.AddObject(FPatterns[i].Signature, TObject(NativeInt(i)));
+end;
+
+procedure TPatternMiner.Adopt(var Patterns: TErrorPatternArray);
+begin
+  SetLength(FPatterns, FCount);
+  FreePatterns(FPatterns);
+  FPatterns := Patterns;
+  FCount := Length(FPatterns);
+  Patterns := nil;
+  Reindex;
+end;
+
+procedure TPatternMiner.AddLine(const P: TProblemLine; const Tool: string;
+                                const Sess: TSession);
+var
+  Idx, Pos_: Integer;
+begin
+  if FIndex.Find(P.Signature, Pos_) then
+  begin
+    Idx := NativeInt(FIndex.Objects[Pos_]);
+    { Backfill the tool name if the first hit didn't have a ToolCallId
+      but a later same-signature hit does. }
+    if (FPatterns[Idx].Context = '') and (Tool <> '') then
+      FPatterns[Idx].Context := Tool;
+  end
+  else
+  begin
+    if FCount = Length(FPatterns) then SetLength(FPatterns, 2 * FCount + 8);
+    Idx := FCount;
+    Inc(FCount);
+    FPatterns[Idx].Signature := P.Signature;
+    FPatterns[Idx].Count     := 0;
+    FPatterns[Idx].Sessions  := TStringList.Create;
+    FPatterns[Idx].Sessions.Sorted     := True;
+    FPatterns[Idx].Sessions.Duplicates := dupIgnore;
+    FPatterns[Idx].Sample    := P.Line;
+    FPatterns[Idx].Kind      := P.Kind;
+    FPatterns[Idx].Context   := Tool;
+    FPatterns[Idx].FirstSeen := Sess.Meta.UpdatedAt;
+    FPatterns[Idx].LastSeen  := Sess.Meta.UpdatedAt;
+    FIndex.AddObject(P.Signature, TObject(NativeInt(Idx)));
+  end;
+  Inc(FPatterns[Idx].Count);
+  FPatterns[Idx].Sessions.Add(Sess.Meta.Id);
+  if Sess.Meta.UpdatedAt > FPatterns[Idx].LastSeen then
+    FPatterns[Idx].LastSeen := Sess.Meta.UpdatedAt;
+  if (FPatterns[Idx].FirstSeen = 0) or
+     ((Sess.Meta.UpdatedAt > 0) and (Sess.Meta.UpdatedAt < FPatterns[Idx].FirstSeen)) then
+    FPatterns[Idx].FirstSeen := Sess.Meta.UpdatedAt;
+end;
+
+procedure TPatternMiner.Scan(const Sess: TSession);
+begin
+  Scan(Sess, ResultToolNames(Sess));
+end;
+
+procedure TPatternMiner.Scan(const Sess: TSession; const Names: TArray<string>);
+var
+  i, j: Integer;
+  Tool: string;
+  Probs: TProblemLineArray;
+begin
+  for i := 0 to High(Sess.Messages) do
+  begin
+    if (Sess.Messages[i].Role <> mrTool) or (Sess.Messages[i].Content = '') then
+      Continue;
+    { Empty when the result has no id, or matches no call (older session
+      JSON, a model that skipped the id) -- safer to drop the tool
+      annotation than to mis-attribute. }
+    if i <= High(Names) then Tool := Names[i] else Tool := '';
+    Probs := ProblemLines(Tool, Sess.Messages[i].Content);
+    for j := 0 to High(Probs) do AddLine(Probs[j], Tool, Sess);
+  end;
+end;
+
+function TPatternMiner.Take: TErrorPatternArray;
+begin
+  SetLength(FPatterns, FCount);
+  SortPatternsByCount(FPatterns);
+  Result := FPatterns;
+  FPatterns := nil;
+  FCount := 0;
+  FIndex.Clear;
+end;
+
+procedure ScanSession(const Sess: TSession; var Patterns: TErrorPatternArray);
+var
+  M: TPatternMiner;
+begin
+  M := TPatternMiner.Create;
+  try
+    M.Adopt(Patterns);
+    M.Scan(Sess);
+    Patterns := M.Take;
+  finally
+    M.Free;
+  end;
+end;
+
 function MinePatterns(SinceDays: Integer; out Scanned: Integer;
   Progress: TLearnProgress): TErrorPatternArray;
 var
@@ -518,29 +927,32 @@ var
   Sess: TSession;
   SinceUnix: Int64;
   i: Integer;
+  M: TPatternMiner;
 begin
-  Result := nil;
   Scanned := 0;
-  Sessions := ListSessions;
   if SinceDays > 0 then
     SinceUnix := DateTimeToUnix(Now, False) - Int64(SinceDays) * 86400
   else
     SinceUnix := 0;
-  for i := 0 to High(Sessions) do
-  begin
-    if (SinceUnix > 0) and (Sessions[i].UpdatedAt > 0) and
-       (Sessions[i].UpdatedAt < SinceUnix) then
-      Continue;
-    if Assigned(Progress) then Progress(Sessions[i].Id);
-    Sess := TSession.Create(Sessions[i].Id);
-    try
-      ScanSession(Sess, SinceUnix, Result);
-      Inc(Scanned);
-    finally
-      Sess.Free;
+  M := TPatternMiner.Create;
+  try
+    Sessions := ListSessions;
+    for i := 0 to High(Sessions) do
+    begin
+      if not InWindow(Sessions[i].UpdatedAt, SinceUnix) then Continue;
+      if Assigned(Progress) then Progress(Sessions[i].Id);
+      Sess := TSession.Create(Sessions[i].Id);
+      try
+        M.Scan(Sess);
+        Inc(Scanned);
+      finally
+        Sess.Free;
+      end;
     end;
+    Result := M.Take;
+  finally
+    M.Free;
   end;
-  SortPatternsByCount(Result);
 end;
 
 function ScarsPath: string;
@@ -633,6 +1045,71 @@ begin
   Result := Result_;
 end;
 
+const
+  SigMarker    = '<!-- signature:';
+  { SectionSign, not the literal glyph: FPC was transcoding the inline
+    glyph through the system codepage, which left a different byte
+    sequence in the constant than what TStringList.LoadFromFile
+    returned, so the matcher silently failed. }
+  AnchorPrefix = '## ' + SectionSign;
+
+function NewNameList: TStringList;
+begin
+  Result := TStringList.Create;
+  Result.Sorted     := True;
+  Result.Duplicates := dupIgnore;
+end;
+
+procedure ParseScars(const Path: string; Anchors, Signed, Sigs: TStringList;
+                     var SigAnchor: TArray<string>);
+{ Anchors: every `## §NAME`. Signed: the anchors whose block carries a
+  signature marker. Sigs: each marker's signature, its Objects an index
+  into SigAnchor, the anchor of the block it sits in -- which is how a
+  renamed anchor is followed. Raises when the file is there but cannot be
+  read. }
+var
+  Sl: TStringList;
+  i, P: Integer;
+  Line, Name, Sig, Current: string;
+  EndPos: Integer;
+begin
+  if not FileExists(Path) then Exit;
+  Sl := TStringList.Create;
+  try
+    Sl.Text := ReadFileText(Path);
+    Current := '';
+    for i := 0 to Sl.Count - 1 do
+    begin
+      Line := Trim(Sl[i]);
+      if Pos(AnchorPrefix, Line) = 1 then
+      begin
+        Name := Trim(Copy(Line, Length(AnchorPrefix) + 1, MaxInt));
+        { Drop any trailing description / annotation after the name. }
+        if Pos(' ', Name) > 0 then
+          Name := Copy(Name, 1, Pos(' ', Name) - 1);
+        Current := Name;
+        if Name <> '' then Anchors.Add(Name);
+      end
+      else if Pos(SigMarker, Line) = 1 then
+      begin
+        Sig := Trim(Copy(Line, Length(SigMarker) + 1, MaxInt));
+        EndPos := Pos('-->', Sig);
+        if EndPos > 0 then Sig := Trim(Copy(Sig, 1, EndPos - 1));
+        if Sig = '' then Continue;
+        if Current <> '' then Signed.Add(Current);
+        if not Sigs.Find(Sig, P) then
+        begin
+          SetLength(SigAnchor, Length(SigAnchor) + 1);
+          SigAnchor[High(SigAnchor)] := Current;
+          Sigs.AddObject(Sig, TObject(NativeInt(High(SigAnchor))));
+        end;
+      end;
+    end;
+  finally
+    Sl.Free;
+  end;
+end;
+
 procedure ReadExistingScars(const Path: string;
                             out Anchors, Signatures: TStringList);
 { Parse existing SCARS.md for anchor names AND the per-block
@@ -642,184 +1119,181 @@ procedure ReadExistingScars(const Path: string;
   TStringLists; caller owns them. Codex P2 on PR #197: the rename
   promise in MakeAnchorName's docstring is only credible if we
   actually persist the signature; reading by anchor alone meant a
-  renamed entry got duplicated on the next learn run. }
-const
-  SigMarker    = '<!-- signature:';
-  { SectionSign, not the literal glyph: FPC was transcoding the inline
-    glyph through the system codepage, which left a different byte
-    sequence in the constant than what TStringList.LoadFromFile
-    returned, so the matcher silently failed. }
-  AnchorPrefix = '## ' + SectionSign;
+  renamed entry got duplicated on the next learn run. A file that
+  cannot be read reads as empty. }
 var
-  Sl: TStringList;
-  i: Integer;
-  Line, Name, Sig: string;
-  EndPos: Integer;
+  Signed: TStringList;
+  SigAnchor: TArray<string>;
 begin
-  Anchors    := TStringList.Create;
-  Anchors.Sorted     := True;
-  Anchors.Duplicates := dupIgnore;
-  Signatures := TStringList.Create;
-  Signatures.Sorted     := True;
-  Signatures.Duplicates := dupIgnore;
-  if not FileExists(Path) then Exit;
-  Sl := TStringList.Create;
+  Anchors    := NewNameList;
+  Signatures := NewNameList;
+  Signed     := NewNameList;
+  SigAnchor  := nil;
   try
     try
-      Sl.Text := ReadFileText(Path);
+      ParseScars(Path, Anchors, Signed, Signatures, SigAnchor);
     except
-      Exit;
-    end;
-    for i := 0 to Sl.Count - 1 do
-    begin
-      Line := Trim(Sl[i]);
-      { Match `## §NAME ...` -- the §...whitespace tail. The §
-        prefix is the AnchorPrefix const above, built from
-        SectionSign so FPC can't transcode it through a non-UTF-8
-        codepage at runtime. }
-      if (Pos(AnchorPrefix, Line) = 1) then
-      begin
-        Name := Trim(Copy(Line, Length(AnchorPrefix) + 1, MaxInt));
-        { Drop any trailing description / annotation after the name. }
-        if Pos(' ', Name) > 0 then
-          Name := Copy(Name, 1, Pos(' ', Name) - 1);
-        if Name <> '' then Anchors.Add(Name);
-      end
-      else if Pos(SigMarker, Line) = 1 then
-      begin
-        Sig := Trim(Copy(Line, Length(SigMarker) + 1, MaxInt));
-        EndPos := Pos('-->', Sig);
-        if EndPos > 0 then Sig := Trim(Copy(Sig, 1, EndPos - 1));
-        if Sig <> '' then Signatures.Add(Sig);
-      end;
+      Anchors.Clear;
+      Signatures.Clear;
     end;
   finally
-    Sl.Free;
+    Signed.Free;
   end;
 end;
 
 function WriteScars(const Path: string; const Patterns: TErrorPatternArray;
-  MinSessions: Integer; out FreshCount, SkippedCount: Integer): Boolean;
+  MinSessions: Integer; DryRun: Boolean;
+  out FreshCount, SkippedCount: Integer; out AnchorOf: TArray<string>): Boolean;
 { Emit / refresh workspace/memory/SCARS.md with Atlas-style stable
   §ANCHOR ids per pattern. Re-running does NOT clobber existing
   anchors -- operators routinely fill in Root cause / Do / Do NOT
   with hand-written rationale, and we'd be unfriendly to overwrite
   that work. New patterns get a fresh anchor + boilerplate + an
-  embedded `<!-- signature: ... -->` marker; known patterns get
-  skipped silently (matched on either the anchor name OR the
-  persisted signature, so renamed-by-operator entries still match).
-  (Refresh of See: counts on existing anchors is a follow-up; for
-  v1 the operator can drop the file and re-run for full
-  re-extraction.) }
+  embedded `<!-- signature: ... -->` marker. (Refresh of See: counts
+  on existing anchors is a follow-up; for v1 the operator can drop
+  the file and re-run for full re-extraction.) The counts are only
+  handed back once the file is written, so a failed write never
+  reports anchors it did not add. }
 var
-  Sl: TStringList;
-  ExistingAnchors, ExistingSignatures: TStringList;
-  i: Integer;
-  Anchor, Sig: string;
+  Sl, Anchors, Signed, Sigs: TStringList;
+  SigAnchor: TArray<string>;
+  i, P, n, Fresh, Skipped: Integer;
+  Anchor, Base, Sig: string;
 begin
   Result := False;
   FreshCount := 0;
   SkippedCount := 0;
-  try
-  if not DirectoryExists(ExtractFilePath(Path)) then
-    ForceDirectories(ExtractFilePath(Path));
-
-  ReadExistingScars(Path, ExistingAnchors, ExistingSignatures);
+  SetLength(AnchorOf, Length(Patterns));
+  for i := 0 to High(AnchorOf) do AnchorOf[i] := '';
+  Fresh := 0;
+  Skipped := 0;
+  SigAnchor := nil;
   Sl := TStringList.Create;
+  Anchors := NewNameList;
+  Signed := NewNameList;
+  Sigs := NewNameList;
   try
-    if FileExists(Path) then
-      Sl.Text := ReadFileText(Path)
-    else
-    begin
-      { Fresh file -- write the header preamble. }
-      Sl.Add('# SCARS -- recurring failures the operator has codified');
-      Sl.Add('');
-      Sl.Add(SCARS_HEADER_MARKER);
-      Sl.Add('');
-      Sl.Add('Each `## §ANCHOR-NAME` block describes one recurring tool');
-      Sl.Add('failure surfaced by `pasclaw learn`. Anchor names are stable --');
-      Sl.Add('cite them in commit messages and PRs (`git log --grep "§"`)');
-      Sl.Add('to link a fix back to the failure it addresses. Operators');
-      Sl.Add('rename anchors freely; pasclaw learn matches patterns by the');
-      Sl.Add('embedded `<!-- signature: ... -->` marker, not by anchor');
-      Sl.Add('name, so renames survive re-runs. Do not edit the signature');
-      Sl.Add('marker -- it is how we know we have already cataloged this');
-      Sl.Add('pattern.');
-      Sl.Add('');
-    end;
-    if (Sl.Count > 0) and (Trim(Sl[Sl.Count - 1]) <> '') then
-      Sl.Add('');
-
-    FreshCount   := 0;
-    SkippedCount := 0;
-    for i := 0 to High(Patterns) do
-    begin
-      if Patterns[i].Sessions.Count < MinSessions then Continue;
-      Anchor := MakeAnchorName(Patterns[i].Signature);
-      Sig    := Patterns[i].Signature;
-
-      { Re-runs leave operator-edited anchors alone. Match on
-        anchor OR signature -- the signature check is the one that
-        catches a renamed `## §FOO-BAR` heading whose underlying
-        pattern we'd otherwise duplicate. Same pattern appearing
-        in fresh sessions still bumps the in-memory counts the
-        reports show, but it doesn't overwrite the on-disk SCARS
-        entry. }
-      if (ExistingAnchors.IndexOf(Anchor) >= 0) or
-         (ExistingSignatures.IndexOf(Sig) >= 0) then
+    try
+      ParseScars(Path, Anchors, Signed, Sigs, SigAnchor);
+      if FileExists(Path) then
+        Sl.Text := ReadFileText(Path)
+      else
       begin
-        Inc(SkippedCount);
-        Continue;
-      end;
-
-      { SectionSign, so the bytes we emit here match the ones
-        ReadExistingScars looks for via AnchorPrefix -- see the
-        const block in that function for the why. }
-      Sl.Add(Format('## ' + SectionSign + '%s', [Anchor]));
-      Sl.Add(Format('<!-- signature: %s -->', [Sig]));
-      Sl.Add('');
-      Sl.Add(Format('**Symptom:** %s', [Patterns[i].Sample]));
-      Sl.Add('');
-      Sl.Add('**Root cause:** _operator: fill in -- what was the underlying problem?_');
-      Sl.Add('');
-      Sl.Add('**Do NOT:** _operator: fill in -- what shouldn''t we try again?_');
-      Sl.Add('');
-      Sl.Add('**Do:** _operator: fill in -- the working remedy._');
-      Sl.Add('');
-      if Patterns[i].Kind = 'misuse' then
-      begin
-        Sl.Add('**Kind:** misuse -- the call worked, but the tool''s result says ' +
-               'it was used wrongly');
+        { Fresh file -- write the header preamble. }
+        Sl.Add('# SCARS -- recurring failures the operator has codified');
+        Sl.Add('');
+        Sl.Add(SCARS_HEADER_MARKER);
+        Sl.Add('');
+        Sl.Add('Each `## §ANCHOR-NAME` block describes one recurring tool');
+        Sl.Add('failure surfaced by `pasclaw learn`. Anchor names are stable --');
+        Sl.Add('cite them in commit messages and PRs (`git log --grep "§"`)');
+        Sl.Add('to link a fix back to the failure it addresses. Operators');
+        Sl.Add('rename anchors freely; pasclaw learn matches patterns by the');
+        Sl.Add('embedded `<!-- signature: ... -->` marker, not by anchor');
+        Sl.Add('name, so renames survive re-runs. Do not edit the signature');
+        Sl.Add('marker -- it is how we know we have already cataloged this');
+        Sl.Add('pattern.');
         Sl.Add('');
       end;
-      if Patterns[i].Context <> '' then
-        Sl.Add(Format('**Where:** tool `%s`', [Patterns[i].Context]))
-      else
-        Sl.Add('**Where:** _multiple tools or none surfaced via Context_');
-      Sl.Add('');
-      Sl.Add(Format(
-        '**See:** %d occurrence(s) across %d session(s)',
-        [Patterns[i].Count, Patterns[i].Sessions.Count]));
-      Sl.Add('');
+      if (Sl.Count > 0) and (Trim(Sl[Sl.Count - 1]) <> '') then
+        Sl.Add('');
 
-      Inc(FreshCount);
-      ExistingAnchors.Add(Anchor);       { in-run dedup against later
-                                           patterns that collapse to
-                                           the same anchor }
-      ExistingSignatures.Add(Sig);       { and against later
-                                           patterns with the same
-                                           normalised signature }
+      for i := 0 to High(Patterns) do
+      begin
+        if not PassesThreshold(Patterns[i], MinSessions) then Continue;
+        Sig := Patterns[i].Signature;
+
+        { Known by its signature: left alone, the operator's anchor (renamed
+          or not) is the one to cite. }
+        if Sigs.Find(Sig, P) then
+        begin
+          AnchorOf[i] := SigAnchor[NativeInt(Sigs.Objects[P])];
+          Inc(Skipped);
+          Continue;
+        end;
+
+        Anchor := MakeAnchorName(Sig);
+        { A hand-written block with this anchor and no marker: taken to be
+          this pattern, as it was before markers existed. }
+        if (Anchors.IndexOf(Anchor) >= 0) and (Signed.IndexOf(Anchor) < 0) then
+        begin
+          AnchorOf[i] := Anchor;
+          Signed.Add(Anchor);   { claimed: a later pattern deriving it gets a suffix }
+          Inc(Skipped);
+          Continue;
+        end;
+        { Held by another pattern -- MakeAnchorName keeps five words, so two
+          refusals of two different commands can derive the same one. }
+        Base := Anchor;
+        n := 2;
+        while Anchors.IndexOf(Anchor) >= 0 do
+        begin
+          Anchor := Base + '-' + IntToStr(n);
+          Inc(n);
+        end;
+
+        { SectionSign, so the bytes we emit here match the ones ParseScars
+          looks for via AnchorPrefix. }
+        Sl.Add(Format('## ' + SectionSign + '%s', [Anchor]));
+        Sl.Add(Format('<!-- signature: %s -->', [Sig]));
+        Sl.Add('');
+        Sl.Add(Format('**Symptom:** %s', [Patterns[i].Sample]));
+        Sl.Add('');
+        Sl.Add('**Root cause:** _operator: fill in -- what was the underlying problem?_');
+        Sl.Add('');
+        Sl.Add('**Do NOT:** _operator: fill in -- what shouldn''t we try again?_');
+        Sl.Add('');
+        Sl.Add('**Do:** _operator: fill in -- the working remedy._');
+        Sl.Add('');
+        if Patterns[i].Kind = pkMisuse then
+        begin
+          Sl.Add('**Kind:** misuse -- the call worked, but the tool''s result says ' +
+                 'it was used wrongly');
+          Sl.Add('');
+        end;
+        if Patterns[i].Context <> '' then
+          Sl.Add(Format('**Where:** tool `%s`', [Patterns[i].Context]))
+        else
+          Sl.Add('**Where:** _multiple tools or none surfaced via Context_');
+        Sl.Add('');
+        Sl.Add(Format(
+          '**See:** %d occurrence(s) across %d session(s)',
+          [Patterns[i].Count, Patterns[i].Sessions.Count]));
+        Sl.Add('');
+
+        { In-run dedup: a later pattern with this signature is this one,
+          and a later one deriving this anchor gets the next suffix. }
+        Anchors.Add(Anchor);
+        Signed.Add(Anchor);
+        SetLength(SigAnchor, Length(SigAnchor) + 1);
+        SigAnchor[High(SigAnchor)] := Anchor;
+        Sigs.AddObject(Sig, TObject(NativeInt(High(SigAnchor))));
+        if not DryRun then AnchorOf[i] := Anchor;
+        Inc(Fresh);
+      end;
+
+      if (Fresh > 0) and not DryRun then
+      begin
+        if not DirectoryExists(ExtractFilePath(Path)) then
+          ForceDirectories(ExtractFilePath(Path));
+        WriteFileText(Path, Sl.Text);
+      end;
+      FreshCount := Fresh;
+      SkippedCount := Skipped;
+      Result := True;
+    except
+      on E: Exception do
+      begin
+        { Unreadable or unwritable: nothing added, nothing to cite. }
+        for i := 0 to High(AnchorOf) do AnchorOf[i] := '';
+        Result := False;
+      end;
     end;
-
-    if FreshCount > 0 then WriteFileText(Path, Sl.Text);
-    Result := True;
   finally
     Sl.Free;
-    ExistingAnchors.Free;
-    ExistingSignatures.Free;
-  end;
-  except
-    on E: Exception do Result := False;   { unreadable or unwritable }
+    Anchors.Free;
+    Signed.Free;
+    Sigs.Free;
   end;
 end;
 

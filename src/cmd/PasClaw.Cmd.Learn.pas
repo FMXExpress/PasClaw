@@ -167,7 +167,7 @@ begin
             Ansi.Reset);
     if Patterns[i].Context <> '' then
       PrintLn('    tool:   ' + Ansi.Cyan + Patterns[i].Context + Ansi.Reset);
-    if Patterns[i].Kind = 'misuse' then
+    if Patterns[i].Kind = pkMisuse then
       PrintLn('    kind:   misuse (the call worked; the tool said it was used wrongly)');
     PrintLn('    sample: ' + Patterns[i].Sample);
     if (Patterns[i].FirstSeen > 0) and (Patterns[i].LastSeen > 0) then
@@ -224,7 +224,7 @@ begin
       Sl.Add(Format('- **%dx across %d session(s)**: %s',
                     [Patterns[i].Count, Patterns[i].Sessions.Count,
                      Patterns[i].Sample]));
-      if (Patterns[i].Context <> '') and (Patterns[i].Kind = 'misuse') then
+      if (Patterns[i].Context <> '') and (Patterns[i].Kind = pkMisuse) then
         Sl.Add(Format('  (tool: `%s`, misused)', [Patterns[i].Context]))
       else if Patterns[i].Context <> '' then
         Sl.Add(Format('  (tool: `%s`)', [Patterns[i].Context]));
@@ -243,9 +243,10 @@ procedure AppendToScarsMd(const Patterns: TErrorPatternArray;
 var
   Fresh, Skipped: Integer;
   Path: string;
+  AnchorOf: TArray<string>;
 begin
   Path := ScarsPath;
-  if not WriteScars(Path, Patterns, MinSessions, Fresh, Skipped) then
+  if not WriteScars(Path, Patterns, MinSessions, False, Fresh, Skipped, AnchorOf) then
   begin
     PrintLn(Ansi.Red + 'could not write ' + Path + Ansi.Reset);
     Exit;
