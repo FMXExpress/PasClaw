@@ -667,6 +667,27 @@ begin
                'and a project');
 end;
 
+(* The gateway hands DesktopRoute only the paths IsDesktopPath names, and
+   these tests call DesktopRoute directly -- so a route missing from that
+   list passes here and is a 404 in a running gateway. Needs you was: a
+   live team's ask_operator and proven rules never reached the desktop.
+   Every prefix DesktopRoute dispatches is listed; a new one goes in both. *)
+procedure TestEveryRouteIsReachable;
+const
+  Paths: array[0..17] of string = (
+    '/v1/desktop/config', '/v1/desktop/state', '/v1/desktop/desktops',
+    '/v1/suite', '/v1/teams', '/v1/teams/up', '/v1/agents', '/v1/agents/pause',
+    '/v1/decisions', '/v1/decisions/D0001/answer', '/v1/needs-you',
+    '/v1/workspaces', '/v1/projects', '/v1/projects/p/tasks', '/v1/apps',
+    '/v1/pages', '/apps/x/index.html', '/pages/x');
+var
+  I: Integer;
+begin
+  for I := 0 to High(Paths) do
+    ExpectTrue(IsDesktopPath(Paths[I]), 'the gateway routes ' + Paths[I] + ' to the desktop');
+  ExpectTrue(not IsDesktopPath('/v1/decisionsx'), 'and not a path that only starts like one');
+end;
+
 var
   R: TDesktopResponse;
   Err, AppDir, Slug, Blueprint: string;
@@ -872,6 +893,7 @@ begin
 
   TestReviewRoutes;
   TestDecisionRoutes;
+  TestEveryRouteIsReachable;
   TestTickReportsOnCadence;
   TestNewWorkRoutes;
   TestFactoryRoutes;

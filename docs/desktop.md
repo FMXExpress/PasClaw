@@ -955,7 +955,7 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | GET/POST | `/v1/projects/<n>/rules` | the project's proven checks / the operator's own rule (`{"cause","script","name"}` -- proven, then installed; 422 when it cannot be proven) |
 | POST | `/v1/projects/<n>/review` | `{"review":true,"reviewers":["qa"]}` -- require a verdict on this board |
 | GET | `/v1/projects/<n>/activity` | the receipts, oldest first (`?task=T0004&limit=50`) |
-| GET/POST | `/v1/projects/<n>/tasks` | list / create (`criteria`, `waits_on` optional) |
+| GET/POST | `/v1/projects/<n>/tasks` | list / create (`criteria`, `waits_on`, `assignee` optional; `cause` files it as a [finding](./teams.md#findings), and the task reads back with `finding_cause` and `found_by`) |
 | GET/PATCH | `/v1/projects/<n>/tasks/<t>` | inspect / edit, as the operator (`criteria`, `waits_on` too -- a cycle is a 400; `status: review` is refused -- submit is how a task gets there). A task carries `waits_on`, the computed `waiting_on` and `ready`, and its lease (`lease_by`, `lease_until`) |
 | POST | `/v1/projects/<n>/tasks/<t>/verdict` | the operator's verdict on a task in review: `{"verdict":"accept"}` or `{"verdict":"reject","reason":"..."}` (400 malformed, 409 not in review) |
 | POST | `/v1/projects/<n>/tasks/<t>/run` | start an agent turn (503 without an agent) |

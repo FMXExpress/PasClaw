@@ -2,6 +2,8 @@
 
 PasClaw's filesystem and shell tools are guarded by an opt-in workspace boundary plus an always-on shell denylist. Source: `src/pkg/tools/PasClaw.Tools.Sandbox.pas`.
 
+This page is about PasClaw's own guard rails. For an agent that sweeps *your app* for security holes and fixes them, see the Security Engineer in [teams](./teams.md#security-a-sweep-that-stays-fixed). It works inside these rails, denylist included: its role searches for `eval(` with `grep_files` because the shell refuses any command with that word in it.
+
 ## Configuration
 
 ```json

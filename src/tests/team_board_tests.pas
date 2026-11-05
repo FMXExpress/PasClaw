@@ -773,6 +773,8 @@ begin
   List := ListDecisions(True);
   AssertContains(List[High(List)].Question, 'finding was filed', 'whose question says so');
   AssertContains(List[High(List)].Payload, '"finding"', 'and whose payload marks it');
+  Out_ := Tool_Rule('{"action":"list","project":"findings"}', Err);
+  AssertContains(Out_, '"findings" : ["T0002"]', 'rule list shows the cause''s findings');
 
   { One notice per cause: a draft waiting is not nagged about. }
   Second := CreateTask('findings', '[security] sql-injection: list()', '', Err, '',

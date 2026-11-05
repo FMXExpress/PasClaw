@@ -514,8 +514,14 @@ const
     'checks it is theirs; (5) unsafe defaults -- debug on, CORS *, TLS ' +
     'verification off, listening on every interface; (6) crypto -- ' +
     'passwords hashed fast or unsalted (md5, sha1), tokens from a ' +
-    'non-cryptographic random. grep_files finds the sinks; read the code ' +
-    'around each hit -- a hit is a lead, not a finding.'#10 +
+    'non-cryptographic random. Find the sinks and secrets in one call: ' +
+    'shell_exec grep -rnEi ''execute\(|os\.system|subprocess|exec\(|' +
+    'open\(|innerhtml|pickle|yaml\.load|verify=false|api_?key|secret|' +
+    'passw|token'' projects/<project>/app/ -- the shell refuses any ' +
+    'command containing the word eval, so search that one with grep_files ' +
+    'pattern="eval(" (grep_files matches one literal string, not a ' +
+    'regex). Read the code around each hit -- a hit is a lead, not a ' +
+    'finding.'#10 +
     'A finding is a hole you DEMONSTRATED: the input you sent and what it ' +
     'did (the rows it returned, the file it read). Run it before you ' +
     'file. One you could not demonstrate is titled [suspected] and never ' +

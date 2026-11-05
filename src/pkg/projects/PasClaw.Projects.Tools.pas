@@ -1520,7 +1520,7 @@ var
   Lines, Seen, Tasks, L: TStringArray;
   SR: TSearchRec;
   I, J: Integer;
-  C, Dir: string;
+  C, Dir, Ev: string;
 begin
   Root := TJsonObject.Create;
   try
@@ -1550,7 +1550,9 @@ begin
     for I := 0 to High(Lines) do
     begin
       C := LineField(Lines[I], 'cause');
-      if (LineField(Lines[I], 'event') <> 'reject') or (C = '') or InList(C, Seen) then
+      Ev := LineField(Lines[I], 'event');
+      { A cause is on the board once it rejected work or a finding named it. }
+      if ((Ev <> 'reject') and (Ev <> 'create')) or (C = '') or InList(C, Seen) then
         Continue;
       SetLength(Seen, Length(Seen) + 1);
       Seen[High(Seen)] := C;
@@ -1560,6 +1562,12 @@ begin
       TArr := TJsonArray.Create;
       for J := 0 to High(Tasks) do TArr.AddStr(Tasks[J]);
       Item.PutArray('tasks', TArr);
+      TArr := TJsonArray.Create;
+      for J := 0 to High(Lines) do
+        if (LineField(Lines[J], 'event') = 'create') and
+           (LineField(Lines[J], 'cause') = C) then
+          TArr.AddStr(LineField(Lines[J], 'task'));
+      Item.PutArray('findings', TArr);
       Item.PutStr('open_draft', OpenRuleDecision(Project, C));
       Arr.AddObject(Item);
     end;

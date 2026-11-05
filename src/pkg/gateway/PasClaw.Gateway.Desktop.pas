@@ -626,6 +626,14 @@ begin
          or (Doc = '/v1/desktop/state')
          or (Doc = '/v1/desktop/desktops')
          or (Doc = '/v1/suite')
+         (* Needs you: what the operator decides -- an agent's question, a
+            proven rule. DesktopRoute has answered these since they were
+            added, but a path missing here never reaches it: the gateway
+            replied 404 and the desktop's queue showed no decisions at all.
+            Unit tests call DesktopRoute directly, which is how it hid. *)
+         or (Doc = '/v1/needs-you')
+         or (Doc = '/v1/decisions')
+         or HasPrefix(Doc, '/v1/decisions/')
          or HasPrefix(Doc, '/v1/agents')
          or HasPrefix(Doc, '/v1/teams')
          or HasPrefix(Doc, '/v1/workspaces')

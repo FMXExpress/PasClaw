@@ -39,6 +39,7 @@ uses
   PasClaw.Projects.Tools,
   PasClaw.Agent.Steering,
   PasClaw.Agents,
+  PasClaw.Tools.Sandbox,   { ShellAllowed: the role's sweep command must pass it }
   PasClaw.Teams;
 
 var
@@ -158,6 +159,7 @@ end;
 var
   All: TTeamTemplateArray;
   T, T2: TTeamTemplate;
+  Sweep, Why: string;
   S, S2: TTeamState;
   Info: TAgentInfo;
   Created, Skipped, Removed, Told: TStringArray;
@@ -204,6 +206,18 @@ begin
   AssertContains(T.Agents[5].Role, 'cause="<kind>"', 'it files holes as findings');
   AssertContains(T.Agents[5].Role, 'DEMONSTRATED', 'only holes it demonstrated');
   AssertContains(T.Agents[5].Role, 'rule action=draft', 'and keeps fixed ones fixed');
+  (* From the live run: told that grep_files "finds the sinks", the agent
+     sent it a regex (it matches one literal string); then shell grep -E
+     was refused for the word eval in its pattern. The role carries the
+     one call that works, and the way round the denylist that is not a
+     way round it. *)
+  AssertContains(T.Agents[5].Role, 'grep -rnEi', 'the sweep is one regex call in the shell');
+  AssertContains(T.Agents[5].Role, 'pattern="eval("', 'and eval( is searched without one');
+  Sweep := T.Agents[5].Role;
+  Sweep := Copy(Sweep, Pos('grep -rnEi', Sweep), MaxInt);
+  Sweep := StringReplace(Copy(Sweep, 1, Pos('/app/', Sweep) + 4), '<project>', 'notes', []);
+  Found := ShellAllowed(Sweep, Why);   { before the message reads Why }
+  AssertTrue(Found, 'and the shell runs that call as written: ' + Sweep + ' -- ' + Why);
   AssertTrue(FindTeamTemplate('security', T2), 'the security sweep team is in the catalogue');
   AssertEqInt(Length(T2.Agents), 2, 'two agents, like duo');
   AssertEqStr(T2.Agents[1].Role, T.Agents[5].Role, 'the same Security Engineer');
