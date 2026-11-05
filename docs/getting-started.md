@@ -132,7 +132,7 @@ $PASCLAW_HOME/                       (default ~/.pasclaw/)
 ├── workspace/
 │   ├── memory/                      ← markdown notes; FTS5-indexed for memory_search
 │   │   ├── MEMORY.md
-│   │   ├── SCARS.md                 ← created by `pasclaw learn --write-scars`
+│   │   ├── SCARS.md                 ← created by `pasclaw learn --write-scars` or the nightly `pasclaw maintain`
 │   │   └── fetched-*.md             ← written by memory_fetch
 │   ├── sessions/                    ← one JSON file per session (interactive auto-saves here)
 │   │   ├── 20260601T093015-<hex>.json

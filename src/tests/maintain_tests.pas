@@ -38,6 +38,7 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Memory.Distill,
   PasClaw.Memory.Facts,
+  PasClaw.Learn,
   PasClaw.Maintain;
 
 procedure Fail_(const Msg: string); begin WriteLn('FAIL: ' + Msg); Halt(1); end;
@@ -212,10 +213,31 @@ begin
      ToolCallMsg('shell', 'c3'),
      ToolResult('c3', '12 passed, 0 failed'),
      MakeMessage(mrAssistant, 'green')], 2000, 300);
+  { cccc and eeee are outside the one-day stats window but inside the
+    30-day learn window, and fail the way bbbb did: one recurring pattern.
+    eeee (25 days) is past the 20-day skill window too, so its skill call
+    does not count as a use. dddd fails the same way, but 40 days ago,
+    past every window. }
   SaveSession('20260101T000003-cccccccc', NowU - 10 * 86400,
     [MakeMessage(mrUser, 'old'),
      ToolCallMsg('skill_deploy_website', 'c4'),
      ToolResult('c4', 'ok'),
+     ToolCallMsg('shell', 'c5'),
+     ToolResult('c5', 'bash: npm: command not found'),
+     ToolCallMsg('read_file', 'c7'),
+     ToolResult('c7', 'error: disk quota exceeded'),   { once: not recurring }
+     MakeMessage(mrAssistant, 'ok')], 500, 50);
+  SaveSession('20260101T000005-eeeeeeee', NowU - 25 * 86400,
+    [MakeMessage(mrUser, 'a while back'),
+     ToolCallMsg('skill_unused_thing', 'c1'),
+     ToolResult('c1', 'rotated'),
+     ToolCallMsg('shell', 'c2'),
+     ToolResult('c2', 'bash: npm: command not found'),
+     MakeMessage(mrAssistant, 'ok')], 500, 50);
+  SaveSession('20260101T000004-dddddddd', NowU - 40 * 86400,
+    [MakeMessage(mrUser, 'ancient'),
+     ToolCallMsg('shell', 'c6'),
+     ToolResult('c6', 'bash: npm: command not found'),
      MakeMessage(mrAssistant, 'ok')], 500, 50);
 
   O := DefaultMaintainOptions(nil);
@@ -224,7 +246,7 @@ begin
   O.Today := Today;
   O.NowUnix := NowU;
   O.SinceDays := 1;
-  O.UnusedSkillDays := 30;
+  O.UnusedSkillDays := 20;
   O.CoreBudget := 500;
   O.Review := False;
   O.DoBackup := True;
@@ -259,6 +281,18 @@ begin
   AssertTrue(not InList(R.UnusedSkills, 'deploy_site'), 'called skill not listed');
   AssertTrue(not InList(R.UnusedSkills, 'deploy_website'), 'skill called 10 days ago counts as used');
   AssertTrue(not InList(R.UnusedSkills, 'notes_only'), 'knowledge-only skill is not "unused"');
+
+  { Recurring: npm missing in bbbb, cccc and eeee (dddd is past the window). }
+  AssertEqInt(R.RecurringCount, 1, 'one pattern recurs across sessions');
+  AssertContains(R.Recurring[0], '3x across 3 sessions', 'counted over the learn window only');
+  AssertContains(R.Recurring[0], '`shell`', 'attributed to its tool');
+  AssertContains(R.Recurring[0], 'npm: command not found', 'with its sample');
+  AssertContains(R.Recurring[0], '` ' + SectionSign + 'BASH-NPM-COMMAND-NOT-FOUND', 'and its anchor');
+  AssertTrue(R.ScarsPath <> '', 'SCARS.md refreshed');
+  AssertEqInt(R.ScarsNew, 1, 'one new anchor');
+  AssertTrue(FileExists(JoinPath(MemDir, 'SCARS.md')), 'SCARS.md written in the workspace memory');
+  AssertContains(ReadFileText(JoinPath(MemDir, 'SCARS.md')), 'npm: command not found',
+                 'SCARS.md holds the pattern');
   AssertEqInt(Length(R.OverlapPairs), 1, 'one overlapping pair');
   { Directory listing order decides which name comes first. }
   AssertContains(R.OverlapPairs[0], 'deploy_site', 'pair names deploy_site');
@@ -278,6 +312,8 @@ begin
   AssertContains(Report, 'six-months test', 'report: six-months test when over budget');
   AssertContains(Report, '2 sessions, 3 turns, 3 tool calls, 1 tool failure', 'report: session line');
   AssertContains(Report, 'command not found', 'report: failure sample');
+  AssertContains(Report, '## Recurring (last 30 days, 2+ sessions)', 'report: recurring section');
+  AssertContains(Report, 'SCARS.md: 1 new anchor added, 0 already there', 'report: SCARS refresh');
   AssertContains(Report, '- unused_thing', 'report: unused skill');
   AssertContains(Report, 'overlapping (likely the same skill twice)', 'report: overlap');
   AssertContains(Report, '## Backup', 'report: backup section');
@@ -301,6 +337,23 @@ begin
   AssertTrue(not FileExists(JoinPath(JoinPath(MemDir, 'maintenance'), Today + '.md')), 'no report file after dry run');
   Rendered := RenderMaintenanceReport(O, R);
   AssertContains(Rendered, 'Dry run', 'rendered report says dry run');
+  AssertEqInt(R.RecurringCount, 1, 'dry run still finds the pattern');
+  AssertTrue(R.ScarsPath = '', 'dry run leaves SCARS.md alone');
+  AssertContains(Rendered, 'SCARS.md not refreshed (dry run)', 'and says so');
+
+  { A second real run finds the anchor already there. }
+  O.DryRun := False;
+  O.DoBackup := False;
+  AssertTrue(RunMaintenance(O, R, Err), 'second run');
+  AssertEqInt(R.ScarsNew, 0, 'nothing new for SCARS.md');
+  AssertEqInt(R.ScarsKnown, 1, 'the anchor is already there');
+
+  { A skill window longer than the learn window: dddd is read for its
+    skill calls, but its failure is still too old to count. }
+  O.UnusedSkillDays := 60;
+  AssertTrue(RunMaintenance(O, R, Err), 'long skill window');
+  AssertContains(R.Recurring[0], '3x across 3 sessions', 'the learn window still holds');
+  O.UnusedSkillDays := 20;
 
   { Under budget: no six-months nag. }
   O.CoreBudget := 0;

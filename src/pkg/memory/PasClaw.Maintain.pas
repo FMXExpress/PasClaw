@@ -17,12 +17,20 @@
                     are over.
     3. Sessions  -- walk the sessions of the last N days: turns, tool
                     calls, tool failures (with samples), tokens.
+       Recurring -- PasClaw.Learn over a longer window (30 days): the
+                    failures, and the misuses a tool pointed out, that
+                    came back in two or more sessions. One that SCARS.md
+                    lacks gets an anchor there (what `pasclaw learn
+                    --write-scars` does by hand), so the record of what
+                    keeps going wrong stays current without anyone
+                    remembering to run it.
     4. Skills    -- callable skills no session has invoked within
                     unused_skill_days; pairs whose name+description
                     overlap enough to be the same skill twice. Reported,
                     never deleted.
     5. Review    -- optional: one call to the background model with the
-                    numbers and the failure samples, asking for a short
+                    numbers, the failure samples and the recurring
+                    patterns, asking for a short
                     critique and what to change tomorrow. The "dream log".
     6. Backup    -- optional: PasClaw.Backup with rotation.
     7. Report    -- everything above as Markdown, written to
@@ -60,6 +68,7 @@ const
     skill twice. Same threshold the skill distiller refuses to create at. }
   SkillOverlapThreshold = 0.8;
   MaxFailureSamples = 12;
+  MaxRecurringShown = 12;
 
 type
   TCoreFileStat = record
@@ -86,7 +95,12 @@ type
     BackupDir:  string;
     Version:    string;
     KeepDaily, KeepWeekly, KeepMonthly: Integer;
-    DryRun:     Boolean;       { report only: no sweep, no backup, no model call, no report file }
+    { Recurring patterns: sessions of the last LearnDays, seen in at least
+      LearnMinSessions of them; Scars adds the new ones to SCARS.md. }
+    LearnDays, LearnMinSessions: Integer;
+    Scars:      Boolean;
+    DryRun:     Boolean;       { report only: no sweep, no backup, no model call,
+                                 no SCARS.md write, no report file }
   end;
 
   TMaintainReport = record
@@ -96,6 +110,12 @@ type
     SessionsScanned, Turns, ToolCalls, ToolFailures: Integer;
     InputTokens, OutputTokens: Int64;
     FailureSamples: TArray<string>;
+    { One line per recurring pattern, most frequent first, at most
+      MaxRecurringShown; RecurringCount is how many there were. }
+    Recurring:      TArray<string>;
+    RecurringCount: Integer;
+    ScarsNew, ScarsKnown: Integer;   { anchors added to / already in SCARS.md }
+    ScarsPath:      string;          { set when SCARS.md was refreshed }
     SkillsTotal, SkillsCallable: Integer;
     UnusedSkills:  TArray<string>;
     OverlapPairs:  TArray<string>;
@@ -145,6 +165,7 @@ uses
   PasClaw.Providers.Factory,
   PasClaw.Memory.Facts,
   PasClaw.Session.Store,
+  PasClaw.Learn,
   PasClaw.Backup;
 
 { ------------------------------------------------------------- pure }
@@ -312,6 +333,25 @@ begin
     end;
     L.Add('');
 
+    L.Add(Format('## Recurring (last %s, %d+ sessions)',
+                 [Plural(O.LearnDays, 'day', 'days'), O.LearnMinSessions]));
+    L.Add('');
+    if R.RecurringCount = 0 then
+      L.Add(Format('- nothing went wrong the same way in %d or more sessions', [O.LearnMinSessions]))
+    else
+    begin
+      for i := 0 to High(R.Recurring) do L.Add('- ' + R.Recurring[i]);
+      if R.RecurringCount > Length(R.Recurring) then
+        L.Add(Format('- and %d more (`pasclaw learn --since %d`)',
+                     [R.RecurringCount - Length(R.Recurring), O.LearnDays]));
+      if R.ScarsPath <> '' then
+        L.Add(Format('- SCARS.md: %s added, %d already there',
+                     [Plural(R.ScarsNew, 'new anchor', 'new anchors'), R.ScarsKnown]))
+      else if O.DryRun and O.Scars then
+        L.Add('- SCARS.md not refreshed (dry run)');
+    end;
+    L.Add('');
+
     L.Add('## Skills');
     L.Add('');
     L.Add(Format('- %d installed, %d callable', [R.SkillsTotal, R.SkillsCallable]));
@@ -394,6 +434,9 @@ begin
     Result.KeepDaily := 7; Result.KeepWeekly := 4; Result.KeepMonthly := 6;
     Result.BackupWithSecrets := True;
   end;
+  Result.LearnDays        := 30;
+  Result.LearnMinSessions := 2;
+  Result.Scars            := True;
   if Result.BackupDir = '' then Result.BackupDir := JoinPath(Result.Home, 'backups');
 end;
 
@@ -409,6 +452,20 @@ begin
     Result := F.Size;
     FindClose(F);
   end;
+end;
+
+function RecurringLine(const P: TErrorPattern): string;
+begin
+  Result := Format('%dx across %d sessions', [P.Count, P.Sessions.Count]);
+  if P.Context <> '' then
+  begin
+    Result := Result + ', `' + P.Context + '`';
+    if P.Kind = 'misuse' then Result := Result + ' (misused)';
+  end
+  else if P.Kind = 'misuse' then
+    Result := Result + ' (a misuse)';
+  Result := Result + ': `' + Copy(P.Sample, 1, 160) + '` ' + SectionSign +
+            MakeAnchorName(P.Signature);
 end;
 
 function ReviewPrompt(const O: TMaintainOptions; const R: TMaintainReport): string;
@@ -443,6 +500,8 @@ var
   BR: TBackupResult;
   Kind: string;
   CoreNames: array[0..4] of string;
+  SinceLearn, SinceLoad: Int64;
+  Patterns: TErrorPatternArray;
 begin
   Result := False;
   Err := '';
@@ -490,6 +549,11 @@ begin
   { 3 + 4a. Sessions: stats over SinceDays, skill usage over UnusedSkillDays. }
   SinceStats  := O.NowUnix - Int64(O.SinceDays) * 86400;
   SinceSkills := O.NowUnix - Int64(O.UnusedSkillDays) * 86400;
+  SinceLearn  := O.NowUnix - Int64(O.LearnDays) * 86400;
+  { One read of each session serves all three windows. }
+  SinceLoad := SinceSkills;
+  if (O.LearnDays > 0) and (SinceLearn < SinceLoad) then SinceLoad := SinceLearn;
+  Patterns := nil;
   Used := TStringList.Create;
   Lines := TStringList.Create;
   try
@@ -507,9 +571,13 @@ begin
     end;
     for i := 0 to High(Sessions) do
     begin
-      if Sessions[i].UpdatedAt < SinceSkills then Continue;
+      if Sessions[i].UpdatedAt < SinceLoad then Continue;
       Sess := TSession.Create(Sessions[i].Id);
       try
+        { Recurring patterns: the learn window. }
+        if (O.LearnDays > 0) and (Sessions[i].UpdatedAt >= SinceLearn) then
+          ScanSession(Sess, 0, Patterns);
+        if Sessions[i].UpdatedAt < SinceSkills then Continue;
         { Skill usage: every skill_<name> call in the long window. }
         for j := 0 to High(Sess.Messages) do
           if Sess.Messages[j].Role = mrAssistant then
@@ -550,6 +618,24 @@ begin
       end;
     end;
 
+    { 3b. Recurring: report them, and give SCARS.md the new ones. }
+    SortPatternsByCount(Patterns);
+    for i := 0 to High(Patterns) do
+    begin
+      if not PassesThreshold(Patterns[i], O.LearnMinSessions) then Continue;
+      Inc(R.RecurringCount);
+      if Length(R.Recurring) < MaxRecurringShown then
+        AddStr(R.Recurring, RecurringLine(Patterns[i]));
+    end;
+    if O.Scars and not O.DryRun and (R.RecurringCount > 0) then
+    begin
+      if WriteScars(JoinPath(MemDir, 'SCARS.md'), Patterns, O.LearnMinSessions,
+                    R.ScarsNew, R.ScarsKnown) then
+        R.ScarsPath := JoinPath(MemDir, 'SCARS.md')
+      else
+        AddStr(R.Warnings, 'SCARS.md could not be written: ' + JoinPath(MemDir, 'SCARS.md'));
+    end;
+
     { 4b. Skills. }
     Skills := LoadSkillManifests(O.Home);
     R.SkillsTotal := Length(Skills);
@@ -562,6 +648,7 @@ begin
     end;
     R.OverlapPairs := SkillOverlapPairs(Skills, SkillOverlapThreshold);
   finally
+    FreePatterns(Patterns);
     Lines.Free;
     Used.Free;
   end;
@@ -643,9 +730,10 @@ begin
   end;
   if not RunMaintenance(O, R, Err) then Exit;
   Result := Format('maintenance %s: %d facts removed (%d active); %d sessions, %d tool calls, ' +
-                   '%d failures; %d unused skills, %d overlapping pairs',
+                   '%d failures; %d recurring (%d new in SCARS.md); %d unused skills, %d overlapping pairs',
                    [O.Today, R.FactsRemoved, R.FactsActive, R.SessionsScanned, R.ToolCalls,
-                    R.ToolFailures, Length(R.UnusedSkills), Length(R.OverlapPairs)]);
+                    R.ToolFailures, R.RecurringCount, R.ScarsNew,
+                    Length(R.UnusedSkills), Length(R.OverlapPairs)]);
   if R.BackupPath <> '' then Result := Result + '; backup ' + ExtractFileName(R.BackupPath);
   if R.ReportPath <> '' then Result := Result + '; report ' + R.ReportPath;
   if Length(R.Warnings) > 0 then

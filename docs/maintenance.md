@@ -17,12 +17,13 @@ The cron form runs inside `pasclaw gateway`, in-process, from one reserved skill
 1. **Facts.** `facts.db` rows whose `expires` is in the past are deleted (they have been invisible to every read since then), and superseded rows older than `maintenance.keep_superseded_days` (default 30; `0` keeps them forever). The report says how many went and how many are active.
 2. **Always-loaded memory.** `SOUL.md`, `USER.md`, `MEMORY.md`, today's and yesterday's note are sized against `memory_core_budget_bytes`. A file over the cap is flagged with how far over it is and the [six-months test](./memory.md#tiers).
 3. **Sessions.** The last `--since` days of saved sessions (default 1): sessions, user turns, tool calls, tool results that look like failures (with up to 12 sample lines), input and output tokens.
-4. **Skills.** Installed skills, how many are callable, which callable ones no session invoked in `maintenance.unused_skill_days` (default 30), and pairs whose name and description overlap enough to be the same skill twice. Reported, never removed: `pasclaw skills remove` is the operator's call.
-5. **Review** (`--review`, or `maintenance.review: true`). One call to `background_model` with the report so far, asking for at most 200 words: what went wrong, one or two changes for tomorrow, what in the always-loaded files should move out. The "dream log". Off by default because it costs a call.
-6. **Backup** (`--backup`, or `maintenance.backup: true`). [`pasclaw backup`](./backup.md) with rotation.
-7. **Report.** Everything above as Markdown at `workspace/memory/maintenance/<date>.md`. That directory is under `memory/`, so `memory_search` reaches past reports, and it is not one of the always-loaded files, so they never cost prompt space.
+4. **Recurring.** What went wrong the same way in two or more sessions of the last 30 days, mined the way [`pasclaw learn`](./memory.md#pasclaw-learn--failure-mining) mines it: failures, and the misuses a tool pointed out in its own result (`grep_files` given a regex, a definition hunted by keyword guesses). Each is listed with its count, its tool, a sample and its `§ANCHOR`, and one that `SCARS.md` does not have yet gets an anchor there, so the file stays current without anyone running `learn --write-scars`. Anchors already in the file, and anything the operator wrote under them, are left alone.
+5. **Skills.** Installed skills, how many are callable, which callable ones no session invoked in `maintenance.unused_skill_days` (default 30), and pairs whose name and description overlap enough to be the same skill twice. Reported, never removed: `pasclaw skills remove` is the operator's call.
+6. **Review** (`--review`, or `maintenance.review: true`). One call to `background_model` with the report so far, asking for at most 200 words: what went wrong, one or two changes for tomorrow, what in the always-loaded files should move out. The "dream log". Off by default because it costs a call.
+7. **Backup** (`--backup`, or `maintenance.backup: true`). [`pasclaw backup`](./backup.md) with rotation.
+8. **Report.** Everything above as Markdown at `workspace/memory/maintenance/<date>.md`. That directory is under `memory/`, so `memory_search` reaches past reports, and it is not one of the always-loaded files, so they never cost prompt space.
 
-`--dry-run` does steps 2, 3 and 4 and counts for 1, deleting nothing, calling no model, writing no file. The exit code is 2 when the report carries warnings (a fact store that would not open, a backup that failed), 0 otherwise.
+`--dry-run` does steps 2 to 5 and counts for 1, deleting nothing, calling no model, writing no file: the recurring patterns are listed, and `SCARS.md` is not touched. The exit code is 2 when the report carries warnings (a fact store that would not open, a backup that failed), 0 otherwise.
 
 ## Config
 
@@ -42,5 +43,6 @@ The flags override the block for one run. `background_model` is what the review 
 
 - Rewrite `MEMORY.md`. It says which file is over budget and by how much; moving lines out is a judgement call the operator or the agent makes with the file open.
 - Remove a skill. Same reason.
+- Change an entry in `SCARS.md`. It adds anchors for patterns the file lacks; Root cause, Do and Do NOT are the operator's to fill in.
 - Delete active facts, however old. Only expiry and supersession retire a fact.
 - Run on its own. Nothing in PasClaw schedules work the operator did not ask for; the cron line above is the opt-in.

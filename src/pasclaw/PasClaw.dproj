@@ -209,6 +209,7 @@
         <DCCReference Include="..\pkg\checkpoints\PasClaw.Checkpoints.pas"/>
         <DCCReference Include="..\pkg\checkpoints\PasClaw.Backup.pas"/>
         <DCCReference Include="..\pkg\memory\PasClaw.Maintain.pas"/>
+        <DCCReference Include="..\pkg\memory\PasClaw.Learn.pas"/>
         <DCCReference Include="..\pkg\checkpoints\PasClaw.Checkpoints.Zpaq.pas"/>
 
         <!-- pkg/tokenizer -->

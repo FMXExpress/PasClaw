@@ -1,8 +1,9 @@
 program learn_tests;
 (*
-  Covers PasClaw.Cmd.Learn's pattern-extraction primitives:
-  NormalizeErrorSignature (the clustering key) and LooksLikeFailure
-  (the line-level pre-filter).
+  Covers PasClaw.Learn's pattern-extraction primitives:
+  NormalizeErrorSignature (the clustering key), LooksLikeFailure (the
+  line-level pre-filter), the misuse notes, and which tool a result is
+  attributed to.
 
   Pinned because the whole `pasclaw learn` value proposition rides
   on "same root cause -> same signature": if the normaliser drifts,
@@ -10,10 +11,9 @@ program learn_tests;
   LooksLikeFailure drifts the other way, the report fills with
   noise the operator has to wade through.
 
-  The end-to-end Session-walk path is covered by the smoke target
-  (build + invoke on an empty PASCLAW_HOME); behaviour-driven
-  coverage of the cluster-on-disk write-back would require a
-  fixture session JSON, deferred.
+  ScanSession runs on sessions built in memory; WriteScars on a temp
+  file. The walk over saved sessions, and the nightly refresh of
+  SCARS.md, are covered by maintain_tests.
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -26,8 +26,16 @@ program learn_tests;
 {$ENDIF}
 
 uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes,
-  PasClaw.Cmd.Learn;
+  PasClaw.Utils,
+  PasClaw.Config,
+  PasClaw.Providers.Types,
+  PasClaw.Session.Store,
+  PasClaw.Tools.Registry,
+  PasClaw.Tools.Sandbox,
+  PasClaw.Tools.FS,
+  PasClaw.Learn;
 
 procedure Fail(const Msg: string);
 begin
@@ -50,6 +58,71 @@ procedure AssertFalse(Cond: Boolean; const Msg: string);
 begin
   if Cond then Fail(Msg);
 end;
+
+procedure AssertEqInt(Got, Want: Integer; const Msg: string);
+begin
+  if Got <> Want then
+    Fail(Msg + Format(' (got %d, want %d)', [Got, Want]));
+end;
+
+procedure AssertContains(const Hay, Needle, Msg: string);
+begin
+  if Pos(Needle, Hay) = 0 then Fail(Msg + ' -- missing "' + Needle + '"');
+end;
+
+{ ------------------------------------------------------- session fixtures }
+
+function CallMsg(const ToolName, Id: string): TMessage;
+begin
+  Result := MakeMessage(mrAssistant, '');
+  SetLength(Result.ToolCalls, 1);
+  Result.ToolCalls[0].Id := Id;
+  Result.ToolCalls[0].Func.Name := ToolName;
+  Result.ToolCalls[0].Func.Arguments := '{}';
+end;
+
+function ResultMsg(const Id, Content: string): TMessage;
+begin
+  Result := MakeMessage(mrTool, Content);
+  Result.ToolCallId := Id;
+end;
+
+function MkSession(const Id: string; const Msgs: array of TMessage): TSession;
+var
+  i: Integer;
+begin
+  Result := TSession.Create;   { no id: nothing is read from disk }
+  Result.Meta.Id := Id;
+  Result.Meta.UpdatedAt := 1000;
+  SetLength(Result.Messages, Length(Msgs));
+  for i := 0 to High(Msgs) do Result.Messages[i] := Msgs[i];
+end;
+
+procedure ScanInto(const Id: string; const Msgs: array of TMessage;
+                   var Patterns: TErrorPatternArray);
+var
+  S: TSession;
+begin
+  S := MkSession(Id, Msgs);
+  try
+    ScanSession(S, 0, Patterns);
+  finally
+    S.Free;
+  end;
+end;
+
+function PatternWith(const Patterns: TErrorPatternArray; const Needle: string): Integer;
+var
+  i: Integer;
+begin
+  for i := 0 to High(Patterns) do
+    if Pos(Needle, Patterns[i].Sample) > 0 then Exit(i);
+  Result := -1;
+end;
+
+const
+  RegexNote = '(no matches) -- note: grep_files matches a LITERAL substring, ' +
+    'not a regex. Search one plain term (e.g. "to_csv"), or run it once per alternative.';
 
 procedure TestNormalizeCollapsesDigitRuns;
 { Line numbers, byte counts, pids -- anything 2+ digits -- becomes
@@ -257,6 +330,132 @@ begin
     'casing normalises to upper, dashes between tokens');
 end;
 
+procedure TestAttributionWhenIdsRepeat;
+{ Some servers number calls per turn (the relay provider, several local
+  OpenAI-compatible servers), so "c1" comes back every turn. A result
+  belongs to the latest call with its id; keeping the first sent the
+  live security run's shell_exec refusal to the turn-one grep_files. }
+var
+  P: TErrorPatternArray;
+  i: Integer;
+begin
+  P := nil;
+  try
+    ScanInto('s1',
+      [MakeMessage(mrUser, 'sweep it'),
+       CallMsg('grep_files', 'c1'),
+       ResultMsg('c1', RegexNote),
+       CallMsg('shell_exec', 'c1'),
+       ResultMsg('c1', 'ERROR: refused: the command runs eval on its input'),
+       MakeMessage(mrAssistant, 'done')], P);
+    AssertEqInt(Length(P), 2, 'a misuse and a failure');
+    i := PatternWith(P, 'refused');
+    AssertTrue(i >= 0, 'the refusal is a pattern');
+    AssertEqStr(P[i].Context, 'shell_exec', 'the refusal is the turn-two call''s');
+    AssertEqStr(P[i].Kind, 'failure', 'a failure');
+    i := PatternWith(P, 'LITERAL substring');
+    AssertTrue(i >= 0, 'the misuse note is a pattern');
+    AssertEqStr(P[i].Context, 'grep_files', 'the note is the turn-one call''s');
+    AssertEqStr(P[i].Kind, 'misuse', 'a misuse');
+  finally
+    FreePatterns(P);
+  end;
+
+  { Calls of one turn split over two assistant messages, results after
+    both: each id still finds its call. }
+  P := nil;
+  try
+    ScanInto('s2',
+      [CallMsg('read_file', 'c1'),
+       CallMsg('shell_exec', 'c2'),
+       ResultMsg('c1', 'error: no such file: notes.txt'),
+       ResultMsg('c2', 'bash: jq: command not found')], P);
+    i := PatternWith(P, 'no such file');
+    AssertTrue((i >= 0) and (P[i].Context = 'read_file'), 'c1 is read_file''s');
+    i := PatternWith(P, 'command not found');
+    AssertTrue((i >= 0) and (P[i].Context = 'shell_exec'), 'c2 is shell_exec''s');
+  finally
+    FreePatterns(P);
+  end;
+end;
+
+procedure TestMisuseClusters;
+{ The definition hint names the symbol searched for. Two sessions hunting
+  two different names are one recurring misuse, not two one-offs. }
+var
+  P: TErrorPatternArray;
+  Dir, Path, Text: string;
+  Fresh, Skipped: Integer;
+begin
+  AssertTrue(MisuseSignature('(no matches)') = '', 'a plain miss is no misuse');
+  AssertTrue(MisuseSignature('error: no such file') = '', 'a failure is no misuse');
+  AssertTrue(MisuseSignature(RegexNote) <> '', 'the regex note is');
+  P := nil;
+  try
+    ScanInto('s1', [CallMsg('grep_files', 'c1'), ResultMsg('c1',
+      '(no matches) -- to find where a name is defined, whatever its keyword or owner: ' +
+      'code_outline symbol="TFoo.Make".')], P);
+    ScanInto('s2', [CallMsg('grep_files', 'c1'), ResultMsg('c1',
+      '(no matches) -- to find where a name is defined, whatever its keyword or owner: ' +
+      'code_outline symbol="ParseArgs".')], P);
+    AssertEqInt(Length(P), 1, 'one pattern for both names');
+    AssertEqInt(P[0].Sessions.Count, 2, 'seen in two sessions');
+    AssertTrue(PassesThreshold(P[0], 2), 'so it recurs');
+    AssertEqStr(MakeAnchorName(P[0].Signature), 'GREP-FILES-DEFINITION-HUNT-KEYWORD',
+                'its anchor reads as what went wrong');
+
+    Dir := JoinPath(GetTempDir, 'pc-learn-tests-' + IntToStr(GetProcessID));
+    ForceDirectories(Dir);
+    Path := JoinPath(Dir, 'SCARS.md');
+    SysUtils.DeleteFile(Path);
+    AssertTrue(WriteScars(Path, P, 2, Fresh, Skipped), 'SCARS.md written');
+    AssertEqInt(Fresh, 1, 'one new anchor');
+    Text := ReadFileText(Path);
+    AssertContains(Text, SectionSign + 'GREP-FILES-DEFINITION-HUNT-KEYWORD', 'the anchor');
+    AssertContains(Text, '**Kind:** misuse', 'marked a misuse');
+    AssertContains(Text, '**Where:** tool `grep_files`', 'and where');
+    AssertTrue(WriteScars(Path, P, 2, Fresh, Skipped), 'second write');
+    AssertEqInt(Fresh, 0, 'nothing new the second time');
+    AssertEqInt(Skipped, 1, 'the anchor is already there');
+    SysUtils.DeleteFile(Path);
+    RemoveDir(Dir);
+  finally
+    FreePatterns(P);
+  end;
+end;
+
+procedure TestMisuseNotesMatchTheTool;
+{ MisuseSignature matches the notes' wording, so run the tool that writes
+  them: a reworded note fails here instead of going quietly uncounted. }
+var
+  Dir, Out_, Err: string;
+  R: TToolRegistry;
+  Pol: TSandboxPolicy;
+begin
+  Dir := JoinPath(GetTempDir, 'pc-learn-grep-' + IntToStr(GetProcessID));
+  ForceDirectories(Dir);
+  WriteFileText(JoinPath(Dir, 'a.txt'), 'nothing to see'#10);
+  Pol := Default(TSandboxPolicy);
+  ConfigureSandbox(Pol, Dir);
+  R := TToolRegistry.Create;
+  try
+    RegisterFSTools(R);
+    Out_ := R.RunTool('grep_files', '{"path":".","pattern":"foo|bar"}', Err);
+    AssertContains(Out_, 'LITERAL', 'grep_files notes a regex');
+    AssertTrue(LooksLikeMisuse(Out_), 'the regex note counts as a misuse: ' + Out_);
+    Out_ := R.RunTool('grep_files', '{"path":".","pattern":"function TFoo.Make"}', Err);
+    AssertContains(Out_, 'code_outline', 'grep_files notes a definition hunt');
+    AssertTrue(LooksLikeMisuse(Out_), 'the definition note counts as a misuse: ' + Out_);
+    AssertTrue(MisuseSignature(Out_) <> MisuseSignature(RegexNote), 'two different misuses');
+    Out_ := R.RunTool('grep_files', '{"path":".","pattern":"absent"}', Err);
+    AssertFalse(LooksLikeMisuse(Out_), 'an ordinary miss is not');
+  finally
+    R.Free;
+    SysUtils.DeleteFile(JoinPath(Dir, 'a.txt'));
+    RemoveDir(Dir);
+  end;
+end;
+
 procedure TestLooksLikeFailureNegatives;
 { Precision matters: ordinary output lines must not match. The
   cost of a false positive is a noisy report the operator has to
@@ -283,5 +482,8 @@ begin
   TestMakeAnchorName;
   TestReadExistingScarsRecognisesRenamedAnchors;
   TestReadExistingScarsMissingFile;
+  TestAttributionWhenIdsRepeat;
+  TestMisuseClusters;
+  TestMisuseNotesMatchTheTool;
   WriteLn('learn_tests: OK');
 end.
