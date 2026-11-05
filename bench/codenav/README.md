@@ -84,7 +84,7 @@ A directory's outline is larger than `list_dir`'s list of names
 (`src/pkg/projects`: 3,786 bytes against 356) because it carries what each
 file is for and what it declares, which a name list does not.
 
-**The price.** The schema is 406 bytes, and it rides on every request once
+**The price.** The schema is 411 bytes (406 before the live run made the `symbol` example generic), and it rides on every request once
 the tool is registered. On the team-board replays that came to 483 bytes
 per call with the JSON wrapping: duo 951,641 → 965,648 (+1.47%), security
 sweep 1,572,620 → 1,591,457 (+1.2%). Those teams build small apps and
@@ -122,6 +122,65 @@ history for every later call of the session.
 - **A directory made only of directories was unbounded**: 3,000
   subdirectories came to 425 KB. The subdirectory list is now held to the
   same budget and says how many it left out.
+
+## Live run: does a model pick it?
+
+The bench measures fixed strategies. Whether a model *chooses*
+`code_outline` was measured live: chat turns through `pasclaw serve` on the
+relay provider, against a copy of this repository. The model's decisions
+came from fresh subagents that saw only what the model sees:
+- the system prompt;
+- the tool list (names, descriptions, parameters);
+- the conversation.
+
+Each was told only to answer as that model would, with nothing about
+`code_outline` or what was being measured. Every call went to a new
+subagent with the whole request, because a model is stateless. The
+control arm ran the same tasks on `main`'s binary, which has no
+`code_outline`.
+
+| task | arm | model calls | request bytes | tool-result bytes | picked `code_outline` |
+|---|---|---|---|---|---|
+| "who may give the verdict? file, function, rule" | with | 3 | 156,165 | 42,299 | no |
+| | without | 3 | 149,871 | 39,671 | — |
+| "change the orient slicer's default budget from 4096 to 6144" | with | 6 | 350,998 | 52,180 | no |
+| | without | 6 | 320,834 | 69,493 | — |
+| "one line on what each unit under src/pkg/kb does" | with | 3 | 81,036 | 4,972 | **yes, first move** |
+| | with, after the fix below | **2** | **50,546** | **980** | **yes, first move** |
+| | without | 3 | 86,473 | 11,960 | — |
+
+What it shows:
+- **The model picked the tool unprompted where it fits best: a
+  directory's overview.** After the fix below, it answered in 2 calls
+  instead of 3, with 42% fewer request bytes and 92% fewer result bytes.
+- **It searched by concept for "find the code that does X"**, grepping
+  `verdict` and `reviewer`, then read the lines the hits named. Symbol mode
+  needs a name, and the model had none yet; the grep turned one up and the
+  targeted reads that followed were direct. The arms did not differ.
+- **It grepped the literal value for "change this value"**: `4096` found
+  the constant at once, and again the arms did not differ.
+- **The cost:** the request-byte difference on the first two tasks is the
+  schema (483 bytes a call) plus the run-to-run spread between two
+  different stand-ins. In the "without" arm of the second task, a test
+  build also failed for lack of Indy, which this run's repository copy
+  did not include.
+
+One stand-in per task per arm is a small sample: this says the tool is
+found and used, not how often.
+
+Fixed from the run:
+- **The `symbol` parameter's description gave `TaskReviewers` as its
+  example**, which was this repository's answer to the run's first
+  question. The first trial read it off the schema, so that trial was
+  discarded and rerun. The description is now generic ("A name, or
+  Type.Name for a method"), and a test asserts that no real name appears
+  in the schema.
+- **Three of the four `kb` units had no purpose line in the outline.**
+  Their header comment comes after `unit X;`, a common Delphi layout, and
+  the summary reader stopped at the first line of code. The model spent
+  a call reading each header. The reader now steps over a Pascal
+  `unit`/`program`/`library`/`package` line, which is what made the
+  2-call run.
 
 ## Not done
 

@@ -270,6 +270,14 @@ begin
       Continue;
     end;
     if Acc <> '' then Break;   { code after a line-comment header }
+    (* A Pascal unit often opens with its name and puts the header comment
+       after it: "unit X;" then the comment. Measured in a live run, three
+       of the four units in src/pkg/kb did, and the model read each one's
+       first 40 lines to learn what the outline should have said. *)
+    if (Lang = 'pascal') and (Copy(T, Length(T), 1) = ';') and
+       (StartsWord(LowerCase(T), 'unit') or StartsWord(LowerCase(T), 'program') or
+        StartsWord(LowerCase(T), 'library') or StartsWord(LowerCase(T), 'package')) then
+      Continue;
     { Block comments and docstrings. }
     if Copy(T, 1, 2) = '(*' then begin Close_ := '*)'; T := Copy(T, 3, MaxInt); end
     else if Copy(T, 1, 2) = '/*' then begin Close_ := '*/'; T := Copy(T, 3, MaxInt); end
@@ -1465,7 +1473,10 @@ begin
                    'JS/TS, Go, Rust, Ruby, PHP.';
   T.Schema      := '{"type":"object","properties":{' +
                    '"path":{"type":"string","description":"File or directory; default ."},' +
-                   '"symbol":{"type":"string","description":"e.g. TaskReviewers, TFoo.Bar"}' +
+                   { No example name from any one codebase: "TaskReviewers"
+                     here was this repository's answer to a live run's
+                     question, and the model read it off the schema. }
+                   '"symbol":{"type":"string","description":"A name, or Type.Name for a method"}' +
                    '}}';
   T.Handler     := Tool_CodeOutline;
   T.IsCore      := True;
