@@ -55,12 +55,12 @@ tool is a question for a live run.
 
 | 34 definition lookups | calls | bytes returned | lines returned | answered |
 |---|---|---|---|---|
-| grep-name | 34 | 47,690 | 867 | 34/34 |
+| grep-name | 34 | 47,778 | 870 | 34/34 |
 | grep-def | 52 | 8,499 | | 31/34 |
 | **outline** | **34** | **7,021** | **69** | **34/34** |
 
 - **Compared with grep-name**, outline returns 85% fewer bytes in the same
-  number of calls, with 69 lines instead of 867. There is nothing to pick
+  number of calls, with 69 lines instead of 870. There is nothing to pick
   through: the declaration comes with its section and line, and for a
   Pascal unit the body's line is listed as `Name (body)`.
 - **Compared with grep-def**, it takes a third fewer calls and answers
@@ -104,6 +104,24 @@ history for every later call of the session.
   finds nothing, the result names the call that would have found it.
   This costs nothing per request and appears exactly where keyword
   guessing fails.
+
+## From review (#626)
+
+- **A string holding `/*` opened a comment that swallowed every declaration
+  after it** in JS/TS, Go, Rust and PHP, and a `//` in a string cut its
+  line. String literals are now skipped before comments are looked for,
+  with each language's quotes:
+  - JS: `'`, `"` and template backticks, which may span lines;
+  - PHP: `'` and `"`, either of which may span lines;
+  - Go: `"`, raw backtick strings that may span lines, and runes that
+    close within a few bytes;
+  - Rust: `"`, which may span lines, and `'` read as a char literal only
+    when it closes within a few bytes, so a lifetime (`'a`) opens nothing.
+
+  `desktop.html` outlines the same 154 functions before and after.
+- **A directory made only of directories was unbounded**: 3,000
+  subdirectories came to 425 KB. The subdirectory list is now held to the
+  same budget and says how many it left out.
 
 ## Not done
 

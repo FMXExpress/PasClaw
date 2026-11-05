@@ -663,16 +663,64 @@ begin
   SetLength(Result, N);
 end;
 
-{ Remove // comments and /* */ blocks (C-family). InBlock carries an open
-  block across lines. Strings are not tracked: a "//" inside one cuts the
-  line short, which costs at worst a declaration's tail. }
-function CCode(const Line: string; var InBlock: Boolean): string;
+(* Remove // comments and /* */ blocks (C-family), and blank string
+   literals to "" -- before looking for a comment, because a string that
+   holds "/*" opened a block that swallowed every declaration after it
+   (Codex on #626). InBlock carries an open comment across lines, InStr
+   an open string: a JS template or Go raw string (backtick), a Rust
+   string, any PHP string.
+
+   Quotes by language: ' is a string in JS and PHP; in Go and Rust it is a
+   character literal only when it closes within a few bytes ('x', '
+',
+   a UTF-8 char), so a Go rune holding a double quote opens nothing and a
+   Rust lifetime ('a) is plain text. *)
+function CCode(const Line: string; var InBlock: Boolean; var InStr: Char;
+  const Lang: string): string;
 var
-  I, N: Integer;
+  I, N, K: Integer;
+  C: Char;
+
+  { Skip to just past the close of a string that opened with Q; True when
+    it closed on this line. Backslash escapes, except in a Go raw string. }
+  function SkipString(Q: Char): Boolean;
+  begin
+    Result := False;
+    while I <= N do
+    begin
+      if (Line[I] = '\') and not ((Q = '`') and (Lang = 'go')) then
+        Inc(I, 2)
+      else if Line[I] = Q then
+      begin
+        Inc(I);
+        Exit(True);
+      end
+      else
+        Inc(I);
+    end;
+  end;
+
+  function MultiLine(Q: Char): Boolean;
+  begin
+    if Lang = 'php' then Result := True
+    else if Lang = 'rust' then Result := Q = '"'
+    else Result := Q = '`';   { js template, go raw string }
+  end;
+
 begin
   Result := '';
   I := 1;
   N := Length(Line);
+  if InStr <> #0 then
+  begin
+    if SkipString(InStr) then
+    begin
+      InStr := #0;
+      Result := '""';
+    end
+    else
+      Exit;
+  end;
   while I <= N do
   begin
     if InBlock then
@@ -681,14 +729,38 @@ begin
       if I < N then begin InBlock := False; Inc(I, 2); end else I := N + 1;
       Continue;
     end;
-    if (Line[I] = '/') and (I < N) and (Line[I + 1] = '*') then
+    C := Line[I];
+    if (C = '''') and ((Lang = 'go') or (Lang = 'rust')) then
+    begin
+      { A character literal closes within a few bytes; a lifetime never. }
+      K := I + 2;
+      if (K <= N) and (Line[I + 1] = '\') then Inc(K);
+      while (K <= N) and (K <= I + 5) and (Line[K] <> '''') do Inc(K);
+      if (K <= N) and (K <= I + 5) and (Line[K] = '''') then
+      begin
+        Result := Result + '''''';
+        I := K + 1;
+        Continue;
+      end;
+      Result := Result + C;
+      Inc(I);
+      Continue;
+    end;
+    if (C = '"') or (C = '`') or ((C = '''') and ((Lang = 'js') or (Lang = 'php'))) then
+    begin
+      Inc(I);
+      if not SkipString(C) and MultiLine(C) then InStr := C;
+      Result := Result + '""';
+      Continue;
+    end;
+    if (C = '/') and (I < N) and (Line[I + 1] = '*') then
     begin
       InBlock := True;
       Inc(I, 2);
       Continue;
     end;
-    if (Line[I] = '/') and (I < N) and (Line[I + 1] = '/') then Break;
-    Result := Result + Line[I];
+    if (C = '/') and (I < N) and (Line[I + 1] = '/') then Break;
+    Result := Result + C;
     Inc(I);
   end;
 end;
@@ -720,16 +792,18 @@ const
 var
   I, N, Ind, ClassInd, J: Integer;
   InBlock, IsKw: Boolean;
+  InStr: Char;
   T, S, Name, ClassName, Rest: string;
 begin
   Result := nil;
   N := 0;
   InBlock := False;
+  InStr := #0;
   ClassName := '';
   ClassInd := -1;
   for I := 0 to L.Count - 1 do
   begin
-    S := CCode(L[I], InBlock);
+    S := CCode(L[I], InBlock, InStr, 'js');
     T := Trim(S);
     if T = '' then Continue;
     Ind := Indent(S);
@@ -807,14 +881,16 @@ function OutlineGo(L: TStringList): TOutlineEntryArray;
 var
   I, N: Integer;
   InBlock: Boolean;
+  InStr: Char;
   S, T, Rest, Recv, Name: string;
 begin
   Result := nil;
   N := 0;
   InBlock := False;
+  InStr := #0;
   for I := 0 to L.Count - 1 do
   begin
-    S := CCode(L[I], InBlock);
+    S := CCode(L[I], InBlock, InStr, 'go');
     T := Trim(S);
     if (T = '') or (Indent(S) > 0) then Continue;
     if StartsWord(T, 'func') then
@@ -847,16 +923,18 @@ const
 var
   I, N, K, Ind, ImplInd: Integer;
   InBlock: Boolean;
+  InStr: Char;
   S, T, Name, Impl: string;
 begin
   Result := nil;
   N := 0;
   InBlock := False;
+  InStr := #0;
   ImplInd := -1;
   Impl := '';
   for I := 0 to L.Count - 1 do
   begin
-    S := CCode(L[I], InBlock);
+    S := CCode(L[I], InBlock, InStr, 'rust');
     T := Trim(S);
     if T = '' then Continue;
     Ind := Indent(S);
@@ -897,16 +975,18 @@ function OutlineKeywordLang(L: TStringList; IsPHP: Boolean): TOutlineEntryArray;
 var
   I, N, Ind, OwnerInd: Integer;
   InBlock: Boolean;
+  InStr: Char;
   S, T, Name, Owner, Kind: string;
 begin
   Result := nil;
   N := 0;
   InBlock := False;
+  InStr := #0;
   Owner := '';
   OwnerInd := -1;
   for I := 0 to L.Count - 1 do
   begin
-    if IsPHP then S := CCode(L[I], InBlock) else
+    if IsPHP then S := CCode(L[I], InBlock, InStr, 'php') else
     begin
       S := L[I];
       if Pos('#', S) > 0 then S := Copy(S, 1, Pos('#', S) - 1);
@@ -1257,7 +1337,7 @@ var
   Entries: TOutlineEntryArray;
   Body, Summary, Names, Prefix: string;
   Sb: TStringBuilder;
-  I, Cut: Integer;
+  I, Cut, SubCut: Integer;
 begin
   Dirs := TStringList.Create;
   Files := TStringList.Create;
@@ -1291,15 +1371,27 @@ begin
       Names := OfferedNames(Entries);
       if Names <> '' then Sb.Append('    ').Append(Names).Append(#10);
     end;
+    SubCut := 0;
     for I := 0 to Dirs.Count - 1 do
     begin
+      { The same budget as the files above: a root made of nothing but
+        directories (a monorepo) listed 3,000 of them, 425 KB (Codex on
+        #626). }
+      if Sb.Length > OutlineBudget then
+      begin
+        SubCut := Dirs.Count - I;
+        Break;
+      end;
       Sub.Clear;
       CollectSources(JoinPath(Dir, Dirs[I]), Sub, 1000);
       Sb.Append(Prefix).Append(Dirs[I]).Append('/  ').Append(IntToStr(Sub.Count));
       if Sub.Count = 1000 then Sb.Append('+');
       Sb.Append(' source files').Append(#10);
     end;
-    if Dirs.Count > 0 then
+    if SubCut > 0 then
+      Sb.Append(Format('(+%d more subdirectories not shown -- outline one by path)'#10,
+                       [SubCut]))
+    else if Dirs.Count > 0 then
       Sb.Append('(outline a directory to see its files)').Append(#10);
     if Cut > 0 then
       Sb.Append(Format('(+%d more source files not shown -- outline one by path)'#10, [Cut]));

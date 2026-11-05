@@ -306,6 +306,35 @@ begin
   AssertContains(S, 'Cart.total@3 method/1/', 'php method');
   AssertContains(S, 'helper@6 function/0/', 'php function');
 
+  WriteLn('-- strings that hold comment openers (Codex on #626)');
+  E := OutlineSource(Lines(['const pattern = "/*";', 'function real() {}',
+    'class Linked extends base(''http://x'') {', '  open() {', '  }', '}',
+    'const t = `a template', 'function inATemplate() {', '`;',
+    'function afterTemplate() {}']), 'js', Summary);
+  S := Shape(E);
+  AssertContains(S, 'real@2 function', 'a "/*" in a JS string opens no comment');
+  AssertContains(S, 'Linked.open@4 method/1/',
+                 'a // in a string does not cut the line (the class''s { is after it)');
+  AssertMissing(S, 'inATemplate', 'a template literal''s lines are text');
+  AssertContains(S, 'afterTemplate@10 function', 'and code resumes after it');
+
+  E := OutlineSource(Lines(['package p', 'var r, q = ''`'', ''"''', 'func A() {}', 'var raw = `/*',
+    'func InRaw() {}', '`', 'func B() {}']), 'go', Summary);
+  S := Shape(E);
+  AssertContains(S, 'A@3 func', 'a Go rune holding a quote or a backtick opens no string');
+  AssertMissing(S, 'InRaw', 'a raw string''s lines are text');
+  AssertContains(S, 'B@7 func', 'and code resumes after it');
+
+  E := OutlineSource(Lines(['impl<''a> Store {', '    fn get(&self) -> &str { "/*" }',
+    '}', 'const Q: char = ''"'';', 'fn after() {}']), 'rust', Summary);
+  S := Shape(E);
+  AssertContains(S, 'Store.get@2 method/1/', 'a Rust lifetime opens nothing: the impl''s { is still seen');
+  AssertContains(S, 'after@5 fn', 'a string''s "/*" opens no comment, nor a char literal''s quote a string');
+
+  E := OutlineSource(Lines(['<?php', '$p = ''/*'';', 'function real() {}']), 'php', Summary);
+  S := Shape(E);
+  AssertContains(S, 'real@3 function', 'a PHP string''s "/*" opens no comment');
+
   AssertTrue((OutlineLanguage('a.PAS') = 'pascal') and (OutlineLanguage('desktop.html') = 'js') and
              (OutlineLanguage('x.tsx') = 'js') and (OutlineLanguage('Makefile') = ''),
              'languages come from the file name');
@@ -385,6 +414,15 @@ begin
     Out_ := R.RunTool('code_outline', '{"path":"src/big.py"}', Err);
     AssertTrue(Length(Out_) < OutlineBudget + 400, 'a big file''s outline stays within the budget');
     AssertContains(Out_, 'more declarations -- read_file from line', 'and the cut says where to read on');
+
+    { A root of nothing but directories is held to the budget too (Codex
+      on #626: 3,000 of them were 425 KB). }
+    for I := 1 to 700 do
+      ForceDirectories(JoinPath(Dir, Format('many/subdirectory_with_a_long_name_%d', [I])));
+    Out_ := R.RunTool('code_outline', '{"path":"many"}', Err);
+    AssertTrue(Length(Out_) < OutlineBudget + 400,
+               'a directory of directories stays within the budget: ' + IntToStr(Length(Out_)));
+    AssertContains(Out_, 'more subdirectories not shown', 'and says how many it left out');
 
     { The sandbox. }
     R.RunTool('code_outline', '{"path":"no/such/dir"}', Err);
