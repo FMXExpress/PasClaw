@@ -40,6 +40,11 @@ uses
   --no-hashline or from config hashline_enabled: false. }
 procedure RegisterFSTools(R: TToolRegistry; UseHashline: Boolean = True);
 
+{ grep_files' walk rules, shared with code_outline (PasClaw.Tools.Outline)
+  so the two skip the same directories and the same binaries. }
+function IsBlockedGrepDir(const Name: string): Boolean;
+function LooksBinary(const Body: string): Boolean;
+
 implementation
 
 uses
@@ -48,6 +53,7 @@ uses
   PasClaw.Utils,
   PasClaw.Hashline,
   PasClaw.Tools.Sandbox,
+  PasClaw.Tools.Outline,   { code_outline registers beside grep_files }
   PasClaw.Checkpoints;
 
 var
@@ -633,6 +639,34 @@ begin
          or (Pos('\s', P) > 0) or (Pos('\b', P) > 0);
 end;
 
+function LooksLikeDefinitionSearch(const P: string): Boolean;
+const
+  K: array[0..9] of string = ('function ', 'procedure ', 'constructor ', 'def ',
+    'class ', 'func ', 'fn ', 'type ', 'interface ', 'struct ');
+var
+  I: Integer;
+  L: string;
+begin
+  Result := False;
+  L := LowerCase(TrimLeft(P));
+  for I := 0 to High(K) do
+    if (Copy(L, 1, Length(K[I])) = K[I]) and (Trim(Copy(L, Length(K[I]) + 1, MaxInt)) <> '') then
+      Exit(True);
+end;
+
+{ The name in "function TFoo.Bar(" -> "TFoo.Bar". }
+function DefinedName(const P: string): string;
+var
+  S: string;
+  I: Integer;
+begin
+  S := Trim(P);
+  S := Trim(Copy(S, Pos(' ', S) + 1, MaxInt));
+  I := 1;
+  while (I <= Length(S)) and (S[I] in ['A'..'Z', 'a'..'z', '0'..'9', '_', '.']) do Inc(I);
+  Result := Copy(S, 1, I - 1);
+end;
+
 function Tool_FSGrep(const ArgsJSON: string; out ErrMsg: string): string;
 { Recursive line scan returning hashline-formatted matches. Output looks
   like one section per matched file (¶path#hash header + N:line per
@@ -919,7 +953,13 @@ begin
       if LooksLikeRegexPattern(Pattern) then
         Result := Result + ' -- note: grep_files matches a LITERAL substring, ' +
           'not a regex. Search one plain term (e.g. "to_csv"), or run it once ' +
-          'per alternative.';
+          'per alternative.'
+      { A definition hunted by its keyword misses every spelling the guess
+        did not: a method body (TFoo.Bar), two spaces, "class function".
+        Measured in bench/codenav: 3 of 34 real lookups found nothing. }
+      else if LooksLikeDefinitionSearch(Pattern) then
+        Result := Result + ' -- to find where a name is defined, whatever its ' +
+          'keyword or owner: code_outline symbol="' + DefinedName(Pattern) + '".';
     end
     else
     begin
@@ -1839,6 +1879,10 @@ begin
   T.IsCore      := True;
   T.Category    := tcReadOnly;
   R.Register(T);
+
+  { code_outline -- where a name is declared, a file's declarations, a
+    directory's map. Beside grep_files and find_files, wherever they are. }
+  RegisterOutlineTool(R);
 
   { edit_file (was fs_edit_hashline) -- now registered UNCONDITIONALLY. The
     default old_text->new_text string-replacement mode works for every

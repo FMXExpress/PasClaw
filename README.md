@@ -45,6 +45,7 @@ See [Build](#build) for Delphi / cross-compile / Windows-on-ARM.
 |---|---|
 | `read_file` / `write_file` / `append_file` / `list_dir` | sandboxed filesystem access (`append_file` builds large files incrementally) |
 | `grep_files` | recursive substring search, returns line-numbered matches |
+| `code_outline` | a map of the code, made on demand: `symbol=` finds where a name is declared (not every use), a file gives its declarations with line numbers, a directory each file's purpose and names. Pascal, Python, JS/TS (and `.html` scripts), Go, Rust, Ruby, PHP — measured in [`bench/codenav`](bench/codenav/README.md) |
 | `edit_file` | `old_text`→`new_text` string replacement (default); optional hashline `patch` mode for line-anchored, hash-verified edits |
 | `apply_patch` | multi-file, context-anchored patch (Codex/OpenClaw format: add/update/delete/move in one atomic call) |
 | `shell_exec` | `/bin/sh -c` (or `cmd.exe`), output capped at 1 MiB, denylist-gated |
