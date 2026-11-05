@@ -191,8 +191,26 @@ begin
      list held only the foreman meant a worker holding an assigned task
      never ran: the lead cannot start another agent's turn, and nothing
      else was looking. Caught by a live probe; pinned here. *)
-  AssertEqInt(Length(TeamWakeList(T)), 5,
+  AssertEqInt(Length(TeamWakeList(T)), 6,
               'the whole team is eligible to be woken, not just the lead');
+  (* The Security Engineer: on the team, handed the sweep by the kickoff,
+     on the default tier, and told to file holes as findings -- the cause
+     on create is what lets the board prove the check that keeps one
+     fixed. *)
+  AssertEqStr(T.Agents[5].Name, 'sec', 'the software team has a Security Engineer');
+  AssertEqStr(T.Agents[5].Parent, 'foreman', 'reporting to the foreman');
+  AssertEqStr(T.Agents[5].Model, '', 'on the default tier, not the cheap one');
+  AssertContains(T.Kickoff, 'Security sweep', 'the kickoff hands it the sweep');
+  AssertContains(T.Agents[5].Role, 'cause="<kind>"', 'it files holes as findings');
+  AssertContains(T.Agents[5].Role, 'DEMONSTRATED', 'only holes it demonstrated');
+  AssertContains(T.Agents[5].Role, 'rule action=draft', 'and keeps fixed ones fixed');
+  AssertTrue(FindTeamTemplate('security', T2), 'the security sweep team is in the catalogue');
+  AssertEqInt(Length(T2.Agents), 2, 'two agents, like duo');
+  AssertEqStr(T2.Agents[1].Role, T.Agents[5].Role, 'the same Security Engineer');
+  AssertEqInt(Length(TeamLeads(T2)), 1, 'one lead');
+  AssertTrue((Length(T2.ReviewBy) = 0) and not T2.SkipReview,
+             'its board requires review, and the parent gives the verdict');
+  AssertContains(T2.Kickoff, 'nothing to sweep', 'and it stops when there is no app');
   AssertContains(T.Agents[2].Role, 'app.json',
                  'the developer role carries the app recipe');
   AssertContains(T.Agents[0].Role, 'open_agent',

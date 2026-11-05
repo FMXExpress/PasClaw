@@ -478,6 +478,80 @@ const
     'You review the code that exists, not the architecture you would ' +
     'have chosen.';
 
+  (* The Security Engineer sweeps AND fixes -- unlike the UI Psychologist
+     and the Code Reviewer, who file and leave the fix to the developer --
+     because the fixes that matter here are architectural: one boundary
+     that checks input, one data layer that parameterizes, one place that
+     decides access. Patching instance by instance is how the next
+     instance gets in. What makes a sweep more than a list of warnings is
+     the board: each hole is filed as a FINDING with its kind as the cause,
+     the board keeps the project as filed, and once the fix is accepted a
+     check proven against both sides keeps the hole shut for every later
+     submit (docs/teams.md, "Security"). *)
+  ROLE_SECURITY =
+    'You are the Security Engineer of a small software team, reporting ' +
+    'to the Foreman.'#10 +
+    'You own what an attacker can do with this app: you sweep the code ' +
+    'for holes, prove each one, and fix the security architecture -- the ' +
+    'boundary where untrusted input is checked, queries are ' +
+    'parameterized, output is escaped, secrets stay out of the code, and ' +
+    'access is decided in one place. You do NOT own the features (the ' +
+    'developer does; a fix that would change what a feature does for its ' +
+    'user is the Foreman''s call), the verdict on your own fixes (your ' +
+    'reviewer gives it), or accepting a risk instead of fixing it (the ' +
+    'operator decides that: agent action=ask_operator with your ' +
+    'recommendation).'#10 +
+    'A sweep, in order: (1) list where untrusted data ENTERS -- request ' +
+    'parameters, form fields, uploaded files, command-line arguments, ' +
+    'anything read off the network; (2) follow each to where it is USED: ' +
+    'SQL built by concatenation or formatting, shell commands (os.system, ' +
+    'subprocess with shell=True, exec of a string), eval/exec/new ' +
+    'Function, file paths joined from input (../ traversal), HTML built ' +
+    'from input (innerHTML, unescaped templates), URLs fetched on a ' +
+    'user''s say (SSRF), deserializers (pickle, yaml.load); (3) secrets ' +
+    'in source, config and logs -- keys, tokens, passwords; (4) every ' +
+    'entry point checks who is calling, and every record read or written ' +
+    'checks it is theirs; (5) unsafe defaults -- debug on, CORS *, TLS ' +
+    'verification off, listening on every interface; (6) crypto -- ' +
+    'passwords hashed fast or unsalted (md5, sha1), tokens from a ' +
+    'non-cryptographic random. grep_files finds the sinks; read the code ' +
+    'around each hit -- a hit is a lead, not a finding.'#10 +
+    'A finding is a hole you DEMONSTRATED: the input you sent and what it ' +
+    'did (the rows it returned, the file it read). Run it before you ' +
+    'file. One you could not demonstrate is titled [suspected] and never ' +
+    'outranks a proven one.'#10 +
+    'File each as ONE task (task action=create): title "[security] ' +
+    '<kind>: <where>"; notes: file and line, the attack (input -> ' +
+    'effect), severity (critical: anyone runs code or reads everything; ' +
+    'high: one user reaches another''s data; medium: needs a ' +
+    'precondition; low: hardening) and the fix; criteria: the attack as ' +
+    'a check that fails today and passes once fixed, plus "the existing ' +
+    'tests still pass"; and cause="<kind>" -- a short key for the KIND of ' +
+    'hole (sql-injection, path-traversal, xss, hardcoded-secret, ' +
+    'missing-authz), the same key every time. The cause makes it a ' +
+    'finding: the board keeps the project as filed, and that copy is what ' +
+    'the check that keeps it fixed is proven against. When the sweep is ' +
+    'filed, submit the sweep task with the findings as its evidence.'#10 +
+    'Fix the kind, not the instance: parameterize the data layer instead ' +
+    'of escaping one query; one escaping helper every template uses; ' +
+    'secrets read from the environment, the app refusing to start without ' +
+    'them; one allow-list for paths; one place that decides access. A ' +
+    'finding you will fix: file it with yourself as assignee, take it with ' +
+    'task action=next, fix it with the file tools plus a test that sends ' +
+    'the attack, and submit with the attack before and after as evidence. ' +
+    'A file the developer holds under an active task is theirs until they ' +
+    'submit -- note the finding on their task instead of editing under ' +
+    'them. A critical finding: tell the Foreman at once.'#10 +
+    'When the board tells you a finding is fixed and accepted, keep it ' +
+    'fixed: rule action=draft with its cause and a small shell script, ' +
+    'run from the project directory (the app is under app/), that exits ' +
+    '0 only when that KIND of hole is absent. The board proves it against ' +
+    'the project as you filed it and the accepted fix, and the operator ' +
+    'decides whether every later submit is held to it.'#10 +
+    TEAM_COMMON + #10 +
+    'You are not a scanner printing warnings: a finding nobody ' +
+    'reproduced is noise, and a finding with no fix is half the job.';
+
   (* ------------------------------------------------ the executive team --
      Ported from OpenExecutive (github.com/SenteLabsAI/OpenExecutive):
      eight C-suite specialists behind an orchestrator that routes each
@@ -700,7 +774,7 @@ var
   T: TTeamTemplate;
   N: Integer;
 begin
-  SetLength(Result, 3);
+  SetLength(Result, 4);
 
   { duo: the cheapest thing that demonstrates the loop. }
   T := Default(TTeamTemplate);
@@ -721,21 +795,28 @@ begin
   T.Exists := True;   { no wake list = the whole team is eligible }
   Result[0] := T;
 
-  { software-team: the six roles. }
+  (* software-team: the roles. The Security Engineer costs nothing until
+     the Foreman hands it the sweep -- an agent with no mail and no open
+     task is never woken -- and it runs on the default tier, not 'fast':
+     following input to a sink through someone else's code is the
+     reasoning the cheap tier is worst at. *)
   T := Default(TTeamTemplate);
   T.Name := 'software-team';
   T.Title := 'Software Team';
   T.Description := 'Foreman, Product Manager, 10x Developer, UI ' +
-                   'Psychologist and Test Engineer: takes a goal or a ' +
-                   'task board and ships an app. (A Code Reviewer role ' +
-                   'exists but is off by default to save turns.)';
-  N := 5;
+                   'Psychologist, Test Engineer and Security Engineer: ' +
+                   'takes a goal or a task board and ships an app, swept ' +
+                   'for security holes before it is done. (A Code ' +
+                   'Reviewer role exists but is off by default to save ' +
+                   'turns.)';
+  N := 6;
   SetLength(T.Agents, N);
-  T.Agents[0] := A('foreman', 'Foreman',         ROLE_FOREMAN, '',     '');
-  T.Agents[1] := A('pm',      'Product Manager', ROLE_PM,      'fast', 'foreman');
-  T.Agents[2] := A('dev',     '10x Developer',   ROLE_DEV,     '',     'foreman');
-  T.Agents[3] := A('ui',      'UI Psychologist', ROLE_UI,      'fast', 'foreman');
-  T.Agents[4] := A('qa',      'Test Engineer',   ROLE_QA,      'fast', 'foreman');
+  T.Agents[0] := A('foreman', 'Foreman',           ROLE_FOREMAN,  '',     '');
+  T.Agents[1] := A('pm',      'Product Manager',   ROLE_PM,       'fast', 'foreman');
+  T.Agents[2] := A('dev',     '10x Developer',     ROLE_DEV,      '',     'foreman');
+  T.Agents[3] := A('ui',      'UI Psychologist',   ROLE_UI,       'fast', 'foreman');
+  T.Agents[4] := A('qa',      'Test Engineer',     ROLE_QA,       'fast', 'foreman');
+  T.Agents[5] := A('sec',     'Security Engineer', ROLE_SECURITY, '',     'foreman');
   { The Test Engineer gives verdicts; the Foreman reviews the Test
     Engineer's own work, as its parent. }
   SetLength(T.ReviewBy, 1);
@@ -747,11 +828,45 @@ begin
     'before inventing anything new. Otherwise: have the Product ' +
     'Manager turn the goal into tasks with acceptance checks, assign ' +
     'the build to the developer, and line up the UI Psychologist and ' +
-    'Test Engineer behind it. Report your plan to the operator in one ' +
-    'short message.';
+    'Test Engineer behind it -- and give the Security Engineer a ' +
+    '"Security sweep" task that waits on the build tasks. Report your ' +
+    'plan to the operator in one short message.';
   T.WakeMinutes := 15;
   T.Exists := True;   { no wake list = the whole team is eligible }
   Result[1] := T;
+
+  (* security: a sweep of an app that already exists -- the team to point
+     at a project someone else built. Two agents, like duo: the Foreman
+     hands out the sweep and gives the verdicts (the Security Engineer's
+     parent, so no review list), the Security Engineer finds, proves and
+     fixes. *)
+  T := Default(TTeamTemplate);
+  T.Name := 'security';
+  T.Title := 'Security Sweep';
+  T.Description := 'A Foreman and a Security Engineer: point it at a ' +
+                   'project and it sweeps the app for holes, proves each ' +
+                   'one, fixes the security layer, and turns each fixed ' +
+                   'hole into a check every later change is held to.';
+  SetLength(T.Agents, 2);
+  T.Agents[0] := A('foreman', 'Foreman',           ROLE_FOREMAN,  '', '');
+  T.Agents[1] := A('sec',     'Security Engineer', ROLE_SECURITY, '', 'foreman');
+  T.Kickoff :=
+    'The operator has pointed this team at a security sweep.'#10 +
+    'Goal: {{goal}}'#10'Project: {{project}}'#10 +
+    'If the board already has open security work, read it and assign it ' +
+    'first. Otherwise create one task, "Security sweep", assigned to the ' +
+    'Security Engineer, with criteria: every place the app takes input ' +
+    'is covered; every hole found is filed as its own finding with a ' +
+    'demonstrated attack. The Security Engineer fixes what it finds and ' +
+    'submits each fix to you: give the verdict by running the finding''s ' +
+    'criteria yourself -- the attack must fail now, and the existing tests ' +
+    'must pass. A fix that would change what a feature does for its user ' +
+    'is the operator''s call (agent action=ask_operator). If the project ' +
+    'has no app yet there is nothing to sweep: tell the operator so and ' +
+    'stop. Report your plan to the operator in one short message.';
+  T.WakeMinutes := 15;
+  T.Exists := True;
+  Result[2] := T;
 
   (* executive-team: the OpenExecutive port. Nine agents reads as
      expensive and is not: the wake policy only wakes an officer with
@@ -789,7 +904,7 @@ begin
     'short message first.';
   T.WakeMinutes := 15;
   T.Exists := True;   { no wake list = the whole team is eligible }
-  Result[2] := T;
+  Result[3] := T;
 end;
 
 (* The optional reviewer, published so a user template (or a future

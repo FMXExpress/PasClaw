@@ -472,6 +472,17 @@ begin
   ExpectTrue(AgentPending('nr-dev') = DevMail + 1, 'and its owner is told');
   ExpectTrue(AgentPending('nr-lead') = LeadMail + 1, 'the lead is not: it has an owner');
 
+  { The operator files a finding from the desktop: "cause" on create. }
+  ExpectTrue(Req('POST', '/v1/projects/done-board/tasks',
+                 '{"title":"[security] hardcoded-secret: config","cause":"hardcoded-secret"}', R) and
+             (R.Status = 200), 'a finding is filed over HTTP');
+  ExpectTrue(GetTask('done-board', 'T0005', T) and (T.FindingCause = 'hardcoded-secret') and
+             (T.FoundBy = 'operator'), 'as the operator''s, by its kind');
+  ExpectTrue(Req('GET', '/v1/projects/done-board/tasks/T0005', '', R) and
+             (Pos('"finding_cause"', R.Body) > 0), 'and the task reads back as a finding');
+  ExpectTrue(Req('GET', '/v1/projects/done-board/tasks/T0004', '', R) and
+             (Pos('"finding_cause"', R.Body) = 0), 'an ordinary task carries no finding fields');
+
   { The operator's park outlasts new work: team down clears the board's
     mark, so the next task does not undo it. }
   LoadTeamState('nr-team', S);

@@ -545,6 +545,11 @@ begin
   Result.PutStr('verdict_by',    T.VerdictBy);
   Result.PutStr('verdict_at',    T.VerdictAt);
   Result.PutStr('verdict_note',  T.VerdictNote);
+  if T.FindingCause <> '' then
+  begin
+    Result.PutStr('finding_cause', T.FindingCause);
+    Result.PutStr('found_by', T.FoundBy);
+  end;
   Result.PutStr('created', T.Created);
   Result.PutStr('updated', T.Updated);
   Result.PutInt('jobs',    T.JobCount);
@@ -2255,9 +2260,11 @@ begin
           ReplyErr(Resp, 400, 'expected a JSON body with "title"');
           Exit;
         end;
+        { "cause" files it as a finding, the same as the task tool's. }
         TaskId := CreateTask(Project, Obj.GetStr('title', ''),
                              Obj.GetStr('notes', ''), Err,
-                             Obj.GetStr('criteria', ''));
+                             Obj.GetStr('criteria', ''), ActorOperator,
+                             Obj.GetStr('cause', ''));
         if TaskId = '' then
         begin
           ReplyErr(Resp, 400, Err);
