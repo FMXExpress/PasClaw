@@ -1369,6 +1369,7 @@ test-progress-ledger: | $(BUILDDIR)
 # touching the team tick, the board's notices or the task tool.
 bench-teamboard: $(BIN)
 	@python3 bench/teamboard/replay.py --bin $(BIN)
+	@python3 bench/teamboard/replay.py --bin $(BIN) --answers bench/teamboard/security-notes.json
 
 # Deterministic agent-loop harness bench (bench/agentloop) -- pure FPC, no
 # external runtime. Spawns the built binary, plays the scripted model over

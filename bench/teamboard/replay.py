@@ -13,8 +13,16 @@ different message count): the harness changed what an agent saw, and the
 recording no longer applies -- re-record it (LIVE.md says how) rather than
 trusting the numbers.
 
-    make bench-teamboard            # build/pasclaw, port 8300
+security-notes.json (LIVE.md, run 4) is the `security` team sweeping a
+seeded app. Its fixture carries the app ("seed", written into the project
+before `team up --project`) and "ordered": answers go out in the recorded
+order across agents, not as each job arrives -- the Security Engineer's
+check for a hole can only be proven after the Foreman accepted the fix,
+and an instant replay would otherwise race past the verdict.
+
+    make bench-teamboard            # both fixtures, build/pasclaw, port 8300
     python3 bench/teamboard/replay.py --bin build/pasclaw --port 8300
+    python3 bench/teamboard/replay.py --answers bench/teamboard/security-notes.json
 
 Needs python3 and a free port; spawns `pasclaw serve`, so it is not part of
 `make test`. Exit 0 = the board finished and its tests pass.
@@ -88,8 +96,22 @@ def main():
                 time.sleep(0.1)
         threading.Thread(target=poll, daemon=True).start()
         time.sleep(0.5)
-        up = subprocess.run([binary, 'team', 'up', rec['team'], '--goal', rec['goal']],
-                            cwd=run, env=env, capture_output=True, text=True)
+        project = rec.get('project', 'wordcount-py')
+        cmd = [binary, 'team', 'up', rec['team'], '--goal', rec['goal']]
+        if 'seed' in rec:
+            # An existing app for the team to work on: the project, then its files.
+            urllib.request.urlopen(urllib.request.Request(
+                base + '/v1/projects', method='POST',
+                data=json.dumps({'title': rec.get('project_title', project),
+                                 'name': project}).encode(),
+                headers={'Content-Type': 'application/json'}), timeout=10).read()
+            pdir = os.path.join(home, 'workspace', 'projects', project)
+            for rel, text in rec['seed'].items():
+                path = os.path.join(pdir, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                open(path, 'w').write(text)
+            cmd += ['--project', project]
+        up = subprocess.run(cmd, cwd=run, env=env, capture_output=True, text=True)
         if up.returncode != 0:
             print(up.stdout + up.stderr)
             return 2
@@ -102,10 +124,30 @@ def main():
 
         t0, done, calls, nbytes, waits, last_answer = None, 0, 0, 0, [], None
         deadline = time.time() + 600
+        ordered = rec.get('ordered', False)
+        held = []   # ordered: jobs that arrived ahead of their turn
+        # Nothing for this long means a wake the recording had never came --
+        # a notice the harness stopped sending. Longer than the CLI kickoff's
+        # first slice (30 s), which is the one wait the harness owns.
+        stall, progress = 45, time.time()
         while done < total and time.time() < deadline:
+            if time.time() - progress > stall:
+                print('STALLED after %d of %d answers: no job for %s (answer %d) in %ds '
+                      '-- a wake the recording had did not happen'
+                      % (done, total, rec['answers'][done]['agent'], done + 1, stall))
+                return 1
             with lock:
-                pending = list(jobs)
+                held.extend(jobs)
                 del jobs[:]
+            if ordered:
+                # Only the job of the agent whose answer is next in the recording.
+                want = rec['answers'][done]['agent']
+                pick = next((h for h in held if who(h[1]) == want), None)
+                pending = [pick] if pick else []
+                if pick:
+                    held.remove(pick)
+            else:
+                pending, held = held, []
             if not pending:
                 time.sleep(0.02)
                 continue
@@ -131,22 +173,40 @@ def main():
                     headers={'Content-Type': 'application/json'}, method='POST'),
                     timeout=30).read()
                 last_answer = time.time()
+                progress = last_answer
                 done += 1
         if done < total:
             print('timed out after %d of %d answers' % (done, total))
             return 1
         wall = last_answer - t0
-        app = os.path.join(home, 'workspace', 'projects', 'wordcount-py', 'app')
+        time.sleep(0.5)   # the last answer's tool calls finish in the gateway
+        app = os.path.join(home, 'workspace', 'projects', project, 'app')
         tests = subprocess.run([sys.executable, '-m', 'unittest'], cwd=app,
                                capture_output=True, text=True)
         ok = tests.returncode == 0
+        board = json.load(urllib.request.urlopen(
+            base + '/v1/projects/%s/tasks' % project, timeout=10))['tasks']
+        done_tasks = sum(1 for t in board if t['status'] == 'done')
+        ok = ok and done_tasks == len(board)
+        # Proven checks waiting for the operator: what a sweep leaves behind.
+        rules = [d for d in json.load(urllib.request.urlopen(
+                    base + '/v1/decisions?open=1', timeout=10))['decisions']
+                 if d['kind'] == 'rule']
+        want_rules = rec.get('rules_proven')
+        if want_rules is not None and len(rules) != want_rules:
+            print('expected %d proven rules waiting, found %d' % (want_rules, len(rules)))
+            ok = False
         print('replayed %d answers: kickoff -> last answer %.1fs' % (total, wall))
         print('handoff waits: %s s' % ', '.join('%.1f' % w for w in waits))
-        print('provider calls %d, request bytes %d, board tests %s'
-              % (calls, nbytes, 'pass' if ok else 'FAIL'))
+        print('provider calls %d, request bytes %d, board %d/%d done, app tests %s, '
+              'proven rules waiting %d'
+              % (calls, nbytes, done_tasks, len(board),
+                 'pass' if tests.returncode == 0 else 'FAIL', len(rules)))
         print(json.dumps({'wall_s': round(wall, 2), 'calls': calls, 'request_bytes': nbytes,
                           'handoff_wait_s': [round(w, 2) for w in waits],
-                          'board_tests_pass': ok}))
+                          'board_done': done_tasks == len(board),
+                          'board_tests_pass': tests.returncode == 0,
+                          'rules_proven': len(rules)}))
         return 0 if ok else 1
     finally:
         gw.terminate()

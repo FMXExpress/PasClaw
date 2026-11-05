@@ -479,6 +479,8 @@ begin
          Rows[I].Title;
     if Rows[I].Assignee <> '' then
       S := S + '  @' + Rows[I].Assignee;
+    if Rows[I].FindingCause <> '' then
+      S := S + '  (finding: ' + Rows[I].FindingCause + ')';
     if Rows[I].JobCount > 0 then
       S := S + '  (jobs: ' + IntToStr(Rows[I].JobCount) + ')';
     S := S + #10;
@@ -720,7 +722,7 @@ function Tool_Task(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Obj: TJsonObject;
   Action, Project, Id, Title, Notes, Status, Summary, JobId, Assignee, Err,
-    Criteria, Actor, Verdict, Reason, SubmitErr, Delivered, Owner: string;
+    Criteria, Actor, Verdict, Reason, SubmitErr, Delivered, Owner, SnapErr: string;
   HasCriteria, HasWaits, Accept: Boolean;
   Jobs: TJobInfoArray;
   T: TTaskInfo;
@@ -754,13 +756,28 @@ begin
       Notes := Obj.GetStr('notes', '');
       Criteria := CriteriaArg(Obj, HasCriteria);
       WaitsOn := WaitsOnArg(Obj, HasWaits);
-      Id := CreateTask(Project, Title, Notes, Err, Criteria, Actor);
+      Id := CreateTask(Project, Title, Notes, Err, Criteria, Actor,
+                       Obj.GetStr('cause', ''), SnapErr);
       if Id = '' then
       begin
         ErrMsg := Err;
         Exit;
       end;
       Result := 'Created task ' + Id + ' in ' + Project + ': ' + Title;
+      (* Said back, because the snapshot is what makes the finding worth
+         filing with a cause: the check that keeps it fixed is proven
+         against it. *)
+      if GetTask(Project, Id, T) and (T.FindingCause <> '') then
+      begin
+        if T.FindingSnapshot <> '' then
+          Result := Result + ' (a finding: ' + T.FindingCause + '; the project ' +
+                    'is kept as filed, ' + T.FindingSnapshot + ', for the check ' +
+                    'that keeps it fixed)'
+        else
+          Result := Result + ' (a finding: ' + T.FindingCause + '; the project ' +
+                    'could NOT be kept as filed -- ' + SnapErr + ' -- so no ' +
+                    'check can be proven against this one)';
+      end;
       if HasWaits and (Length(WaitsOn) > 0) then
       begin
         if SetTaskWaitsOn(Project, Id, WaitsOn, Actor, Err) then
@@ -1088,26 +1105,38 @@ begin
 end;
 
 type
-  { A submission rejected for the cause, and the same task's accepted fix. }
+  (* The work as it stood with the mistake in it, and the same task's
+     accepted fix. The first is a submission rejected for the cause, or --
+     for a finding -- the project as the finding was filed. *)
   TProofPair = record
     Task, Rejected, Accepted: string;   { task id, two snapshot ids }
+    Finding: Boolean;   { Rejected is a finding's snapshot, not a submission's }
   end;
 
-(* The newest reject for Cause that has a snapshot and a LATER accept of
-   the same task with one. Newest first, because the most recent instance
-   of a mistake is the one the current code most resembles. *)
+{ How a report names the side a check must fail on. }
+function FailSide(const P: TProofPair): string;
+begin
+  if P.Finding then Result := 'the project as the finding was filed'
+  else Result := 'the rejected submission';
+end;
+
+(* The newest reject -- or finding -- for Cause that has a snapshot and a
+   LATER accept of the same task with one. Newest first, because the most
+   recent instance of a mistake is the one the current code most
+   resembles. *)
 function FindProofPair(const Project, Cause: string; out P: TProofPair): Boolean;
 var
   Lines: TStringArray;
   I, J: Integer;
-  Tk: string;
+  Tk, Ev: string;
 begin
   Result := False;
   P := Default(TProofPair);
   Lines := ReadActivity(Project, '');
   for I := High(Lines) downto 0 do
   begin
-    if (LineField(Lines[I], 'event') <> 'reject') or
+    Ev := LineField(Lines[I], 'event');
+    if ((Ev <> 'reject') and (Ev <> 'create')) or
        (LineField(Lines[I], 'cause') <> Cause) or
        (LineField(Lines[I], 'snapshot') = '') then Continue;
     Tk := LineField(Lines[I], 'task');
@@ -1119,6 +1148,7 @@ begin
         P.Task := Tk;
         P.Rejected := LineField(Lines[I], 'snapshot');
         P.Accepted := LineField(Lines[J], 'snapshot');
+        P.Finding := Ev = 'create';
         Exit(True);
       end;
   end;
@@ -1286,9 +1316,10 @@ begin
   if not FindProofPair(Project, C, P) then
   begin
     Err := 'nothing to prove "' + C + '" against yet: a rule has to FAIL on ' +
-           'a submission that was rejected for it and PASS on that task''s ' +
-           'accepted fix, and ' + Project + ' has no task rejected for "' + C +
-           '" that was accepted since (with both submissions snapshotted).';
+           'the work with the mistake in it -- a submission rejected for it, ' +
+           'or a finding filed with cause "' + C + '" -- and PASS on that ' +
+           'task''s accepted fix, and ' + Project + ' has no such task that ' +
+           'was accepted since (with both sides snapshotted).';
     Exit;
   end;
   RejDir := SnapshotDir(Project, P.Task, P.Rejected);
@@ -1321,12 +1352,12 @@ begin
   Failed1 := (Length(R1) = 1) and not R1[0].Passed;
   Passed2 := (Length(R2) = 1) and R2[0].Passed;
   Report := 'proof for "' + C + '" on ' + P.Task + ':'#10 +
-            '  the rejected submission (' + P.Rejected + '): ' + Outcome(R1) + #10 +
+            '  ' + FailSide(P) + ' (' + P.Rejected + '): ' + Outcome(R1) + #10 +
             '  the accepted fix (' + P.Accepted + '): ' + Outcome(R2);
   if not Failed1 then
   begin
     Err := 'not proven: the check does not catch "' + C + '" -- it passed on ' +
-           'the submission that was rejected for it.'#10 + Report;
+           FailSide(P) + '.'#10 + Report;
     Exit;
   end;
   if not Passed2 then
@@ -1355,14 +1386,20 @@ begin
     Sub := TJsonObject.Create;
     Sub.PutStr('task', P.Task);
     Sub.PutStr('snapshot', P.Rejected);
+    if P.Finding then Sub.PutBool('finding', True);
     Obj.PutObject('rejected', Sub);
     Sub := TJsonObject.Create;
     Sub.PutStr('task', P.Task);
     Sub.PutStr('snapshot', P.Accepted);
     Obj.PutObject('accepted', Sub);
-    Q := 'Add a held-out check for "' + C + '" to ' + Project + '? It fails ' +
-         'on ' + P.Task + '''s rejected submission and passes on its ' +
-         'accepted fix; approved, every submit is held to it.';
+    if P.Finding then
+      Q := 'Add a held-out check for "' + C + '" to ' + Project + '? It fails ' +
+           'on the project as ' + P.Task + '''s finding was filed and passes ' +
+           'on its accepted fix; approved, every submit is held to it.'
+    else
+      Q := 'Add a held-out check for "' + C + '" to ' + Project + '? It fails ' +
+           'on ' + P.Task + '''s rejected submission and passes on its ' +
+           'accepted fix; approved, every submit is held to it.';
     Id := CreateDecision('rule', ActorLabel(Actor), Q, Names2('approve', 'decline'),
                          Project, '', '', Obj.ToJSON, Err);
   finally
@@ -1431,6 +1468,51 @@ begin
     AgentSend(Leads[I], 'board', Text, Delivered, Err);
 end;
 
+(* OnTaskClosed, for findings: the defect a finding was filed about is
+   fixed and accepted, so a check that keeps it fixed can be proven now --
+   it must fail on the project as filed and pass on the fix. Whoever filed
+   it hears (an agent; the leads when the operator filed it), once per
+   cause: not when a rule exists, the operator declined one, or a draft is
+   waiting. A task closed without a verdict has no accepted snapshot to
+   prove against, and the board says nothing. *)
+procedure NoticeFixedFinding(const Project, TaskId: string);
+var
+  T: TTaskInfo;
+  P: TProofPair;
+  Who: TStringArray;
+  I: Integer;
+  Text, Delivered, Err: string;
+begin
+  if not GetTask(Project, TaskId, T) or (T.FindingCause = '') then Exit;
+  if InList(T.FindingCause, ProjectCauses(Project, 'rule_causes')) or
+     InList(T.FindingCause, ProjectCauses(Project, 'declined_causes')) or
+     (OpenRuleDecision(Project, T.FindingCause) <> '') then Exit;
+  if not FindProofPair(Project, T.FindingCause, P) then Exit;
+  Text := Format('%s ("%s") on %s is fixed and accepted -- the "%s" finding ' +
+                 '%s filed. Keep it fixed: rule action="draft" project="%s" ' +
+                 'cause="%s" script="..." -- a check, run from the project ' +
+                 'directory, that exits 0 only when this KIND of defect is ' +
+                 'absent (write it to the kind, not the one line). It must ' +
+                 'fail on the project as the finding was filed and pass on ' +
+                 'the accepted fix; then the operator decides whether every ' +
+                 'submit is held to it.',
+                 [T.Id, T.Title, Project, T.FindingCause, T.FoundBy, Project,
+                  T.FindingCause]);
+  if (T.FoundBy <> '') and (T.FoundBy <> ActorLabel(ActorOperator)) and
+     (T.FoundBy <> ActorLabel(ActorModel)) and
+     AgentSend(T.FoundBy, 'board', Text, Delivered, Err) then Exit;
+  Who := LeadsFor(Project);
+  for I := 0 to High(Who) do
+    AgentSend(Who[I], 'board', Text, Delivered, Err);
+end;
+
+{ OnTaskClosed: what waited on the task, and a finding's check. }
+procedure TaskClosed(const Project, TaskId: string);
+begin
+  NotifyDependents(Project, TaskId);
+  NoticeFixedFinding(Project, TaskId);
+end;
+
 function RulesJSON(const Project: string): string;
 var
   Root, Item: TJsonObject;
@@ -1438,7 +1520,7 @@ var
   Lines, Seen, Tasks, L: TStringArray;
   SR: TSearchRec;
   I, J: Integer;
-  C, Dir: string;
+  C, Dir, Ev: string;
 begin
   Root := TJsonObject.Create;
   try
@@ -1468,7 +1550,9 @@ begin
     for I := 0 to High(Lines) do
     begin
       C := LineField(Lines[I], 'cause');
-      if (LineField(Lines[I], 'event') <> 'reject') or (C = '') or InList(C, Seen) then
+      Ev := LineField(Lines[I], 'event');
+      { A cause is on the board once it rejected work or a finding named it. }
+      if ((Ev <> 'reject') and (Ev <> 'create')) or (C = '') or InList(C, Seen) then
         Continue;
       SetLength(Seen, Length(Seen) + 1);
       Seen[High(Seen)] := C;
@@ -1478,6 +1562,12 @@ begin
       TArr := TJsonArray.Create;
       for J := 0 to High(Tasks) do TArr.AddStr(Tasks[J]);
       Item.PutArray('tasks', TArr);
+      TArr := TJsonArray.Create;
+      for J := 0 to High(Lines) do
+        if (LineField(Lines[J], 'event') = 'create') and
+           (LineField(Lines[J], 'cause') = C) then
+          TArr.AddStr(LineField(Lines[J], 'task'));
+      Item.PutArray('findings', TArr);
       Item.PutStr('open_draft', OpenRuleDecision(Project, C));
       Arr.AddObject(Item);
     end;
@@ -2029,7 +2119,7 @@ begin
     '"evidence":{"type":"string","description":"What you ran and what it printed (action=submit)."},' +
     '"verdict":{"type":"string","enum":["accept","reject"],"description":"action=verdict."},' +
     '"reason":{"type":"string","description":"Why it is rejected, with exact reproduction steps (required to reject)."},' +
-    '"cause":{"type":"string","description":"A short key naming the KIND of mistake, reused across tasks, e.g. untested-empty-input (reject)."}' +
+    '"cause":{"type":"string","description":"A short key naming the KIND of mistake, reused across tasks, e.g. untested-empty-input (reject). On create: a FINDING of that kind (sql-injection); the board keeps the project as filed."}' +
     '},"required":["action","project"]}';
   T.Handler     := Tool_Task;
   T.HandlerObj  := nil;
@@ -2046,14 +2136,15 @@ begin
     'reviewers gave the rejects) and "script" (a shell check, run with the ' +
     'project as its cwd, exit 0 = right); optional "name" (file name). The ' +
     'draft is PROVEN first -- it must fail on a submission rejected for ' +
-    'that cause and pass on the accepted fix -- and then waits for the ' +
+    'that cause (or on the project as a finding with that cause was ' +
+    'filed) and pass on the accepted fix -- and then waits for the ' +
     'operator to approve. action="list" shows the rules, and how often ' +
     'each cause has rejected work.';
   T.Schema      :=
     '{"type":"object","properties":{' +
     '"action":{"type":"string","enum":["draft","list"]},' +
     '"project":{"type":"string","description":"Project slug (always required)."},' +
-    '"cause":{"type":"string","description":"The reject cause the check catches (draft)."},' +
+    '"cause":{"type":"string","description":"The reject or finding cause the check catches (draft)."},' +
     '"script":{"type":"string","description":"The check: shell (or python with name *.py), cwd = the project, exit 0 when the work is right (draft)."},' +
     '"name":{"type":"string","description":"File name for the check, e.g. empty-title.sh (draft; optional)."}' +
     '},"required":["action","project"]}';
@@ -2121,7 +2212,7 @@ initialization
     that can run an agent links this unit, and the store must not link
     the shell backend to get it. }
   OnSubmitGate := ProjectScenarioGate;
-  OnTaskClosed := NotifyDependents;
+  OnTaskClosed := TaskClosed;
   OnTaskAssigned := NotifyAssignee;
   OnTaskRejected := NoticeRepeatedCause;
   OnLaneCheck := LaneCheck;

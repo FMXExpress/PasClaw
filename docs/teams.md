@@ -50,7 +50,8 @@ the whole transcript but no times.
 | Template | Agents |
 |---|---|
 | `duo` | Foreman, 10x Developer — the smallest team that plans, builds and reports |
-| `software-team` | Foreman, Product Manager, 10x Developer, UI Psychologist, Test Engineer |
+| `software-team` | Foreman, Product Manager, 10x Developer, UI Psychologist, Test Engineer, Security Engineer |
+| `security` | Foreman, Security Engineer — point it at a project that already exists; it sweeps the app, fixes what it finds, and keeps each hole shut ([Security](#security-a-sweep-that-stays-fixed)) |
 | `executive-team` | Chief of Staff routing eight C-suite officers — Strategy, Finance, People, Legal (General Counsel), Operations, Marketing, Product, Board Comms |
 
 `executive-team` is a port of
@@ -102,6 +103,73 @@ Roles carry checklists rather than adjectives (the Test Engineer's is
 "empty input, wrong input, out of order, twice") and each ends on one
 anti-pattern line ("the 10x is never claiming done untested, not
 volume").
+
+## Security: a sweep that stays fixed
+
+The **Security Engineer** (`sec`) is on `software-team`, where the
+kickoff hands it a *Security sweep* task that waits on the build, and it
+is half of the `security` team, which sweeps a project someone already
+built:
+
+```sh
+pasclaw team up security --project notes --goal "sweep the notes app and fix what you find"
+```
+
+Unlike the UI Psychologist and the Code Reviewer, who file what they find
+and leave the fix to the developer, it **fixes** — because the fixes that
+matter are architectural: one data layer that takes values only as
+parameters, one escaping helper, secrets read from the environment, one
+allow-list for paths, one place that decides access. Patching instance by
+instance is how the next instance gets in. It runs on the default model
+tier, not `fast`: following input to a sink through someone else's code
+is the reasoning the cheap tier is worst at.
+
+What it does, from its role:
+
+- **Sweep** in order: where untrusted data enters; where each input is
+  used (SQL built from strings, shell commands, `eval`/`exec`, paths
+  joined from input, HTML built from input, URLs fetched on a user's say,
+  deserializers); secrets in source, config and logs; access checks at
+  every entry point; unsafe defaults; crypto. The sinks are one
+  `grep -rnEi` call in the shell — except `eval(`, which it searches with
+  `grep_files`, because the shell's denylist refuses any command with
+  that word in it, a pattern included.
+- **Prove** each hole before filing it: the input it sent and what came
+  back. One it could not demonstrate is titled `[suspected]`.
+- **File** each as one task — `[security] <kind>: <where>`, the attack
+  and its severity in the notes, the attack as the **criteria** (a check
+  that fails today and passes once fixed), and `cause="<kind>"`
+  (`sql-injection`, `path-traversal`, `hardcoded-secret`,
+  `missing-authz`). The cause makes it a **finding** (below).
+- **Fix** the kind at the boundary, with a test that sends the attack,
+  and submit with the attack before and after as evidence. A file the
+  developer holds under an active task is the developer's until they
+  submit.
+- **Keep it fixed**: when a finding's fix is accepted, the board tells it
+  to draft the check, and it does — written to the *kind* ("no SQL built
+  from strings anywhere in the app"), not the one line.
+
+### Findings
+
+`task action=create … cause="sql-injection"` (or `"cause"` on the
+desktop's `POST /v1/projects/<p>/tasks`) files the task as a **finding**:
+
+- The board keeps the project **as the finding was filed** — a snapshot
+  like a submission's, outside the workspace — so the defect itself is
+  kept. The create result names it (`S0001`); the board shows the task
+  with `(finding: sql-injection)`.
+- A check for that cause can then be **proven against the defect and its
+  accepted fix** (`rule action=draft`, below). One fixed finding is
+  enough, where a reject cause needs two rejects before anyone is told.
+- When the finding's fix is **accepted**, whoever filed it is told —
+  the call that drafts the check, with the cause filled in. A finding the
+  operator filed goes to the team's leads. Once per cause: not when a
+  rule for it exists, was declined, or is waiting in Needs you.
+
+Measured on a live run ([LIVE.md, run 4](../bench/teamboard/LIVE.md#run-4-a-security-sweep)):
+three holes found, demonstrated, fixed and verified, and three checks
+proven on the first draft — each then caught a *new* instance of its kind
+in a function the original hole was not in.
 
 **Building apps.** An app is files: `projects/<name>/app/index.html` and
 `app.json`. The Developer's role says so, because the `desktop` tool's
@@ -262,7 +330,8 @@ path-checked reliably.
   is told: the cause, the tasks, and the call that drafts a rule.
 - **`rule action=draft`** (`project`, `cause`, `script`, optional `name`)
   proves the check before anyone sees it: it has to **fail** against the
-  snapshot of a submission rejected for that cause and **pass** against
+  snapshot of a submission rejected for that cause — or of the project as
+  a [finding](#findings) with that cause was filed — and **pass** against
   the same task's accepted fix. A check that passes everything ("does
   not catch it") or fails everything ("would reject good work") is
   refused with both results.
@@ -273,8 +342,8 @@ path-checked reliably.
 - You can write one directly: `POST /v1/projects/<p>/rules
   {"cause","script","name"}` — proven the same way, then installed with
   no approval step. `GET /v1/projects/<p>/rules` (and `rule
-  action=list`) shows the rules, the ruled and declined causes, and how
-  often each cause has rejected work.
+  action=list`) shows the rules, the ruled and declined causes, how
+  often each cause has rejected work, and the findings filed for it.
 
 The scenarios, the drafts and the snapshots are all outside the
 workspace, and all refused to the file tools.
@@ -319,7 +388,11 @@ action=ask_operator` (a `question`, optional `choices`, optional
 
 `GET /v1/decisions[?open=1]`, `POST /v1/decisions/<id>/answer
 {"answer":"yes"}`, and `GET /v1/needs-you` (open decisions plus reviews
-only you can give) are the HTTP side.
+only you can give) are the HTTP side. (Until the security run they answered only in
+tests: the gateway forwards a fixed list of paths to the desktop's
+router, and these were not on it, so a running gateway said 404 and the
+desktop's queue never showed an agent's question or a proven rule. A
+test now walks that list for every route the desktop answers.)
 
 ## Lanes
 

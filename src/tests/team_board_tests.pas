@@ -667,6 +667,145 @@ begin
   SetCallingAgent('');
 end;
 
+(* A finding: a task filed about a defect, by its kind. The board keeps the
+   project as filed, so the check that keeps the defect fixed is proven
+   against the defect itself and the accepted fix -- one finding is
+   enough, where a reject cause needs two rejects before anyone is told. *)
+procedure WriteDb(const Project, Src: string);
+begin
+  ForceDirectories(ProjectAppDir(Project));
+  WriteFileText(JoinPath(ProjectAppDir(Project), 'db.py'), Src);
+end;
+
+procedure TestFindings;
+const
+  VULN  = 'def find(c, name):'#10 +
+          '    return c.execute("SELECT * FROM users WHERE name = ''" + name + "''")'#10;
+  FIXED = 'def find(c, name):'#10 +
+          '    return c.execute("SELECT * FROM users WHERE name = ?", (name,))'#10;
+var
+  Err, Out_, Id, Plain, Snap, Second, Third: string;
+  S: TTeamState;
+  T: TTaskInfo;
+  Lines: TStringArray;
+  Msgs: TAgentMessageArray;
+  List: TDecisionInfoArray;
+  SecMail, LeadMail: Integer;
+begin
+  WriteLn('-- findings: a defect kept as filed, a check proven against it');
+  MakeAgent('f-lead', '');
+  MakeAgent('f-sec', 'f-lead');
+  CreateProject('Findings', 'findings', '', Err);
+  SetProjectReview('findings', True, nil, Err);   { the parent reviews }
+  WriteFileText(JoinPath(WorkspaceSubdir('teams'), 'f-team.json'),
+    '{"name":"f-team","agents":[{"name":"f-lead","role":"r"},' +
+    '{"name":"f-sec","role":"r","parent":"f-lead"}]}');
+  S := Default(TTeamState);
+  S.Name := 'f-team';
+  S.Project := 'findings';
+  SaveTeamState(S, Err);
+  WriteDb('findings', VULN);
+
+  SetCallingAgent('f-sec');
+  Out_ := Tool_Task('{"action":"create","project":"findings","title":"Sweep"}', Err);
+  Plain := 'T0001';
+  T := Task_('findings', Plain);
+  AssertEqStr(T.FindingCause, '', 'a task without a cause is an ordinary task');
+  AssertTrue(Pos('a finding', Out_) = 0, 'and is not called a finding: ' + Out_);
+  Lines := ReadActivity('findings', Plain);
+  AssertTrue(Pos('"cause"', Lines[0]) = 0, 'its receipt carries no cause');
+  AssertTrue(not DirectoryExists(SnapshotDir('findings', Plain, 'S0001')),
+             'and the board copies nothing for it');
+
+  Out_ := Tool_Task('{"action":"create","project":"findings",' +
+                    '"title":"[security] sql-injection: find() in app/db.py",' +
+                    '"cause":"SQL Injection","assignee":"f-sec",' +
+                    '"criteria":"find(c, \"x'' OR ''1''=''1\") returns no rows"}', Err);
+  AssertEqStr(Err, '', 'a finding is filed');
+  Id := 'T0002';
+  AssertContains(Out_, 'a finding: sql-injection', 'the result says it is a finding, by its slugged kind');
+  AssertContains(Out_, 'S0001', 'and names the copy kept as filed');
+  T := Task_('findings', Id);
+  AssertEqStr(T.FindingCause, 'sql-injection', 'the task carries its kind');
+  AssertEqStr(T.FindingSnapshot, 'S0001', 'and its snapshot');
+  AssertEqStr(T.FoundBy, 'f-sec', 'and who filed it');
+  Snap := SnapshotDir('findings', Id, 'S0001');
+  AssertContains(ReadFileText(JoinPath(JoinPath(Snap, 'app'), 'db.py')), '+ name +',
+                 'the snapshot is the project with the defect in it');
+  Lines := ReadActivity('findings', Id);
+  AssertContains(Lines[0], '"cause"', 'the create receipt carries the cause');
+  AssertContains(Lines[0], 'S0001', 'and the snapshot, where a proof looks for it');
+  Out_ := Tool_Task('{"action":"list","project":"findings"}', Err);
+  AssertContains(Out_, '(finding: sql-injection)', 'the board shows it as a finding');
+
+  Tool_Rule('{"action":"draft","project":"findings","cause":"sql-injection",' +
+            '"script":"grep -q ''?'' app/db.py"}', Err);
+  AssertContains(Err, 'nothing to prove', 'no check before the fix is accepted');
+  AssertContains(Err, 'a finding filed with cause', 'and the refusal says a finding counts');
+
+  { The fix, submitted and accepted: the finder hears it can keep it fixed. }
+  Tool_Task('{"action":"next","project":"findings"}', Err);
+  WriteDb('findings', FIXED);
+  AssertTrue(SubmitTask('findings', Id, 'f-sec', 'the attack returns no rows now', '', Err),
+             'the fix is submitted: ' + Err);
+  SecMail := AgentPending('f-sec');
+  LeadMail := AgentPending('f-lead');
+  AssertTrue(VerdictTask('findings', Id, 'f-lead', True, '', TaskReviewers('findings',
+             Task_('findings', Id)), Err), 'the lead accepts it: ' + Err);
+  AssertTrue(AgentPending('f-sec') = SecMail + 1, 'the finder is told it is fixed');
+  Msgs := AgentMessages('f-sec', 1);
+  AssertTrue((Length(Msgs) = 1) and (Pos('fixed and accepted', Msgs[0].Text) > 0) and
+             (Pos('rule action="draft"', Msgs[0].Text) > 0) and
+             (Pos('cause="sql-injection"', Msgs[0].Text) > 0),
+             'with the call that keeps it fixed');
+  AssertTrue(AgentPending('f-lead') = LeadMail, 'and the lead is not -- the finder will act');
+
+  Tool_Rule('{"action":"draft","project":"findings","cause":"sql-injection",' +
+            '"script":"exit 0"}', Err);
+  AssertContains(Err, 'does not catch', 'a check that passes the defect is not proven');
+  AssertContains(Err, 'the project as the finding was filed', 'and the refusal says where it passed');
+  Out_ := Tool_Rule('{"action":"draft","project":"findings","cause":"sql-injection",' +
+                    '"name":"no-sql-concat.sh","script":"! grep -q ''+ name +'' app/db.py"}', Err);
+  AssertEqStr(Err, '', 'a check that fails on the defect and passes on the fix is proven');
+  AssertContains(Out_, 'the project as the finding was filed (S0001): failed',
+                 'proven against the copy kept as filed');
+  AssertContains(Out_, 'waiting for the operator', 'and waits for the operator');
+  List := ListDecisions(True);
+  AssertContains(List[High(List)].Question, 'finding was filed', 'whose question says so');
+  AssertContains(List[High(List)].Payload, '"finding"', 'and whose payload marks it');
+  Out_ := Tool_Rule('{"action":"list","project":"findings"}', Err);
+  AssertContains(Out_, '"findings" : ["T0002"]', 'rule list shows the cause''s findings');
+
+  { One notice per cause: a draft waiting is not nagged about. }
+  Second := CreateTask('findings', '[security] sql-injection: list()', '', Err, '',
+                       ActorOperator, 'sql-injection');
+  AssertEqStr(Task_('findings', Second).FoundBy, 'operator', 'the operator can file a finding');
+  UpdateTask('findings', Second, '', '-', 'active', Err, 'f-sec', '-', 'f-sec');
+  SubmitTask('findings', Second, 'f-sec', 'fixed', '', Err);
+  SecMail := AgentPending('f-sec');
+  LeadMail := AgentPending('f-lead');
+  VerdictTask('findings', Second, 'f-lead', True, '', nil, Err);
+  AssertTrue((AgentPending('f-sec') = SecMail) and (AgentPending('f-lead') = LeadMail),
+             'a cause with a draft waiting is not raised again');
+
+  { The operator's finding of a new kind: the leads hear, not the operator. }
+  WriteFileText(JoinPath(ProjectAppDir('findings'), 'config.py'), 'KEY = "sk-live-123"'#10);
+  Third := CreateTask('findings', '[security] hardcoded-secret: config.py', '', Err, '',
+                      ActorOperator, 'hardcoded-secret');
+  UpdateTask('findings', Third, '', '-', 'active', Err, 'f-sec', '-', 'f-sec');
+  WriteFileText(JoinPath(ProjectAppDir('findings'), 'config.py'),
+                'import os'#10'KEY = os.environ["KEY"]'#10);
+  SubmitTask('findings', Third, 'f-sec', 'read from the environment', '', Err);
+  LeadMail := AgentPending('f-lead');
+  VerdictTask('findings', Third, ActorOperator, True, '', nil, Err);
+  AssertTrue(AgentPending('f-lead') = LeadMail + 1, 'a finding the operator filed is raised to the lead');
+  SetCallingAgent('f-lead');
+  Tool_Rule('{"action":"draft","project":"findings","cause":"hardcoded-secret",' +
+            '"script":"! grep -q sk-live app/config.py"}', Err);
+  AssertEqStr(Err, '', 'and proven against the operator''s finding the same way');
+  SetCallingAgent('');
+end;
+
 { ------------------------------------------------------------- phase 5 -- }
 
 procedure TestLaneGlobs;
@@ -1175,6 +1314,7 @@ begin
   TestDecisionStore;
   TestAskOperator;
   TestRules;
+  TestFindings;
   TestLaneGlobs;
   TestLanes;
 

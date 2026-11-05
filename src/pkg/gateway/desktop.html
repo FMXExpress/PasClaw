@@ -3967,6 +3967,7 @@ function paintTree() {
       const waiting = (t.waiting_on || []).length && t.status === "todo";
       const lbl = el("span", "st-" + t.status,
         t.id + "  " + t.title + (t.assignee ? "  @" + t.assignee : "") +
+        (t.finding_cause ? "  (finding: " + t.finding_cause + ")" : "") +
         (t.status === "review" ? "  -- waiting for a verdict" : "") +
         (waiting ? "  -- waits on " + t.waiting_on.join(", ") : ""));
       if (waiting) lbl.style.opacity = ".6";
@@ -7331,6 +7332,7 @@ async function openFactory(team) {
         const waiting = (t.waiting_on || []).length && t.status === "todo";
         const lbl = el("span", "st-" + t.status,
           t.id + "  " + t.title + (t.assignee ? "  @" + t.assignee : "") +
+          (t.finding_cause ? "  (finding: " + t.finding_cause + ")" : "") +
           (waiting ? "  -- waits on " + t.waiting_on.join(", ") : ""));
         lbl.style.cssText = "flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis" +
                             (waiting ? ";opacity:.6" : "");

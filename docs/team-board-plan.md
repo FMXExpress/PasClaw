@@ -303,6 +303,15 @@ then installed without an approval step.
   cause does not nag again.
 - The operator can write a rule directly with the same tool; it still
   needs the proof.
+- **Added with the Security Engineer: findings.** A task created with a
+  `cause` is a *finding* -- a defect someone found, by its kind -- and
+  the board snapshots the project as it was filed. That snapshot is the
+  failing side of a proof pair, the way a rejected submission is, so one
+  fixed finding is enough to prove a check; waiting for the same hole to
+  be rejected twice would mean shipping it twice. The finder is told when
+  the fix is accepted, once per cause. ([teams](./teams.md#findings);
+  `team_board_tests` TestFindings; live in
+  [LIVE.md run 4](../bench/teamboard/LIVE.md#run-4-a-security-sweep).)
 
 This is the piece most likely to change shape when it is built: proving
 against snapshots of a non-git project is the open question, and it

@@ -136,6 +136,82 @@ across wakes because an agent's session persists: the Foreman's last call
 carried 19.9 KB of it in run 1 and 9.6 KB in run 2 (no roster dump, fewer
 calls).
 
+## Run 4: a security sweep
+
+The [Security Engineer](../../docs/teams.md#security-a-sweep-that-stays-fixed)
+and [findings](../../docs/teams.md#findings) run the same way. The method
+is the one above, with a different start: a seeded app, `notes`, with
+three real holes. `search()` builds SQL with `%` formatting, so one
+owner's search can return another owner's notes. `read_attachment()`
+joins the caller's file name onto a folder, so `../notes.py` reads the
+source. And a live API key is a constant in that source. The team was
+`pasclaw team up security --project notes --goal "Sweep the notes app
+for security holes and fix them"`, with the operator playing the Foreman
+and the Security Engineer from their roles.
+
+What happened, in order: the Foreman created the sweep task for `sec`.
+`sec` read the app, grepped for sinks, and demonstrated both attacks
+(Ann's search returned Bob's *secret plan*; the traversal returned the
+source line holding the key). It filed three findings, each with its
+kind as the cause and the attack as its criteria, and each was
+snapshotted as filed (S0001). It submitted the sweep, then fixed the
+holes one at a time, each with a test that sends the attack. The Foreman
+reran every attack and test before each verdict. It asked the operator
+to rotate the leaked key, an action outside the workspace, without
+blocking the code fix on the answer. Each accepted fix brought the board's notice, and
+`sec` drafted a check written to the hole's *kind*. All three were
+**proven on the first draft**: each failed on the snapshot taken when
+the finding was filed, quoting the vulnerable line, and passed on the
+accepted fix. The operator approved them in Needs you, and the project's
+held-out checks now gate every later submit.
+
+Do the checks catch more than the line they were proven on? Each was run
+on the fixed app, then on copies with a *new* instance of its kind put
+back:
+
+| the app | no-sql-from-strings | no-joined-path-open | no-secrets-in-source |
+|---|---|---|---|
+| as fixed | pass | pass | pass |
+| plus a new `count()` with an f-string query | **FAIL** | pass | pass |
+| plus a new `read_export()` opening a joined path | pass | **FAIL** | pass |
+| plus a new `mail.py` holding a password literal | pass | pass | **FAIL** |
+
+Findings:
+
+| # | what happened | why | fix |
+|---|---|---|---|
+| 11 | `sec`'s first sweep call sent `grep_files` a regex alternation and got "no matches" | the role said *grep_files finds the sinks*; `grep_files` matches one literal string (its schema says so, and the role's wording won) | the role gives the one call that works: `shell_exec grep -rnEi '<sinks and secret names>' projects/<p>/app/` |
+| 12 | then `shell_exec grep -E '…\|eval\(\|…'` was refused: *forbidden token "eval"* | the denylist splits on shell metacharacters, so a pattern's `eval` is a token, and a security sweep is the one job that has to search for it | the denylist stays as it is. The role searches `eval(` with `grep_files`, which runs no shell, and a test runs the role's command through `ShellAllowed` |
+| 13 | the operator could not see or answer the team's decisions from the desktop: `GET /v1/decisions` and `/v1/needs-you` were **404** in a running gateway | `IsDesktopPath`, the list of paths the gateway hands to the desktop router, never had them; the route tests call the router directly | added, and a test walks every route the router answers through that list. This predates the security work and would have hidden every `ask_operator` and proven rule from the desktop |
+| 14 | three approvals in the same second cost `sec` two wakes | the first approval started a turn that ended on its first call, and the notes delivered mid-turn carried over to a new turn | not changed: nothing was lost, and the cost is one call. Batching mail that lands together is the mailbox's question, not the board's |
+| 15 | `rule list` showed `"causes": []` with three findings on the board | it listed only the causes that had rejected work | each cause lists its findings |
+
+Not a finding: the agents' tool list had no `desktop` tool. That's by
+design. The tool waits behind `tool_search` until a desktop subscribes to
+the event feed, and none was connected.
+
+| | run 4 |
+|---|---|
+| provider calls | 42 (Foreman 16, Security Engineer 26) |
+| request bytes | 1,739,796 |
+| tool calls / error results | 44 / 1 (the `eval` refusal) |
+| findings filed, demonstrated, fixed, accepted | 3, 3, 3, 3 |
+| checks drafted, proven at the first draft, approved | 3, 3, 3 |
+| kickoff → last check proven | 7 m 38 s (the operator's think time included) |
+| the same 39 answers replayed (`security-notes.json`) | **5.2 s**, handoffs 0.5–0.8 s |
+
+`make bench-teamboard` replays both runs. This fixture carries the
+seeded app, and it is **ordered**: answers go out in the recorded order
+across agents. A check for a hole can only be proven after the Foreman
+accepts the fix, and an instant replay would otherwise race past the
+verdict. The replay checks the board is done, the app's tests pass, and
+three proven rules are waiting. When a wake from the recording never
+comes, it stops after 45 s and names it. With the finding side of the
+proof undone, it reports `STALLED after 37 of 39 answers: no job for
+Security Engineer`: the third notice never came. Every behaviour of the
+security work and of these fixes was revert-checked, 25 of 25 caught,
+including the bench's own.
+
 ## Research: what else is on the table
 
 - **Schemas are the bulk.** 22 tools per agent turn, `task` alone 2.7 KB.

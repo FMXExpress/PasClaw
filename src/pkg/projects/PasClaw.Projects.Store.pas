@@ -172,6 +172,15 @@ type
     { 'pool' when `next` took it unassigned -- an expired lease hands such
       a task back to the pool rather than to whoever had it. }
     ClaimedFrom:  string;
+    (* A FINDING: a task filed about a defect someone found, by its kind
+       -- the same cause key a reject carries ("sql-injection"). The board
+       copies the project as the finding was filed, so the defect itself
+       is kept: a check written later is proven against it (it must fail
+       there) and the accepted fix (it must pass) without waiting for the
+       same mistake to be rejected twice. '' = an ordinary task. *)
+    FindingCause:    string;
+    FindingSnapshot: string;   { '' when the copy could not be taken }
+    FoundBy:         string;   { who filed it: an agent slug or 'operator' }
     Created: string;
     Updated: string;
     JobCount: Integer;
@@ -307,8 +316,15 @@ function StrToTaskStatus(const S: string; Default: TTaskStatus = tsTodo): TTaskS
 
 function ListTasks(const Project: string): TTaskInfoArray;
 function GetTask(const Project, TaskId: string; out Info: TTaskInfo): Boolean;
+(* ACause makes the task a finding (TTaskInfo.FindingCause): slugged,
+   and the project is snapshotted before the task exists. A snapshot that
+   cannot be taken does not stop the task -- SnapErr says why, and no
+   check can be proven against this finding. *)
 function CreateTask(const Project, ATitle, ANotes: string; out Err: string;
-  const ACriteria: string = ''; const Actor: string = ActorOperator): string;
+  const ACriteria: string = ''; const Actor: string = ActorOperator;
+  const ACause: string = ''): string; overload;
+function CreateTask(const Project, ATitle, ANotes: string; out Err: string;
+  const ACriteria, Actor, ACause: string; out SnapErr: string): string; overload;
 (* AAssignee and ACriteria follow the same two-sentinel contract as notes:
    '-' means leave it alone; '' explicitly clears it.
 
@@ -1629,6 +1645,9 @@ begin
       Info.LeaseBy      := Obj.GetStr('lease_by', '');
       Info.LeaseUntil   := Obj.GetStr('lease_until', '');
       Info.ClaimedFrom  := Obj.GetStr('claimed_from', '');
+      Info.FindingCause    := Obj.GetStr('finding_cause', '');
+      Info.FindingSnapshot := Obj.GetStr('finding_snapshot', '');
+      Info.FoundBy         := Obj.GetStr('found_by', '');
       Info.Created := Obj.GetStr('created', '');
       Info.Updated := Obj.GetStr('updated', '');
     finally
@@ -1675,13 +1694,25 @@ begin
 end;
 
 function CreateTask(const Project, ATitle, ANotes: string; out Err: string;
-  const ACriteria: string; const Actor: string): string;
+  const ACriteria: string; const Actor: string; const ACause: string): string;
 var
-  PDir, Id, Dir, Now_: string;
+  SnapErr: string;
+begin
+  Result := CreateTask(Project, ATitle, ANotes, Err, ACriteria, Actor, ACause,
+                       SnapErr);
+end;
+
+function CreateTask(const Project, ATitle, ANotes: string; out Err: string;
+  const ACriteria, Actor, ACause: string; out SnapErr: string): string;
+var
+  PDir, Id, Dir, Now_, Cause, Snap: string;
   Obj: TJsonObject;
 begin
   Err := '';
+  SnapErr := '';
   Result := '';
+  Cause := SanitizeName(ACause);
+  Snap := '';
   PDir := ProjectDir(Project);
   if (PDir = '') or not DirectoryExists(PDir) then
   begin
@@ -1698,6 +1729,11 @@ begin
   Id  := ReserveId(JoinPath(PDir, 'tasks'), 'T');
   Dir := JoinPath(JoinPath(PDir, 'tasks'), Id);
   EnsureDir(JoinPath(Dir, 'jobs'));
+  (* A finding keeps the defect: the project as it stands now, before
+     anyone touches it. Taken before the manifest so the copy is of the
+     work, and the task is only ever seen with its snapshot named. *)
+  if (Cause <> '') and not TakeSnapshot(Project, Id, Snap, SnapErr) then
+    Snap := '';
 
   Now_ := NowIsoUtc;
   Obj := TJsonObject.Create;
@@ -1707,13 +1743,23 @@ begin
     Obj.PutStr('status', 'todo');
     Obj.PutStr('notes', ANotes);
     if ACriteria <> '' then Obj.PutStr('criteria', ACriteria);
+    if Cause <> '' then
+    begin
+      Obj.PutStr('finding_cause', Cause);
+      Obj.PutStr('finding_snapshot', Snap);
+      Obj.PutStr('found_by', ActorLabel(Actor));
+    end;
     Obj.PutStr('created', Now_);
     Obj.PutStr('updated', Now_);
     WriteManifest(JoinPath(Dir, 'task.json'), Obj);
   finally
     Obj.Free;
   end;
-  AppendActivity(Project, Id, 'create', Actor, ['title', Trim(ATitle)]);
+  { The receipt carries the finding: FindProofPair reads it as the side a
+    check must fail on, the way it reads a reject. }
+  AppendActivity(Project, Id, 'create', Actor,
+                 ['title', Trim(ATitle), 'cause', Cause, 'snapshot', Snap,
+                  'snapshot_error', SnapErr]);
   PublishTask(Project, Id, 'todo');
   Result := Id;
 end;
