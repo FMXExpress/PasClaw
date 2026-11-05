@@ -357,9 +357,13 @@ function SubmitTask(const Project, TaskId, Actor, Evidence, JobId: string;
    Refused, for anyone but the operator, when the caller is the
    submitter or the task's owner, when the caller is unknown (ActorModel:
    a verdict that cannot tell who is giving it must refuse, never default
-   to allow), and -- when Reviewers is non-empty -- when the caller is not
-   one of them. Reviewers is the CALLER's answer to "who reviews this"
-   (PasClaw.Teams.TaskReviewers); the store does not know the org chart.
+   to allow), and when the caller is not in Reviewers. Reviewers is the
+   CALLER's answer to "who reviews this" (PasClaw.Teams.TaskReviewers);
+   the store does not know the org chart. An EMPTY list means what
+   TaskReviewers says it means -- no agent reviews this task, the operator
+   does -- so it refuses every agent. It used to allow any agent but the
+   submitter and owner, which let a lead's own worker accept the lead's
+   work while Needs you showed it as the operator's call.
    Cause is a reject's cause key (slugged); '' for none. *)
 function VerdictTask(const Project, TaskId, Actor: string; Accept: Boolean;
   const Note: string; const Reviewers: TStringArray;
@@ -2117,7 +2121,8 @@ begin
     Who := ' -- ' + JoinNames(Reviewers) + ' review(s) this work, or the ' +
            'operator can.'
   else
-    Who := ' -- any other agent on the team can, or the operator.';
+    Who := ' -- no agent reviews this work; the operator gives this verdict ' +
+           '(it is in Needs you).';
   if Actor <> ActorOperator then
   begin
     if not IsAgentActor(Actor) then
@@ -2134,7 +2139,8 @@ begin
              '; another agent must give the verdict' + Who;
       Exit;
     end;
-    if (Length(Reviewers) > 0) and not InNames(Actor, Reviewers) then
+    (* Fail closed: no list is no reviewer, not every reviewer. *)
+    if not InNames(Actor, Reviewers) then
     begin
       Err := Actor + ' does not review ' + Id + Who;
       Exit;

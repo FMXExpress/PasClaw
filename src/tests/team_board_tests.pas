@@ -307,7 +307,8 @@ begin
   UpdateTask('leases', A, '', '-', 'active', Err, '-', '-', 'dev');
   SubmitTask('leases', A, 'dev', 'did it', '', Err);
   AssertEqStr(Task_('leases', A).LeaseBy, '', 'a submission is not a lease a dead run can hold');
-  VerdictTask('leases', A, 'qa', False, 'not quite', Names([]), Err);
+  AssertTrue(VerdictTask('leases', A, 'qa', False, 'not quite', Names(['qa']), Err),
+             'the reviewer rejects it: ' + Err);
   T := Task_('leases', A);
   AssertTrue((T.Status = tsActive) and (T.LeaseBy = 'dev'), 'a reject leases it back to its owner');
   AssertTrue(Length(ReadActivity('leases', P)) > 0, 'expiry left receipts');
@@ -784,7 +785,9 @@ begin
   SubmitTask('findings', Second, 'f-sec', 'fixed', '', Err);
   SecMail := AgentPending('f-sec');
   LeadMail := AgentPending('f-lead');
-  VerdictTask('findings', Second, 'f-lead', True, '', nil, Err);
+  { The verdict has to land, or "not raised again" proves nothing. }
+  AssertTrue(VerdictTask('findings', Second, 'f-lead', True, '', Names(['f-lead']), Err),
+             'the lead accepts the second finding: ' + Err);
   AssertTrue((AgentPending('f-sec') = SecMail) and (AgentPending('f-lead') = LeadMail),
              'a cause with a draft waiting is not raised again');
 

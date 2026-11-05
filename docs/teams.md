@@ -276,6 +276,11 @@ task action=verdict project id verdict=reject reason
   Without one, the submitter's `parent` reviews — in `duo`, the Foreman
   reviews the developer. A submitter is never its own reviewer, even when
   listed: the Test Engineer's own work goes to *its* parent.
+  When that leaves nobody (a lead's own work on a board with no
+  `review.by`, since a lead has no parent), no agent gives the verdict:
+  the task waits in Needs you for yours. An agent that tries is told so.
+  Before this, any agent other than the submitter and owner was let
+  through, so a lead's own worker could accept the lead's work.
 - **The operator can do anything** — close a task in review, send it
   back, edit frozen criteria — from the desktop's **Accept** / **Reject**
   buttons, `POST /v1/projects/<p>/tasks/<t>/verdict`, or a `PATCH`. A
