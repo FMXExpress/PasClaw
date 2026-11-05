@@ -171,6 +171,16 @@ begin
   AssertMissing(S, 'Y@', 'its continuation is not a constant');
   AssertContains(S, 'B@7 const/0/', 'and the block goes on after it');
 
+  { The header comment after the unit's name -- a common Delphi layout. }
+  OutlineSource(Lines(['unit Fixture.Late;', '', '(*', '  Fixture.Late - the comment comes',
+    '  after the unit line.', '*)', '{$MODE DELPHI}', 'interface', 'implementation', 'end.']),
+    'pascal', Summary);
+  AssertTrue(Summary = 'Fixture.Late - the comment comes after the unit line.',
+             'a header comment after "unit X;" is still the summary: ' + Summary);
+  OutlineSource(Lines(['unit Fixture.None;', 'interface', '{ a comment inside the code }',
+    'implementation', 'end.']), 'pascal', Summary);
+  AssertTrue(Summary = '', 'but a comment after code is not: ' + Summary);
+
   { Comments that span lines: their inner lines start like declarations. }
   E := OutlineSource(Lines(['unit U;', 'interface', '{ Notes:', 'procedure InABraceBlock;',
     '}', '(* and', 'function InAParenBlock: Integer;', '*)', '// procedure InALineComment;',
@@ -365,6 +375,11 @@ begin
     RegisterFSTools(R);
     AssertTrue(R.Find('code_outline', T) and (T.Category = tcReadOnly) and T.IsCore,
                'code_outline registers beside grep_files, read-only');
+    (* From the live run: the schema's example name was this repository's
+       answer to the run's first question, and the model read it off the
+       schema. No example may name code from a real codebase. *)
+    AssertTrue(Pos('TaskReviewers', T.Schema + T.Description) = 0,
+               'the schema names no real function as an example');
 
     { symbol= }
     Out_ := R.RunTool('code_outline', '{"symbol":"Helper"}', Err);

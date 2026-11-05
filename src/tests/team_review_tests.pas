@@ -684,6 +684,44 @@ begin
   end;
 end;
 
+(* Nobody to review it: a top-level agent's own work on a board that names
+   no reviewers. TaskReviewers answers "nobody" -- no list, no parent -- and
+   that has to mean the operator's verdict, which is what Needs you shows.
+   It used to mean ANY agent but the submitter and owner: the lead's own
+   worker could accept the lead's work. Found by two independent reads of
+   the code during the code_outline live run (bench/codenav). *)
+procedure TestNobodyToReview;
+var
+  Err, Out_, Id: string;
+  T: TTaskInfo;
+begin
+  WriteLn('-- nobody to review it: the operator gives the verdict');
+  MakeAgent('o-lead', '');
+  MakeAgent('o-dev', 'o-lead');
+  CreateProject('Own Work', 'own-work', '', Err);
+  SetProjectReview('own-work', True, nil, Err);    { no named reviewers }
+  Id := CreateTask('own-work', 'The lead''s own task', '', Err);
+  UpdateTask('own-work', Id, '', '-', 'active', Err, 'o-lead', '-', 'o-lead');
+  AssertTrue(SubmitTask('own-work', Id, 'o-lead', 'did it', '', Err), 'the lead submits its own work: ' + Err);
+  AssertTrue(GetTask('own-work', Id, T) and (Length(TaskReviewers('own-work', T)) = 0),
+             'no agent reviews it: no named reviewers, and the lead has no parent');
+
+  SetCallingAgent('o-dev');
+  Out_ := Tool_Task('{"action":"verdict","project":"own-work","id":"' + Id +
+                    '","verdict":"accept"}', Err);
+  SetCallingAgent('');
+  AssertTrue(Err <> '', 'the lead''s own worker cannot accept the lead''s work');
+  AssertContains(Err, 'no agent reviews this work', 'the refusal says no agent reviews it');
+  AssertContains(Err, 'Needs you', 'and where the verdict is given');
+  AssertTrue(GetTask('own-work', Id, T) and (T.Status = tsReview), 'the task still waits for a verdict');
+
+  AssertTrue(not VerdictTask('own-work', Id, 'o-dev', True, '', nil, Err),
+             'the store refuses an agent when the list is empty, whoever calls it');
+  AssertTrue(VerdictTask('own-work', Id, ActorOperator, True, '', nil, Err),
+             'the operator gives the verdict: ' + Err);
+  AssertTrue(GetTask('own-work', Id, T) and (T.Status = tsDone), 'and it is done');
+end;
+
 begin
   TestStoreRules;
   TestJobsSubmit;
@@ -692,6 +730,7 @@ begin
   TestToolAsAgents;
   TestTeams;
   TestThroughTheLoop;
+  TestNobodyToReview;
 
   if Failures = 0 then
     WriteLn('team_review_tests: OK')
