@@ -62,8 +62,17 @@ type
       (those carry their own per-channel signature secret).
       Env var $PASCLAW_GATEWAY_TOKEN overrides this at LoadConfig
       time, same precedence shape `OTEL_EXPORTER_OTLP_ENDPOINT`
-      uses. Comparisons are constant-time. }
+      uses. Comparisons are constant-time. An env-var marker whose
+      variable is not set is no token at all (GetEffectiveGatewayToken),
+      never the marker's own text -- that text is public. }
     Token:    string;
+    (* With no token, the domain names besides localhost / *.localhost
+       that the gateway answers to -- a reverse proxy's name, a machine's
+       LAN name; IP addresses are always answered. Another domain name is refused, which is what
+       stops a web page reaching a token-less gateway by DNS rebinding;
+       a web page under one of these names may also call it. Unused when
+       a token is set: the token is the gate. *)
+    AllowedHosts: array of string;
   end;
 
   (*  TOtelHeader -- one header pair for OTLP exports. The
@@ -1218,7 +1227,10 @@ function MaskConfigSecretsJSON(const JSON: string): string;
 (*  Effective gateway bearer token. Returns the env-var override
     when $PASCLAW_GATEWAY_TOKEN or $OPENCLAW_GATEWAY_TOKEN is set
     (PASCLAW_ wins when both are set), else C.Gateway.Token from
-    the parsed config file. Distinct from C.Gateway.Token so that
+    the parsed config file -- '' when that is a `${VAR}` marker whose
+    env var is not set. An unset token is no token, not the marker's
+    text: the DigitalOcean template's "${PASCLAW_GATEWAY_TOKEN}" is in
+    the public repository, and as a token it let anyone in. Distinct from C.Gateway.Token so that
     env-only secrets don't leak into the persisted config via the
     SaveConfig -> ToJSON round-trip a config-mutating command
     (auth, model, skills install, ...) would otherwise force on
@@ -1243,17 +1255,19 @@ function GetEffectiveGatewayToken(const C: TConfig): string;
 
       gateway: bearer-token auth ENABLED (source=env, token len=64, prefix=ab12...)
       gateway: bearer-token auth ENABLED (source=config.json, token len=64, prefix=ab12...)
-      gateway: bearer-token auth MISCONFIGURED -- token field is unresolved template '${PASCLAW_GATEWAY_TOKEN}'; env var not set, so no client token will match
-      gateway: bearer-token auth DISABLED -- no token configured (every /v1/* and /mcp route open to any caller)
+      gateway: bearer-token auth DISABLED -- gateway.token is ${PASCLAW_GATEWAY_TOKEN} and that env var is not set; ...
+      gateway: bearer-token auth DISABLED -- no token configured; ...
 
-    The MISCONFIGURED case is the typo trap: an operator sets
-    PASCAL_GATEWAY_TOKEN (no W) in the platform's env-var UI,
-    ExpandEnvVarsInJSON sees no PASCLAW_GATEWAY_TOKEN to substitute,
-    the literal `${PASCLAW_GATEWAY_TOKEN}` survives into
-    Cfg.Gateway.Token, GetEffectiveGatewayToken returns it, and
-    every bearer the web UI sends gets compared against the literal
-    template string -- guaranteed mismatch, infinite 401 loop.
-    This log line surfaces that case immediately at startup.
+    What follows "DISABLED" depends on BindAddr, the address the gateway
+    listens on: on a loopback one, local clients use the API; on any
+    other (0.0.0.0, a LAN or public address), so does every client that
+    can reach it -- the line says so, shell and files included. '' is
+    an unknown address and gets the loopback wording.
+
+    The marker case is the typo trap: an operator sets
+    PASCAL_GATEWAY_TOKEN (no W) in the platform's env-var UI, and
+    the marker resolves to nothing. It says which variable to set,
+    so the operator who meant to have a token sees why they do not.
 
     The prefix is the first 4 chars of the token + `...` -- enough
     for the operator to visually match against the token they pasted
@@ -1262,25 +1276,23 @@ function GetEffectiveGatewayToken(const C: TConfig): string;
     token, and the token is presumed long). Suppressed for tokens
     shorter than 8 chars (we log `prefix=<short>` instead -- a 4-byte
     prefix of a 6-byte token leaks too much). *)
-function DescribeGatewayAuthState(const C: TConfig): string;
+function DescribeGatewayAuthState(const C: TConfig;
+                                  const BindAddr: string = ''): string;
 
-(*  GatewayAuthState -- which of the three auth postures the gateway is
-    actually in. Callers use it to pick the log LEVEL and the banner
-    wording; both unhealthy states deserve [warn], but they are OPPOSITE
-    failures and must not share a message:
+(*  NoTokenExposure -- what a token-less gateway listening on BindAddr is
+    open to, as one clause for a log line or a banner. *)
+function NoTokenExposure(const BindAddr: string): string;
 
-      gasRequired      a real token is set; clients must present it.
-      gasOpen          no token anywhere -- every route is reachable by
-                       any caller.
-      gasMisconfigured the token is still an unresolved ${VAR} template.
-                       GetEffectiveGatewayToken returns that literal, so
-                       the middleware compares bearers against it and
-                       NOTHING matches -- the gateway rejects everyone
-                       with 401. Saying "open to any caller" here is
-                       precisely backwards, and a wrong security
-                       statement is worse than none. *)
+(*  GatewayAuthState -- which auth posture the gateway is actually in.
+    Callers use it to pick the log LEVEL and the banner wording:
+
+      gasRequired  a real token is set; clients must present it.
+      gasOpen      no token (none configured, or a `${VAR}` marker whose
+                   env var is not set): no bearer is asked for; only web
+                   pages from other sites, and DNS-rebound names, are
+                   refused (PasClaw.Gateway.Auth.LocalRequestRefusal). *)
 type
-  TGatewayAuthState = (gasRequired, gasOpen, gasMisconfigured);
+  TGatewayAuthState = (gasRequired, gasOpen);
 
 function GatewayAuthState(const C: TConfig): TGatewayAuthState;
 
@@ -1675,7 +1687,7 @@ end;
 function TConfig.ToJSON: string;
 var
   Root, Gw, Tmp, Tmp2, Diag, OtelHdrs, WTmp: TJsonObject;
-  Arr, FallbacksArr: TJsonArray;
+  Arr, FallbacksArr, HostsArr: TJsonArray;
   i: Integer;
 begin
   Root := TJsonObject.Create;
@@ -1710,6 +1722,13 @@ begin
     Gw.PutStr ('bind_addr', Gateway.BindAddr);
     Gw.PutInt ('port',      Gateway.Port);
     if Gateway.Token <> '' then Gw.PutStr('token', Gateway.Token);
+    if Length(Gateway.AllowedHosts) > 0 then
+    begin
+      HostsArr := TJsonArray.Create;
+      for i := 0 to High(Gateway.AllowedHosts) do
+        HostsArr.AddStr(Gateway.AllowedHosts[i]);
+      Gw.PutArray('allowed_hosts', HostsArr);
+    end;
     Root.PutObject('gateway', Gw);
 
     (* diagnostics.otel round-trip. Without this block, ANY command
@@ -2371,6 +2390,15 @@ begin
       Gateway.BindAddr := Obj.GetStr('bind_addr', Gateway.BindAddr);
       Gateway.Port     := Obj.GetInt('port',      Gateway.Port);
       Gateway.Token    := Obj.GetStr('token',     Gateway.Token);
+      Arr := Obj.ChildArray('allowed_hosts');
+      if Arr <> nil then
+      try
+        SetLength(Gateway.AllowedHosts, Arr.Count);
+        for i := 0 to Arr.Count - 1 do
+          Gateway.AllowedHosts[i] := Trim(Arr.ItemStr(i));
+      finally
+        Arr.Free;
+      end;
     finally
       Obj.Free;
     end;
@@ -3234,10 +3262,14 @@ begin
   end;
 end;
 
+function LooksLikeUnresolvedTemplate(const S: string): Boolean; forward;
+
 function GetEffectiveGatewayToken(const C: TConfig): string;
 begin
   if GEnvGatewayToken <> '' then
     Result := GEnvGatewayToken
+  else if LooksLikeUnresolvedTemplate(C.Gateway.Token) then
+    Result := ''          { unset: no token, never the marker's text }
   else
     Result := C.Gateway.Token;
 end;
@@ -3267,24 +3299,33 @@ begin
 end;
 
 function GatewayAuthState(const C: TConfig): TGatewayAuthState;
-(* Mirrors DescribeGatewayAuthState's branches exactly, and lives next
-   to it so the two cannot drift apart. *)
-var
-  Tok: string;
+(* Decided by the token the middleware actually compares against, so the
+   two cannot disagree. *)
 begin
-  if GEnvGatewayToken <> '' then
-    Tok := GEnvGatewayToken
-  else
-    Tok := C.Gateway.Token;
-  if Tok = '' then
+  if GetEffectiveGatewayToken(C) = '' then
     Result := gasOpen
-  else if LooksLikeUnresolvedTemplate(Tok) then
-    Result := gasMisconfigured
   else
     Result := gasRequired;
 end;
 
-function DescribeGatewayAuthState(const C: TConfig): string;
+function NoTokenExposure(const BindAddr: string): string;
+var
+  A: string;
+begin
+  A := LowerCase(Trim(BindAddr));
+  if (A = '') or (A = 'localhost') or (A = '::1') or (A = '[::1]') or
+     (Copy(A, 1, 4) = '127.') then
+    Result := '/v1/* and /mcp answer any client on this machine with no ' +
+              'bearer (web pages from other sites are refused)'
+  else
+    Result := Format('the gateway listens on %s, so /v1/* and /mcp -- ' +
+                     'shell and files included -- answer ANY client that ' +
+                     'can reach it, with no bearer (only web pages from ' +
+                     'other sites are refused)', [BindAddr]);
+end;
+
+function DescribeGatewayAuthState(const C: TConfig;
+                                  const BindAddr: string): string;
 var
   Tok, Source: string;
 begin
@@ -3302,21 +3343,18 @@ begin
   begin
     (* Mention both /v1/* (main API surface) and /mcp (the dedicated
        MCP companion listener at --mcp-port, plus the /v1/mcp/rpc
-       in-main-port path) so operators understand the full exposure
-       -- a token-less gateway leaves the MCP JSON-RPC endpoint open
-       to any reachable caller, not just the OpenAI-compatible
-       routes. Codex P2 on PR #255. *)
-    Result := 'gateway: bearer-token auth DISABLED -- ' +
-              'no token configured (every /v1/* and /mcp route ' +
-              'open to any caller)';
+       in-main-port path) so operators understand the full exposure.
+       Codex P2 on PR #255. *)
+    Result := 'gateway: bearer-token auth DISABLED -- no token ' +
+              'configured; ' + NoTokenExposure(BindAddr);
     Exit;
   end;
 
   if LooksLikeUnresolvedTemplate(Tok) then
   begin
-    Result := Format('gateway: bearer-token auth MISCONFIGURED -- ' +
-                     'token field is unresolved template ''%s''; env var ' +
-                     'not set, so no client token will match', [Tok]);
+    Result := Format('gateway: bearer-token auth DISABLED -- gateway.token ' +
+                     'is %s and that env var is not set; %s. Set the ' +
+                     'variable to require a token', [Tok, NoTokenExposure(BindAddr)]);
     Exit;
   end;
 

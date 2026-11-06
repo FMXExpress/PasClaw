@@ -197,7 +197,8 @@ There is no escape sequence for a literal `${UPPER}` string in a config value. W
 | `gateway.log_level` | `"info"` | Logger level. `--quiet`/`-q` clamps to `error` for the whole process. |
 | `gateway.bind_addr` | `"127.0.0.1"` | HTTP gateway bind. |
 | `gateway.port` | `8088` | HTTP gateway port. |
-| `gateway.token` | `""` | Inbound bearer token for `/v1/*` routes. Empty = unauthenticated (every route open — the default). When non-empty, every non-exempt route requires `Authorization: Bearer <token>` (or `?token=<token>` query param). `$PASCLAW_GATEWAY_TOKEN` env var overrides. See [Gateway](./gateway.md#authentication). |
+| `gateway.token` | `""` | Inbound bearer token for `/v1/*` routes. Empty = no token (the default): requests to localhost are answered, and what only a browser on another site sends is refused. When non-empty, every non-exempt route requires `Authorization: Bearer <token>` (or `?token=<token>` query param). `$PASCLAW_GATEWAY_TOKEN` env var overrides. A `${VAR}` marker whose variable is unset is no token. See [Gateway](./gateway.md#authentication). |
+| `gateway.allowed_hosts` | `[]` | With no token, the domain names besides `localhost` the gateway answers to, and whose pages may call it: a reverse proxy's name, a LAN name. IP addresses need no entry, and a page under an IP address is accepted only from the same address and port. Unused when a token is set. |
 | `prompt_cache.enabled` | `true` | Anthropic+OpenAI prompt caching. See [Providers](./providers.md). |
 | `prompt_cache.ttl` | `"5m"` | Extended-TTL hint (Anthropic). Set `"1h"` for the long bucket. |
 | `prompt_cache.warm` | `false` | Keep-alive for short TTLs: after four idle minutes the gateway sends one minimal request (same system block and tools, `max_tokens` 1) every four minutes until thirty minutes after the last real turn, so the cached prefix survives a pause. Each ping is a billed request; the count is in `/v1/stats` as `prompt_cache_warm_pings`. Gateway and serve only. |
@@ -323,7 +324,7 @@ Each entry registers a `spawn(agent="<name>", prompt="...")` tool the parent age
 | `PASCLAW_HOME` | PasClaw home directory. |
 | `PASCLAW_CONFIG` | Config-file path. |
 | `PASCLAW_VERSION` | Compile-time FPC version override used by the Makefile. |
-| `PASCLAW_GATEWAY_TOKEN` | Inbound bearer token for the HTTP gateway. Overrides `gateway.token` in config.json when set. Empty = unauthenticated. Env value never persists into `config.json` (any later `SaveConfig` writes only the in-config value). |
+| `PASCLAW_GATEWAY_TOKEN` | Inbound bearer token for the HTTP gateway. Overrides `gateway.token` in config.json when set. Empty = no token (localhost only, browsers from other sites refused). Env value never persists into `config.json` (any later `SaveConfig` writes only the in-config value). |
 | `OPENCLAW_GATEWAY_TOKEN` | Alias of `PASCLAW_GATEWAY_TOKEN` for openclaw-compat (operator porting an existing openclaw `.env` doesn't have to rename). `PASCLAW_` wins when both are set. |
 | `NO_COLOR` | Disables ANSI color output. Equivalent to `--no-color`. |
 

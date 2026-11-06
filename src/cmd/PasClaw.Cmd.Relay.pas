@@ -829,12 +829,15 @@ begin
     Exit(1);
   end;
   { Token deliberately not required -- the gateway accepts unauth'd
-    connections when Cfg.Gateway.Token is empty (the historical
-    pre-PR-#246 shape), and forcing the worker to supply a token
-    against an unauth'd gateway turned a working pairing into a CLI
-    rejection. Header / query-param emission below skips Authorization
-    entirely when Ctx.Token = '' so the wire stays clean for both
-    sides. }
+    connections when it has no token (the historical pre-PR-#246
+    shape), and forcing the worker to supply a token against an
+    unauth'd gateway turned a working pairing into a CLI rejection.
+    Header / query-param emission below skips Authorization entirely
+    when Ctx.Token = '' so the wire stays clean for both sides. One
+    limit on the gateway's side: with no token it answers localhost and
+    IP addresses, but a domain name only when it is in the gateway's
+    gateway.allowed_hosts (PasClaw.Gateway.Auth.LocalRequestRefusal) --
+    so a --gateway-url naming the host by DNS needs that, or a token. }
 
   Cfg := LoadConfig;
   try

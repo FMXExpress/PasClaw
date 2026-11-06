@@ -103,6 +103,14 @@ procedure TeamTickPass;
 procedure SetAppsOrigin(const Origin: string);
 function AppsOrigin: string;
 
+(* The port the apps listener is on. When set, /v1/desktop/config answers
+   with that port under the name the desktop itself was opened with -- so a
+   desktop at localhost, 127.0.0.1, 0.0.0.0 or a LAN address points its
+   iframes at the same name, and the apps listener (SetFrameParentPort)
+   lets that desktop frame them. SetAppsOrigin is the fallback for a
+   request with no usable Host. *)
+procedure SetAppsPort(Port: Integer);
+
 { True when Doc is a path this unit owns -- used by the gateway to decide
   whether to consult us at all (and to keep auth gating in one place). }
 function IsDesktopPath(const Doc: string): Boolean;
@@ -116,9 +124,11 @@ function IsAppScopedPath(const Doc: string): Boolean;
 
 { Handle a request. Returns False when the path isn't ours. Method is
   'GET'/'POST'/'PATCH'/'DELETE'; Doc is the path with no query string;
-  Query is the raw query string; Body is the request body. }
+  Query is the raw query string; Body is the request body; Host is the
+  request's Host header (it names the origins the desktop and its apps
+  frame each other under). }
 function DesktopRoute(const Method, Doc, Query, Body: string;
-  out Resp: TDesktopResponse): Boolean;
+  out Resp: TDesktopResponse; const Host: string = ''): Boolean;
 
 implementation
 
@@ -155,6 +165,7 @@ var
   GPageGen: TPageGenerator = nil;
   GTextGen: TTextGenerator = nil;
   GAppsOrigin: string = '';
+  GAppsPort: Integer = 0;
 
 procedure SetAgentRunner(Runner: TAgentRunner);
 begin
@@ -184,6 +195,11 @@ end;
 function AppsOrigin: string;
 begin
   Result := GAppsOrigin;
+end;
+
+procedure SetAppsPort(Port: Integer);
+begin
+  GAppsPort := Port;
 end;
 
 const
@@ -3952,7 +3968,7 @@ begin
 end;
 
 { GET /apps/<project>/<path...> -- serve the app's own files. }
-function RouteAppAsset(const Method, Doc: string;
+function RouteAppAsset(const Method, Doc, Host: string;
   out Resp: TDesktopResponse): Boolean;
 var
   Segs: TStringList;
@@ -4025,7 +4041,7 @@ begin
     { Model-authored code: served under the tightest policy its kind allows,
       and never sniffed into something executable. }
     Resp.Headers     := 'Content-Security-Policy: ' +
-                        AppContentSecurityPolicy(Info.Kind) + #13#10 +
+                        AppContentSecurityPolicy(Info.Kind, Host) + #13#10 +
                         'X-Content-Type-Options: nosniff' + #13#10 +
                         'Referrer-Policy: no-referrer';
 
@@ -4238,7 +4254,7 @@ begin
 end;
 
 { GET /pages/<id>/ -- serve the rendered document. }
-function RoutePageDoc(const Method, Doc: string;
+function RoutePageDoc(const Method, Doc, Host: string;
   out Resp: TDesktopResponse): Boolean;
 var
   Segs: TStringList;
@@ -4273,7 +4289,7 @@ begin
     Resp.FilePath    := Info.Path;
     { A page is a document: no scripts, no network, ever. }
     Resp.Headers     := 'Content-Security-Policy: ' +
-                        AppContentSecurityPolicy(akPage) + #13#10 +
+                        AppContentSecurityPolicy(akPage, Host) + #13#10 +
                         'X-Content-Type-Options: nosniff' + #13#10 +
                         'Referrer-Policy: no-referrer';
   finally
@@ -4293,9 +4309,9 @@ begin
 end;
 
 function DesktopRoute(const Method, Doc, Query, Body: string;
-  out Resp: TDesktopResponse): Boolean;
+  out Resp: TDesktopResponse; const Host: string): Boolean;
 var
-  M, StateBody, StateErr, SeedErr: string;
+  M, StateBody, StateErr, SeedErr, AppsAt: string;
   SeedSkipped: TStringArray;
   SkippedArr: TJsonArray;
   SI: Integer;
@@ -4404,8 +4420,10 @@ begin
   begin
     Root := TJsonObject.Create;
     try
-      Root.PutStr ('apps_origin',   GAppsOrigin);
-      Root.PutBool('apps_isolated', GAppsOrigin <> '');
+      AppsAt := SiblingOrigin(Host, GAppsPort);
+      if AppsAt = '' then AppsAt := GAppsOrigin;
+      Root.PutStr ('apps_origin',   AppsAt);
+      Root.PutBool('apps_isolated', AppsAt <> '');
       Root.PutStr ('host',          LocalHostName);
       ReplyJSON(Resp, 200, Root.ToJSON);
     finally
@@ -4480,10 +4498,10 @@ begin
     Exit(RoutePagesAPI(M, Doc, Body, Resp));
 
   if HasPrefix(Doc, '/apps/') then
-    Exit(RouteAppAsset(M, Doc, Resp));
+    Exit(RouteAppAsset(M, Doc, Host, Resp));
 
   if HasPrefix(Doc, '/pages/') then
-    Exit(RoutePageDoc(M, Doc, Resp));
+    Exit(RoutePageDoc(M, Doc, Host, Resp));
 
   Result := False;
 end;

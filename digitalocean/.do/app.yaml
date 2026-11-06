@@ -55,6 +55,9 @@ services:
       # substitution at LoadConfig time; PasClaw never writes them to
       # disk (and the env-only PASCLAW_GATEWAY_TOKEN path explicitly
       # prevents persistence via SaveConfig -- see docs/configuration.md).
+      # Set this. Unset, the gateway has no token -- and with no token it
+      # answers only requests addressed to localhost, so every request
+      # through the app's domain gets 403 (health checks still pass).
       - key: PASCLAW_GATEWAY_TOKEN
         type: SECRET
         scope: RUN_TIME

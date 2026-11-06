@@ -10,6 +10,14 @@ program gateway_token_tests;
     - Token comparison is constant-time (length-mismatch short-
       circuits; same-length compares touch every byte).
     - Bearer scheme is case-insensitive on the scheme name.
+    - An env-var marker whose variable is not set is NO token, never
+      the marker's own (public) text.
+    - With no token, LocalRequestRefusal turns away the two things only
+      a web page does -- an Origin from another site, and a domain name
+      rebound to 127.0.0.1 (DNS rebinding) -- and nothing else: IP
+      addresses (0.0.0.0, a LAN address), localhost, iframes, CLIs and
+      proxies get through. make test-gateway-local-only drives the same
+      through a live gateway.
 
   These tests exercise PasClaw.Gateway.Auth directly -- no Indy
   server, no provider stack, no config file. A future test that
@@ -357,6 +365,148 @@ begin
              'identical strings still pass after both mismatch cases tested');
 end;
 
+procedure TestUnsetMarkerIsNoToken;
+(* The DigitalOcean template's "${PASCLAW_GATEWAY_TOKEN}" is in the public
+   repository. With the variable unset it used to BE the token: anyone who
+   sent that text was in. Unset is no token now. *)
+var
+  Cfg: TConfig;
+begin
+  Cfg := TConfig.Create;
+  try
+    Cfg.Gateway.Token := '${PASCLAW_GATEWAY_TOKEN}';
+    AssertEq(GetEffectiveGatewayToken(Cfg), '', 'an unset marker is no token');
+    AssertTrue(GatewayAuthState(Cfg) = gasOpen, 'so the gateway is token-less');
+    AssertTrue(Pos('DISABLED', DescribeGatewayAuthState(Cfg)) > 0, 'and says so');
+    AssertTrue(Pos('${PASCLAW_GATEWAY_TOKEN}', DescribeGatewayAuthState(Cfg)) > 0,
+               'naming the variable to set');
+    Cfg.Gateway.Token := 'real-token-0123456789abcdef';
+    AssertTrue(GatewayAuthState(Cfg) = gasRequired, 'a real token is required');
+    AssertTrue(not CheckGatewayAuth(GetEffectiveGatewayToken(Cfg), 'GET', '/v1/config',
+                                    'Bearer ${PASCLAW_GATEWAY_TOKEN}', ''),
+               'and the marker text is no credential for it');
+  finally
+    Cfg.Free;
+  end;
+end;
+
+procedure TestLocalRequestRefusal;
+const
+  H = '127.0.0.1:8088';
+var
+  None: array of string;
+begin
+  None := nil;
+  { What a local client, an SDK, a relay worker or the gateway's own pages
+    send. }
+  AssertEq(LocalRequestRefusal(H, '', None), '', 'a plain local client');
+  AssertEq(LocalRequestRefusal('', '', None), '', 'no Host at all (no browser sends that)');
+  AssertEq(LocalRequestRefusal(H, 'http://127.0.0.1:8088', None), '', 'the web UI');
+  AssertEq(LocalRequestRefusal(H, 'http://127.0.0.1:8088/desktop', None), '', 'an Origin with a path');
+  AssertEq(LocalRequestRefusal('localhost:8088', '', None), '', 'localhost');
+  AssertEq(LocalRequestRefusal('LOCALHOST', '', None), '', 'in any case');
+  AssertEq(LocalRequestRefusal('127.0.0.5:8088', '', None), '', 'all of 127/8');
+  AssertEq(LocalRequestRefusal('[::1]:8088', '', None), '', 'IPv6 loopback');
+  AssertEq(LocalRequestRefusal('app.localhost:8088', '', None), '', '*.localhost');
+  { An IP address cannot be rebound, so any is fine -- the browser's
+    0.0.0.0, and a LAN worker that reaches the gateway by its address. }
+  AssertEq(LocalRequestRefusal('0.0.0.0:8088', '', None), '', '0.0.0.0, as a browser reaches it');
+  AssertEq(LocalRequestRefusal('0.0.0.0:8088', 'http://0.0.0.0:8088', None), '', 'and its own page there');
+  AssertEq(LocalRequestRefusal('[::]:8088', '', None), '', 'and ::');
+  AssertEq(LocalRequestRefusal('192.168.1.5:8088', '', None), '', 'a LAN address, not configured');
+  AssertEq(LocalRequestRefusal('[fe80::1]:8088', '', None), '', 'an IPv6 address');
+  AssertEq(LocalRequestRefusal('192.168.1.5:8088', 'http://192.168.1.5:8088', None), '',
+           'the web UI opened by LAN address');
+  { What only a browser on another site sends. }
+  AssertTrue(LocalRequestRefusal(H, 'https://evil.example', None) <> '', 'a foreign Origin');
+  AssertTrue(LocalRequestRefusal(H, 'null', None) <> '', 'an opaque Origin');
+  AssertTrue(LocalRequestRefusal(H, 'http://127.0.0.1:8089', None) <> '',
+             'another local port: the apps origin''s code is not the desktop''s');
+  AssertTrue(LocalRequestRefusal(H, 'http://localhost:8088', None) <> '',
+             'another name for the same machine is another origin');
+  AssertTrue(LocalRequestRefusal(H, 'http://192.168.1.9', None) <> '',
+             'a page on another machine');
+  AssertTrue(LocalRequestRefusal('', 'https://evil.example', None) <> '',
+             'an Origin with no Host to match');
+  { DNS rebinding: the page is same-origin with the gateway, but its Host
+    header still names it. }
+  AssertTrue(LocalRequestRefusal('attacker.example:8088', 'http://attacker.example:8088', None) <> '',
+             'a rebound name');
+  AssertTrue(LocalRequestRefusal('attacker.example:8088', '', None) <> '',
+             'a rebound name, on a request with no Origin');
+  AssertTrue(Pos('gateway.allowed_hosts', LocalRequestRefusal('attacker.example', '', None)) > 0,
+             'the refusal says how to allow a name');
+  AssertTrue(LocalRequestRefusal('127.0.0.1.evil.example', '', None) <> '',
+             'a name that only starts like loopback');
+  AssertTrue(LocalRequestRefusal('evil-localhost', '', None) <> '',
+             'a name that only ends like localhost');
+  AssertTrue(LocalRequestRefusal('1.2.3.4.evil', '', None) <> '',
+             'a name that only starts like an address');
+  { Names the operator allowed: a reverse proxy, a machine's LAN name. }
+  AssertEq(LocalRequestRefusal('proxy.example', 'https://proxy.example', ['proxy.example']), '',
+           'an allowed name, from its own page (default ports)');
+  AssertEq(LocalRequestRefusal(H, 'https://proxy.example', ['proxy.example']), '',
+           'a proxy that rewrites Host to 127.0.0.1 keeps its own Origin');
+  AssertEq(LocalRequestRefusal('Proxy.Example:443', '', ['proxy.example:8443']), '',
+           'case and ports do not matter in the list');
+  AssertTrue(LocalRequestRefusal('proxy.example', 'https://evil.example', ['proxy.example']) <> '',
+             'an allowed name still refuses a foreign page');
+  AssertTrue(LocalRequestRefusal(H, 'https://evil.example', ['proxy.example']) <> '',
+             'and so does the proxy''s rewritten Host');
+  AssertEq(LocalRequestRefusal('proxy.example:443', 'https://proxy.example', ['proxy.example']), '',
+           'a default port on one side only is the same origin');
+  AssertEq(LocalRequestRefusal('LOCALHOST:8088', 'http://localhost:8088', None), '',
+           'and so is a different case');
+  AssertEq(LocalRequestRefusal('localhost:80', 'http://localhost', None), '',
+           'and a default port a proxy wrote into Host');
+  AssertTrue(LocalRequestRefusal('192.168.1.5:8088', 'http://192.168.1.5:8089',
+                                 ['192.168.1.5']) <> '',
+             'an IP in the list does not let in its other ports (the apps origin)');
+  AssertTrue(LocalRequestRefusal(H, 'http://localhost:3000', ['localhost']) <> '',
+             'nor does localhost');
+end;
+
+procedure TestIsIPLiteral;
+begin
+  AssertTrue(IsIPLiteral('192.168.1.5'), 'v4');
+  AssertTrue(IsIPLiteral('fe80::1'), 'v6');
+  AssertTrue(IsIPLiteral('::ffff:127.0.0.1'), 'v6 with a v4 tail');
+  AssertTrue(not IsIPLiteral(''), 'nothing');
+  AssertTrue(not IsIPLiteral('1.2.3'), 'too few parts');
+  AssertTrue(not IsIPLiteral('1.2.3.4.5'), 'too many');
+  AssertTrue(not IsIPLiteral('deadbeef'), 'a hex-looking name');
+  AssertTrue(not IsIPLiteral('1.2.3.example'), 'a name');
+end;
+
+procedure TestExposureWording;
+(* The startup line must not tell an operator listening on 0.0.0.0 that
+   only local clients get in. *)
+var
+  Cfg: TConfig;
+begin
+  Cfg := TConfig.Create;
+  try
+    Cfg.Gateway.Token := '';
+    AssertTrue(Pos('ANY client', DescribeGatewayAuthState(Cfg, '0.0.0.0')) > 0,
+               'a token-less 0.0.0.0 says anyone who reaches it gets in');
+    AssertTrue(Pos('shell', DescribeGatewayAuthState(Cfg, '192.168.1.5')) > 0,
+               'and what they get');
+    AssertTrue(Pos('ANY client', DescribeGatewayAuthState(Cfg, '127.0.0.1')) = 0,
+               'a loopback one does not');
+    AssertTrue(Pos('this machine', DescribeGatewayAuthState(Cfg, '127.0.0.1')) > 0,
+               'it says this machine');
+    AssertTrue(Pos('ANY client', DescribeGatewayAuthState(Cfg, 'localhost')) = 0, 'nor localhost');
+    Cfg.Gateway.Token := '${PASCLAW_GATEWAY_TOKEN}';
+    AssertTrue(Pos('ANY client', DescribeGatewayAuthState(Cfg, '0.0.0.0')) > 0,
+               'an unset marker on 0.0.0.0 says it too');
+    Cfg.Gateway.Token := 'real-token-0123456789abcdef';
+    AssertTrue(Pos('ENABLED', DescribeGatewayAuthState(Cfg, '0.0.0.0')) > 0,
+               'a token is a token on any address');
+  finally
+    Cfg.Free;
+  end;
+end;
+
 begin
   if (ParamCount >= 1) and (ParamStr(1) = '--env-mode') then
   begin
@@ -372,6 +522,14 @@ begin
 
   TestUnauthenticatedModePassesEveryRoute;
   WriteLn('  ok: unauthenticated mode (empty token) passes every route');
+  TestUnsetMarkerIsNoToken;
+  WriteLn('  ok: an unset ${VAR} marker is no token, not the marker''s text');
+  TestLocalRequestRefusal;
+  WriteLn('  ok: no token: a foreign Origin or a rebound name is refused; IPs, local clients, proxies not');
+  TestIsIPLiteral;
+  WriteLn('  ok: IP addresses are told from domain names');
+  TestExposureWording;
+  WriteLn('  ok: the startup line says who a token-less gateway is open to, by address');
   TestConfiguredTokenRefusesUnauthedRequest;
   WriteLn('  ok: configured token refuses missing / wrong / wrong-scheme headers');
   TestConfiguredTokenAcceptsBearerHeader;

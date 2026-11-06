@@ -119,16 +119,29 @@ function AppSDK(const Project: string): string;
 
 { Content-Security-Policy for served app content. `page` kind gets a
   script-free policy; `html` may run its own inline scripts but may not
-  reach any other origin. Neither may be framed by a foreign site. }
-function AppContentSecurityPolicy(Kind: TAppKind): string;
+  reach any other origin. Neither may be framed by a foreign site.
+  RequestHost is the Host header the content was asked for under, which
+  names the desktop allowed to frame it (SetFrameParentPort). }
+function AppContentSecurityPolicy(Kind: TAppKind;
+                                  const RequestHost: string = ''): string;
 
 (* The origin allowed to FRAME app content, besides the app's own.
 
    When apps are served from their own port (the isolated arrangement), the
    desktop is a different origin -- so a bare `frame-ancestors 'self'` would
-   stop the desktop displaying its own apps. This names the one page that may
-   embed them. Empty (the default) keeps the strict same-origin rule. *)
+   stop the desktop displaying its own apps. SetFrameParentPort names the
+   desktop's port: the parent is that port under the same name the app was
+   asked for, so a desktop opened as localhost, 127.0.0.1, 0.0.0.0 or a LAN
+   address frames apps from the same name on the apps port. A fixed origin
+   (SetFrameParentOrigin) is the fallback for a request with no usable Host.
+   Neither set (the default) keeps the strict same-origin rule. *)
 procedure SetFrameParentOrigin(const Origin: string);
+procedure SetFrameParentPort(Port: Integer);
+
+(* http://<the host of HostHeader>:<Port> -- the origin on another port of
+   the machine a request addressed. '' when HostHeader is empty or is not a
+   plain host[:port] (a v6 host keeps its brackets). *)
+function SiblingOrigin(const HostHeader: string; Port: Integer): string;
 
 { ---- per-app state store ---- }
 
@@ -170,6 +183,7 @@ const
 var
   { The desktop's origin, when apps are served from a separate one. }
   GFrameParent: string = '';
+  GFrameParentPort: Integer = 0;
 
 function AppKindToStr(K: TAppKind): string;
 begin
@@ -679,15 +693,52 @@ begin
   GFrameParent := Origin;
 end;
 
-function AppContentSecurityPolicy(Kind: TAppKind): string;
+procedure SetFrameParentPort(Port: Integer);
+begin
+  GFrameParentPort := Port;
+end;
+
+function SiblingOrigin(const HostHeader: string; Port: Integer): string;
 var
-  Ancestors: string;
+  H, Name: string;
+  i, P: Integer;
+begin
+  Result := '';
+  H := Trim(HostHeader);
+  if (H = '') or (Port <= 0) then Exit;
+  { Only what a host[:port] may hold: this goes into a header and a URL. }
+  for i := 1 to Length(H) do
+    if not CharInSet(H[i], ['A'..'Z', 'a'..'z', '0'..'9', '.', '-', '_',
+                            ':', '[', ']']) then
+      Exit;
+  if H[1] = '[' then
+  begin
+    P := Pos(']', H);
+    if P = 0 then Exit;
+    Name := Copy(H, 1, P);
+  end
+  else
+  begin
+    P := Pos(':', H);
+    if (P > 0) and (Pos(':', Copy(H, P + 1, MaxInt)) > 0) then Exit;
+    if P > 0 then Name := Copy(H, 1, P - 1) else Name := H;
+  end;
+  if (Name = '') or (Name = '[]') then Exit;
+  Result := 'http://' + LowerCase(Name) + ':' + IntToStr(Port);
+end;
+
+function AppContentSecurityPolicy(Kind: TAppKind;
+                                  const RequestHost: string): string;
+var
+  Ancestors, Parent: string;
 begin
   { Common to both: no plugins, no base-tag rewriting, no foreign framing,
     and no form posts anywhere. Images/styles may be inline or data: URIs. }
   Ancestors := '''self''';
-  if GFrameParent <> '' then
-    Ancestors := Ancestors + ' ' + GFrameParent;
+  Parent := SiblingOrigin(RequestHost, GFrameParentPort);
+  if Parent = '' then Parent := GFrameParent;
+  if Parent <> '' then
+    Ancestors := Ancestors + ' ' + Parent;
   Result := 'default-src ''none''; ' +
             'img-src ''self'' data: blob:; ' +
             'style-src ''self'' ''unsafe-inline''; ' +

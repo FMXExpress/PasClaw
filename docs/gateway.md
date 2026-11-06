@@ -259,7 +259,22 @@ Default off: per-session JSONs of flag-off operators are byte-identical to the p
 
 ## Authentication
 
-Off by default. The gateway runs unauthenticated — every `/v1/*` route is open and the OpenAI-compatible endpoints accept any `api_key` string (it's ignored). The implicit safety is binding to `127.0.0.1` (loopback only); operators who run `--addr 0.0.0.0` are intentionally exposing an unauthenticated agent loop to the network.
+Off by default. The gateway runs without a token: the OpenAI-compatible endpoints accept any `api_key` string (it's ignored), and the safety is binding to `127.0.0.1` (loopback only).
+
+With no token, a web page the operator visits still runs on the same machine. The gateway refuses, with 403, the two things only such a page does:
+
+- **an `Origin` from another site.** A page on another site can POST `text/plain` with no CORS preflight, and the gateway reads any body as JSON, so one visit could drive the agent. The browser always says which page sent such a request. An `Origin` is accepted when it is the gateway's own, or a name in `gateway.allowed_hosts`. This also refuses the `--apps-port` origin, so app code cannot call the main API.
+- **a `Host` that is a domain name other than `localhost`, `*.localhost` or a name in `gateway.allowed_hosts`.** A page can re-point its own domain at `127.0.0.1` (DNS rebinding) and then be same-origin with the gateway, but its `Host` header still names that domain. An IP address cannot be rebound, so a `Host` that is an IP address (`127.0.0.1`, `0.0.0.0`, a LAN address) is always fine.
+
+Nothing else is checked. CLI tools, SDKs, MCP clients, relay workers and the gateway's own web UI, desktop and app iframes are not affected. `/`, `/desktop`, `/v1/health`, `/v1/version` and `/webhooks/*` are exempt, as from the token. So is the relay surface when it presents the relay token, along with its CORS preflights; without that token, the relay surface also refuses any page but the gateway's own (`Sec-Fetch-Site` other than `same-origin`), so another site or app code cannot drain the job queue with an `<img>`. Browsers send that header only to `localhost`, `127.x` and https addresses, so this covers the default loopback gateway; a token-less gateway reached at `0.0.0.0` or a LAN address is open to its network anyway. To reach a token-less gateway by a domain name, such as a reverse proxy or a LAN name, add it:
+
+```json
+"gateway": { "allowed_hosts": ["pasclaw.lan", "proxy.example.com"] }
+```
+
+A proxy that rewrites `Host` to `127.0.0.1` works without this, as long as its pages are not cross-site: list its name so its `Origin` is accepted. Refusals are logged as a warning at most once every 10 seconds; the rest go to the debug log.
+
+None of this applies once a token is set: the token is the gate. A client that reaches the port directly can still send any `Host` it likes, so a token-less gateway reachable over the network is open to whoever reaches it. Bind it to `127.0.0.1`, or set a token.
 
 To gate every non-exempt route on a bearer token, set `gateway.token` in `config.json`:
 
@@ -284,6 +299,8 @@ A third path: reference any env var inline via openclaw-style `${VAR_NAME}` subs
 ```json
 "gateway": { "token": "${MY_CORP_PASCLAW_TOKEN}" }
 ```
+
+If that variable is not set, the gateway has **no token**: never the marker's own text, which in a published template (`digitalocean/config.template.json` has `"${PASCLAW_GATEWAY_TOKEN}"`) anyone can read. The startup log says `bearer-token auth DISABLED -- gateway.token is ${...} and that env var is not set`.
 
 This pattern persists the resolved value through `SaveConfig`; for env-only secrets that should never end up in `config.json`, prefer the dedicated `PASCLAW_GATEWAY_TOKEN` env path above.
 

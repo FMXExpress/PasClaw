@@ -36,7 +36,7 @@ run:
 	fi
 	docker run --rm -it \
 	  --name pasclaw-do \
-	  -p $(PORT):8088 \
+	  -p 127.0.0.1:$(PORT):8088 \
 	  --env-file $(if $(wildcard $(REPO_ROOT)/digitalocean/.env),$(REPO_ROOT)/digitalocean/.env,$(REPO_ROOT)/$(ENV_FILE)) \
 	  -v $(DATA_VOL):/data/pasclaw \
 	  $(IMAGE)
