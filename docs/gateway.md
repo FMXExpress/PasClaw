@@ -259,7 +259,21 @@ Default off: per-session JSONs of flag-off operators are byte-identical to the p
 
 ## Authentication
 
-Off by default. The gateway runs unauthenticated — every `/v1/*` route is open and the OpenAI-compatible endpoints accept any `api_key` string (it's ignored). The implicit safety is binding to `127.0.0.1` (loopback only); operators who run `--addr 0.0.0.0` are intentionally exposing an unauthenticated agent loop to the network.
+Off by default. The gateway runs without a token: the OpenAI-compatible endpoints accept any `api_key` string (it's ignored), and the safety is binding to `127.0.0.1` (loopback only).
+
+With no token, the gateway answers only what a local client sends. It refuses, with 403, what only a web browser sends:
+
+- **a `Host` that is not this machine** (`localhost`, `*.localhost`, `127.x`, `::1`, or a name in `gateway.allowed_hosts`). A web page can rebind its own name to `127.0.0.1` (DNS rebinding) and then be same-origin with the gateway, but its `Host` header still names it.
+- **an `Origin` that is not the gateway's own.** A page on another site can POST `text/plain` with no CORS preflight, and the gateway reads any body as JSON. The browser always says which page sent it. This also covers the `--apps-port` origin, so app code cannot call the main API.
+- **`Sec-Fetch-Site: cross-site`**, for requests that carry no `Origin`.
+
+CLI tools, SDKs, MCP clients and the gateway's own web UI and desktop send none of these, so they are not affected. `/`, `/desktop`, `/v1/health`, `/v1/version` and `/webhooks/*` are exempt, as from the token. So is the relay surface when it presents the relay token, along with its CORS preflights. If the gateway is bound to a specific address, that address is an allowed name too. To reach a token-less gateway through a reverse proxy or under a LAN name, add the name:
+
+```json
+"gateway": { "allowed_hosts": ["pasclaw.lan", "192.168.1.5"] }
+```
+
+None of this applies once a token is set: the token is the gate. A client that reaches the port directly can still send any `Host` it likes, so a token-less gateway reachable over the network is open to whoever reaches it. Bind it to `127.0.0.1`, or set a token.
 
 To gate every non-exempt route on a bearer token, set `gateway.token` in `config.json`:
 
@@ -284,6 +298,8 @@ A third path: reference any env var inline via openclaw-style `${VAR_NAME}` subs
 ```json
 "gateway": { "token": "${MY_CORP_PASCLAW_TOKEN}" }
 ```
+
+If that variable is not set, the gateway has **no token**: never the marker's own text, which in a published template (`digitalocean/config.template.json` has `"${PASCLAW_GATEWAY_TOKEN}"`) anyone can read. The startup log says `bearer-token auth DISABLED -- gateway.token is ${...} and that env var is not set`.
 
 This pattern persists the resolved value through `SaveConfig`; for env-only secrets that should never end up in `config.json`, prefer the dedicated `PASCLAW_GATEWAY_TOKEN` env path above.
 

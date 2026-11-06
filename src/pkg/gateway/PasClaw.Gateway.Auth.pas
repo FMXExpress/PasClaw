@@ -30,6 +30,24 @@
   enumerate the token byte-by-byte. ASCII byte equality only --
   the token is whatever string the operator put in config.json
   (or in the PASCLAW_GATEWAY_TOKEN env var).
+
+  With no token, the gateway is only as private as the machine -- and
+  a web page the operator visits runs ON the machine. So a token-less
+  gateway refuses what only a browser sends (LocalRequestRefusal):
+
+    a Host that is not localhost / 127.x / ::1 (or configured)
+                       -- a page that rebinds its own name to 127.0.0.1
+                       is same-origin with the gateway and could read
+                       every answer; its Host header still names it
+    an Origin that is not the gateway's own
+                       -- a cross-site POST needs no preflight when it
+                       is text/plain, and the gateway reads any body as
+                       JSON; the browser always says where it came from
+    Sec-Fetch-Site: cross-site
+                       -- the same, for requests that carry no Origin
+
+  CLI tools, SDKs and MCP clients send none of these, so they are not
+  affected; with a token set none of this applies, the token is the gate.
 *)
 unit PasClaw.Gateway.Auth;
 
@@ -73,6 +91,27 @@ function CheckGatewayAuth(const ConfiguredToken: string;
                           const Method, Doc: string;
                           const AuthHeader: string;
                           const QueryToken: string): Boolean;
+
+(*  LocalRequestRefusal -- for a gateway with NO token: '' when the
+    request may proceed, else why it is refused (send 403 with it).
+    Host, Origin and SecFetchSite are the request's headers, '' when
+    absent. AllowedHosts are the names besides the loopback ones the
+    gateway answers to (gateway.allowed_hosts, and the bind address when
+    it is a specific one); a port in an entry is ignored. Pure. *)
+function LocalRequestRefusal(const Host, Origin, SecFetchSite: string;
+                             const AllowedHosts: array of string): string;
+
+{ localhost, *.localhost, 127.0.0.0/8, ::1 -- names that always mean
+  this machine. }
+function IsLoopbackHostName(const Name: string): Boolean;
+
+(* The names a token-less listener answers to besides the loopback ones:
+   the configured ones (gateway.allowed_hosts), and the address it is
+   bound to when that is a specific one -- an operator who bound
+   192.168.1.5 means to be reached there. 0.0.0.0 / :: are every address,
+   so no name. *)
+function ListenerAllowedHosts(const Configured: array of string;
+                              const BindAddr: string): TArray<string>;
 
 implementation
 
@@ -179,6 +218,126 @@ begin
     Exit(ConstantTimeStringEqual(QueryToken, ConfiguredToken));
 
   Result := False;
+end;
+
+function HostOnly(const Authority: string): string;
+{ The host of "host", "host:port", "[v6]" or "[v6]:port", lower case and
+  without brackets. A bare v6 address (two or more colons) is all host. }
+var
+  A: string;
+  P, Colons, i: Integer;
+begin
+  A := LowerCase(Trim(Authority));
+  if (A <> '') and (A[1] = '[') then
+  begin
+    P := Pos(']', A);
+    if P > 0 then Exit(Copy(A, 2, P - 2));
+    Exit(Copy(A, 2, MaxInt));
+  end;
+  Colons := 0;
+  for i := 1 to Length(A) do
+    if A[i] = ':' then Inc(Colons);
+  if Colons = 1 then
+    Result := Copy(A, 1, Pos(':', A) - 1)
+  else
+    Result := A;
+end;
+
+function SameAuthority(const A, B: string): Boolean;
+{ "host[:port]" equality, ignoring case and a default port (80, 443):
+  the Host header has no scheme to say which one was meant. }
+  function Norm(const S: string): string;
+  begin
+    Result := LowerCase(Trim(S));
+    if (Length(Result) > 3) and (Copy(Result, Length(Result) - 2, 3) = ':80') then
+      SetLength(Result, Length(Result) - 3)
+    else if (Length(Result) > 4) and (Copy(Result, Length(Result) - 3, 4) = ':443') then
+      SetLength(Result, Length(Result) - 4);
+  end;
+begin
+  Result := Norm(A) = Norm(B);
+end;
+
+function IsLoopbackHostName(const Name: string): Boolean;
+var
+  N: string;
+  i: Integer;
+begin
+  N := LowerCase(Name);
+  if (N = 'localhost') or (N = '::1') then Exit(True);
+  if (Length(N) > 10) and (Copy(N, Length(N) - 9, 10) = '.localhost') then Exit(True);
+  Result := False;
+  if Copy(N, 1, 4) <> '127.' then Exit;
+  for i := 5 to Length(N) do
+    if not (((N[i] >= '0') and (N[i] <= '9')) or (N[i] = '.')) then Exit;
+  Result := True;
+end;
+
+function ListenerAllowedHosts(const Configured: array of string;
+                              const BindAddr: string): TArray<string>;
+var
+  i: Integer;
+begin
+  SetLength(Result, Length(Configured));
+  for i := 0 to High(Configured) do Result[i] := Configured[i];
+  if (BindAddr <> '') and (BindAddr <> '0.0.0.0') and (BindAddr <> '::') and
+     (BindAddr <> '[::]') and (BindAddr <> '*') then
+  begin
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := BindAddr;
+  end;
+end;
+
+function LocalRequestRefusal(const Host, Origin, SecFetchSite: string;
+                             const AllowedHosts: array of string): string;
+var
+  Name, O, Authority: string;
+  i, P: Integer;
+  Allowed: Boolean;
+begin
+  Result := '';
+  { 1. Host: a name that means this machine, or one the operator named. A
+       request with no Host at all is no browser's. }
+  Name := HostOnly(Host);
+  if Name <> '' then
+  begin
+    Allowed := IsLoopbackHostName(Name);
+    for i := Low(AllowedHosts) to High(AllowedHosts) do
+      if (not Allowed) and (HostOnly(AllowedHosts[i]) = Name) then
+        Allowed := True;
+    if not Allowed then
+      Exit(Format('this gateway has no token, so it answers only requests ' +
+                  'addressed to localhost; "%s" is not one. Set ' +
+                  'PASCLAW_GATEWAY_TOKEN to require a token, or add the name ' +
+                  'to gateway.allowed_hosts', [Name]));
+  end;
+
+  { 2. Origin: a browser names the page a request came from. Only the
+       gateway's own pages (the web UI, the desktop) may use it. }
+  O := Trim(Origin);
+  if O <> '' then
+  begin
+    Authority := '';
+    P := Pos('://', O);
+    if P > 0 then
+    begin
+      Authority := Copy(O, P + 3, MaxInt);
+      if Pos('/', Authority) > 0 then
+        Authority := Copy(Authority, 1, Pos('/', Authority) - 1);
+    end;
+    if (Authority = '') or (Host = '') or not SameAuthority(Authority, Host) then
+      Exit(Format('this gateway has no token, so it refuses requests from ' +
+                  'other web sites (this one came from %s). Set ' +
+                  'PASCLAW_GATEWAY_TOKEN to use it from one', [O]));
+    Exit;
+  end;
+
+  { 3. No Origin (a GET, mostly): the fetch metadata still says whether
+       another site sent it. same-site (this host, another port: the apps
+       origin's iframes) and none (typed into the address bar) are fine. }
+  if LowerCase(Trim(SecFetchSite)) = 'cross-site' then
+    Exit('this gateway has no token, so it refuses requests from other ' +
+         'web sites. Set PASCLAW_GATEWAY_TOKEN to use it from one');
 end;
 
 end.

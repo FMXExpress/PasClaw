@@ -12,8 +12,12 @@ The builder uses Debian-packaged FPC rather than the upstream `freepascal/fpc:*`
 # without operator config; same Dockerfile, same build for any host).
 docker build -t pasclaw:dev .
 
-# Run the gateway, persist workspace to ~/.pasclaw on the host
-docker run --rm -p 8088:8088 \
+# Run the gateway, persist workspace to ~/.pasclaw on the host. Published on
+# 127.0.0.1 only: with no PASCLAW_GATEWAY_TOKEN the gateway has no token, and
+# answers only requests to localhost -- but a client on the network that
+# reaches the port can claim any Host. To serve other machines, set a token:
+#   -e PASCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32) -p 8088:8088
+docker run --rm -p 127.0.0.1:8088:8088 \
   -v $HOME/.pasclaw:/home/pasclaw/.pasclaw \
   pasclaw:dev
 
@@ -31,7 +35,7 @@ The container reads from `$PASCLAW_HOME` (set to `/home/pasclaw/.pasclaw` inside
 
 ```sh
 # Read-only config + writable workspace
-docker run --rm -p 8088:8088 \
+docker run --rm -p 127.0.0.1:8088:8088 \
   -v $HOME/.pasclaw/config.json:/home/pasclaw/.pasclaw/config.json:ro \
   -v pasclaw-workspace:/home/pasclaw/.pasclaw/workspace \
   pasclaw:dev

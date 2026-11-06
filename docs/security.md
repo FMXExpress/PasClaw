@@ -180,7 +180,7 @@ This is the "race-safe" property: when the agent reads, summarises, then writes,
 
 ## Gateway bearer token
 
-The HTTP gateway is unauthenticated by default — every `/v1/*` route is open and the OpenAI-compatible endpoints ignore the `api_key` field. The implicit safety is binding to `127.0.0.1` (loopback); operators who use `--addr 0.0.0.0` are exposing an unauthenticated agent loop.
+The HTTP gateway has no token by default, and the OpenAI-compatible endpoints ignore the `api_key` field. Its safety is binding to `127.0.0.1` (loopback). Loopback alone is not enough, because a web page the operator visits runs on the same machine. So a token-less gateway refuses requests with a foreign `Host` (DNS rebinding), a foreign `Origin`, or `Sec-Fetch-Site: cross-site`, and answers local clients as before. See [Gateway § Authentication](./gateway.md#authentication). A `gateway.token` that is a `${VAR}` marker whose variable is not set is no token, not the marker's text. Operators who use `--addr 0.0.0.0` without a token are exposing an agent loop to anyone who can reach the port.
 
 For network-bound deployments, set `gateway.token` (or `$PASCLAW_GATEWAY_TOKEN`):
 

@@ -382,27 +382,17 @@ begin
       { Exposure block. Two independent switches an operator can get
         wrong, stated as what is currently true rather than as a flag
         reference. }
-      (* Three postures, two of them unhealthy in OPPOSITE directions.
-         Collapsing them into one "insecure" branch told an operator whose
-         token was still an unresolved env-var template that the server was
-         wide open, when in fact it was rejecting every client with 401 --
-         the reverse of the truth. *)
+      (* No token (none set, or a ${VAR} marker whose variable is not
+         set): no bearer is asked for, and only requests to localhost that
+         are not from another web site are answered. *)
       case GatewayAuthState(Cfg) of
         gasOpen:
           begin
             PrintLn('  ' + Ansi.Yellow + 'Unauthenticated' + Ansi.Reset +
-                    ' -- every /v1/* and /mcp route is open to any caller.');
+                    ' -- /v1/* and /mcp answer requests to localhost, not from other web sites.');
             PrintLn('  ' + Ansi.Dim +
                     'Set gateway.token in config.json or $PASCLAW_GATEWAY_TOKEN to require a bearer.' +
                     Ansi.Reset);
-          end;
-        gasMisconfigured:
-          begin
-            PrintLn('  ' + Ansi.Yellow + 'Auth misconfigured' + Ansi.Reset +
-                    ' -- gateway.token is an unresolved ${...} template.');
-            PrintLn('  ' + Ansi.Dim +
-                    'The literal is compared against client bearers, so EVERY request gets 401. ' +
-                    'Set the env var it names, or put a real token in config.json.' + Ansi.Reset);
           end;
       else
         PrintLn('  ' + Ansi.Green + 'Bearer auth required' + Ansi.Reset +

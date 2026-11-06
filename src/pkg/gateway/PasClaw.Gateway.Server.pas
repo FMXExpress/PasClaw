@@ -148,6 +148,10 @@ type
        separate storage, no reach into the desktop's DOM, and the postMessage
        broker still works because postMessage is cross-origin by design. *)
     FAppsOnly:         Boolean;
+    (* With no token: the Host names besides the loopback ones this listener
+       answers to -- gateway.allowed_hosts, and the address it is bound to
+       when that is a specific one. Set in Start. *)
+    FAllowedHosts:     TArray<string>;
     function  GetOrCreateMCPInbound: TMCPServerCore;
     procedure HandleMCPRequest(ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
@@ -1592,6 +1596,8 @@ begin
   if FStarted then Exit;
   FHTTP.Bindings.Clear;
   Binding := FHTTP.Bindings.Add;
+  { The names a token-less listener answers to besides localhost. }
+  FAllowedHosts := ListenerAllowedHosts(FCfg.Gateway.AllowedHosts, BindAddr);
   Binding.IP   := BindAddr;
   Binding.Port := Port;
   FHTTP.Active := True;
@@ -1794,7 +1800,7 @@ var
   IsChatCompletionsStream: Boolean;
   ResponseStarted: Boolean;
   HttpSpan: TOtelSpan;
-  ParentTP: string;
+  ParentTP, LocalRefusal: string;
 begin
   Doc := ARequest.Document;
   IsChatCompletionsStream := False;
@@ -1836,6 +1842,38 @@ begin
     to a compromised worker, the worst they can do is pull jobs
     and POST responses -- they can't impersonate the operator
     against the rest of the API. }
+  (* No token: the gateway is as private as the machine, and a web page the
+     operator visits runs on the machine. Refuse what only a browser sends
+     -- a foreign Host (a page that rebound its name to 127.0.0.1), a
+     foreign Origin, Sec-Fetch-Site: cross-site. See
+     PasClaw.Gateway.Auth.LocalRequestRefusal. Exempt: the routes the
+     bearer check exempts (static UI pages, health, version, webhooks,
+     which carry their own signatures), and the relay surface when it
+     presents the relay token -- a real credential, which the sandboxed
+     in-tab worker sends from an opaque origin. (That surface's CORS
+     preflights never get here: OnCommandOther answers them first.) PUT
+     and DELETE do: OnCommandOther hands them to this method. *)
+  if (GetEffectiveGatewayToken(FCfg) = '') and
+     not IsExemptRoute(ARequest.Command, Doc) and
+     not RelayTokenAuthorises(Doc,
+                              ARequest.RawHeaders.Values['Authorization'],
+                              ARequest.Params.Values['token']) then
+  begin
+    LocalRefusal := LocalRequestRefusal(ARequest.RawHeaders.Values['Host'],
+                                        ARequest.RawHeaders.Values['Origin'],
+                                        ARequest.RawHeaders.Values['Sec-Fetch-Site'],
+                                        FAllowedHosts);
+    if LocalRefusal <> '' then
+    begin
+      SetAttrInt(HttpSpan, 'http.response.status_code', 403);
+      SetStatus(HttpSpan, oscError, 'forbidden');
+      LogWarn('gateway: refused %s %s -- %s', [ARequest.Command, Doc, LocalRefusal]);
+      WriteJSON(AResponse, 403, '{"error":"forbidden","message":"' +
+                JsonEscape(LocalRefusal) + '"}');
+      Exit;
+    end;
+  end;
+
   (* Apps-origin carve-out: on the --apps-port listener, the routes the
      listener exists to serve bypass the operator bearer. The second origin
      exists so model-authored app code can NEVER see the operator token --
