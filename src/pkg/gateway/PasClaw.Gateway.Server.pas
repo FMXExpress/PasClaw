@@ -1886,7 +1886,11 @@ begin
      with an <img> or a no-cors fetch, which carry no Origin, only
      Sec-Fetch-Site. So without the relay token that surface answers only
      the gateway's own pages and non-browsers: real workers either present
-     the relay token or are not browsers. Exempt: the routes the bearer check exempts (static UI
+     the relay token or are not browsers. Browsers send Sec-Fetch-Site
+     only to trustworthy URLs -- localhost, 127.x, https -- so this covers
+     the default loopback gateway; one reached as http://0.0.0.0 or a LAN
+     address gets an <img> with neither header, and is open to its whole
+     network anyway (the startup line says so). Exempt: the routes the bearer check exempts (static UI
      pages, health, version, webhooks, which carry their own signatures),
      and the relay surface when it presents the relay token -- a real
      credential, which the sandboxed in-tab worker sends from an opaque
