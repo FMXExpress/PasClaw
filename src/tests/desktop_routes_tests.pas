@@ -967,6 +967,23 @@ begin
   { Directory request serves the entry document. }
   ExpectStatus('GET', '/apps/spam-filter/', '', 200, 'directory request serves the entry');
 
+  { On the apps listener the frame parent is the desktop's port under the
+    name the app was asked for: a desktop opened as localhost frames
+    localhost:<apps-port>, whatever --addr was. }
+  SetFrameParentOrigin('http://0.0.0.0:8910');
+  SetFrameParentPort(8910);
+  if DesktopRoute('GET', '/apps/spam-filter/index.html', '', '', R, 'localhost:9999') then
+    ExpectTrue(Pos('frame-ancestors ''self'' http://localhost:8910', R.Headers) > 0,
+               'an app asked for as localhost may be framed by the localhost desktop (' +
+               R.Headers + ')')
+  else
+    Fail_('asset route not handled with a Host');
+  if DesktopRoute('GET', '/apps/spam-filter/index.html', '', '', R, '') then
+    ExpectTrue(Pos('frame-ancestors ''self'' http://0.0.0.0:8910', R.Headers) > 0,
+               'with no Host, the --addr origin is the fallback');
+  SetFrameParentOrigin('');
+  SetFrameParentPort(0);
+
   { --- the escape suite, replayed through routing --- }
   ExpectNoFile('/apps/spam-filter/../project.json',           'parent traversal');
   ExpectNoFile('/apps/spam-filter/../../../../etc/passwd',    'deep traversal');
@@ -1213,7 +1230,34 @@ begin
                      'and reports isolation once an apps origin is set');
   ExpectBodyContains('GET', '/v1/desktop/config', '', '127.0.0.1:9999',
                      'carrying the origin the client must use');
+  { With the apps port known, the origin follows the name the desktop was
+    opened with -- not --addr, which may be 0.0.0.0 or a name the browser
+    never used. }
+  SetAppsOrigin('http://0.0.0.0:9999');
+  SetAppsPort(9999);
+  if DesktopRoute('GET', '/v1/desktop/config', '', '', R, 'localhost:8088') then
+    ExpectTrue(Pos('"apps_origin":"http:\/\/localhost:9999"', StringReplace(R.Body, ' ', '', [rfReplaceAll])) +
+               Pos('"apps_origin":"http://localhost:9999"', StringReplace(R.Body, ' ', '', [rfReplaceAll])) > 0,
+               'a desktop opened as localhost gets localhost:9999 (' + R.Body + ')');
+  if DesktopRoute('GET', '/v1/desktop/config', '', '', R, '192.168.1.5:8088') then
+    ExpectTrue(Pos('192.168.1.5:9999', R.Body) > 0,
+               'one opened by LAN address gets that address');
+  if DesktopRoute('GET', '/v1/desktop/config', '', '', R, '') then
+    ExpectTrue(Pos('0.0.0.0:9999', R.Body) > 0, 'no Host: the --addr origin');
+  SetAppsPort(0);
   SetAppsOrigin('');
+
+  { SiblingOrigin: the same machine's name, another port; nothing that
+    could break out of a header or a URL. }
+  ExpectTrue(SiblingOrigin('localhost:8088', 9) = 'http://localhost:9', 'name:port');
+  ExpectTrue(SiblingOrigin('LocalHost', 9) = 'http://localhost:9', 'no port, any case');
+  ExpectTrue(SiblingOrigin('[::1]:8088', 9) = 'http://[::1]:9', 'v6 keeps its brackets');
+  ExpectTrue(SiblingOrigin('0.0.0.0:8088', 9) = 'http://0.0.0.0:9', '0.0.0.0');
+  ExpectTrue(SiblingOrigin('', 9) = '', 'no Host');
+  ExpectTrue(SiblingOrigin('a.example:1', 0) = '', 'no port');
+  ExpectTrue(SiblingOrigin('evil.example; script-src *', 9) = '', 'no directive injection');
+  ExpectTrue(SiblingOrigin('a:b:c', 9) = '', 'a bare v6 is no Host');
+  ExpectTrue(SiblingOrigin('[::1', 9) = '', 'an unclosed bracket');
 
   { When apps live on their own origin the desktop must still be allowed to
     frame them, or the isolation would break the product. }

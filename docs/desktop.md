@@ -513,7 +513,13 @@ The desktop learns the arrangement rather than assuming it:
 GET /v1/desktop/config -> {"apps_isolated": true, "apps_origin": "http://127.0.0.1:8081"}
 ```
 
-and frames apps from there. Apps keep working when you *don't* pass
+and frames apps from there. The origin is the apps port under the name the
+desktop was opened with: a desktop at `http://localhost:8080` frames
+`http://localhost:8081`, one opened by LAN address frames that address, and
+the apps listener allows exactly that desktop to frame its content
+(`frame-ancestors`). So the desktop shows its apps whether it was opened as
+`localhost`, `127.0.0.1`, `0.0.0.0` or a LAN address, whatever `--addr` was;
+a page on any other origin still cannot frame them. Apps keep working when you *don't* pass
 `--apps-port` — one origin, sandboxed frames, as before — so this is an
 upgrade, not a requirement. If your gateway is token-gated and you open
 generated apps standalone, use it.

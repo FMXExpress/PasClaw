@@ -511,10 +511,16 @@ begin
           visible configuration error, not a silent fallback to the insecure
           same-origin arrangement. }
         SetAppsOrigin(Format('http://%s:%d', [Args.Addr, Args.AppsPort]));
-        { ...and tell the app listener which single origin may frame its
-          content, or its own frame-ancestors rule would lock the desktop
-          out of displaying the apps it owns. }
+        { ...and tell the app listener which origin may frame its content,
+          or its own frame-ancestors rule would lock the desktop out of
+          displaying the apps it owns. Both follow the name the browser
+          used: a desktop opened as localhost frames apps from
+          localhost:<apps-port>, one opened by LAN address from that
+          address. The --addr forms are the fallback for a request with
+          no Host. }
+        SetAppsPort(Args.AppsPort);
         SetFrameParentOrigin(Format('http://%s:%d', [Args.Addr, Args.Port]));
+        SetFrameParentPort(Args.Port);
       end;
 
       PrintLn(Ansi.Bold + 'Gateway up.' + Ansi.Reset);

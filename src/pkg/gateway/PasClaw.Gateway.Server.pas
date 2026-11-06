@@ -2323,7 +2323,8 @@ begin
   if (Trim(Body) = '') and (ARequest.UnparsedParams <> '') then
     Body := ARequest.UnparsedParams;
 
-  if not DesktopRoute(ARequest.Command, Doc, ARequest.QueryParams, Body, Resp) then
+  if not DesktopRoute(ARequest.Command, Doc, ARequest.QueryParams, Body, Resp,
+                      ARequest.RawHeaders.Values['Host']) then
     Exit;
   Result := True;
 
