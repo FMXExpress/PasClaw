@@ -81,6 +81,10 @@ check "a proxy that rewrites Host to 127.0.0.1" 200 \
   -H "Origin: https://proxy.example" "$A/v1/config"
 check "a cross-site page draining the relay queue (an <img>, no Origin)" 403 \
   -H "Sec-Fetch-Site: cross-site" "$A/v1/relay/poll"
+check "app code on the apps port draining it (same-site, no-cors)" 403 \
+  -H "Sec-Fetch-Site: same-site" "$A/v1/relay/poll"
+check_not "the gateway's own page on the relay surface" 403 \
+  -H "Sec-Fetch-Site: same-origin" -H "Origin: http://127.0.0.1:8796" "$A/v1/relay/status"
 RELAY=$(curl -s "$A/v1/relay/worker-token" | sed -n 's/.*"token" *: *"\([^"]*\)".*/\1/p')
 check_not "the relay surface with its token, from an opaque origin" 403 \
   -H "Origin: null" -H "Authorization: Bearer $RELAY" "$A/v1/relay/status"

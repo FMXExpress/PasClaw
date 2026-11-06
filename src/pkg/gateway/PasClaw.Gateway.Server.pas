@@ -1834,7 +1834,7 @@ var
   IsChatCompletionsStream: Boolean;
   ResponseStarted: Boolean;
   HttpSpan: TOtelSpan;
-  ParentTP, LocalRefusal: string;
+  ParentTP, LocalRefusal, FetchSite: string;
 begin
   Doc := ARequest.Document;
   IsChatCompletionsStream := False;
@@ -1881,10 +1881,12 @@ begin
      site, or address the gateway by a domain name it rebound to
      127.0.0.1 -- and nothing else (PasClaw.Gateway.Auth.
      LocalRequestRefusal). Plus one narrow rule for the relay surface:
-     GET /v1/relay/poll hands out a job, so a cross-site page could drain
-     the queue with an <img> -- which carries no Origin, only
-     Sec-Fetch-Site. Real workers either present the relay token or are
-     not browsers. Exempt: the routes the bearer check exempts (static UI
+     GET /v1/relay/poll hands out a job, so any other page -- another
+     site, or app code on the --apps-port origin -- could drain the queue
+     with an <img> or a no-cors fetch, which carry no Origin, only
+     Sec-Fetch-Site. So without the relay token that surface answers only
+     the gateway's own pages and non-browsers: real workers either present
+     the relay token or are not browsers. Exempt: the routes the bearer check exempts (static UI
      pages, health, version, webhooks, which carry their own signatures),
      and the relay surface when it presents the relay token -- a real
      credential, which the sandboxed in-tab worker sends from an opaque
@@ -1900,10 +1902,11 @@ begin
     LocalRefusal := LocalRequestRefusal(ARequest.RawHeaders.Values['Host'],
                                         ARequest.RawHeaders.Values['Origin'],
                                         FCfg.Gateway.AllowedHosts);
+    FetchSite := LowerCase(Trim(ARequest.RawHeaders.Values['Sec-Fetch-Site']));
     if (LocalRefusal = '') and HasPrefix(Doc, '/v1/relay/') and
-       SameText(Trim(ARequest.RawHeaders.Values['Sec-Fetch-Site']), 'cross-site') then
+       (FetchSite <> '') and (FetchSite <> 'same-origin') and (FetchSite <> 'none') then
       LocalRefusal := 'this gateway has no token, so its relay surface ' +
-                      'refuses other web sites unless they present the relay token';
+                      'refuses other pages unless they present the relay token';
     if LocalRefusal <> '' then
     begin
       SetAttrInt(HttpSpan, 'http.response.status_code', 403);
