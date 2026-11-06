@@ -85,10 +85,10 @@ begin
   if ReadGatewayRunFile(GetHome, Info) then
   begin
     URL := GatewayBaseURL(Info);
-    if (Info.TokenHash <> '') and (Info.TokenHash <> TokenHashHex(Cfg.Gateway.Token)) then
+    if (Info.TokenHash <> '') and (Info.TokenHash <> TokenHashHex(GetEffectiveGatewayToken(Cfg))) then
       Warn := 'the running gateway was started with a different gateway.token than this ' +
               'config has; requests will be refused with 401 unless the tokens match'
-    else if (Info.TokenHash = '') and (Cfg.Gateway.Token <> '') then
+    else if (Info.TokenHash = '') and (GetEffectiveGatewayToken(Cfg) <> '') then
       Warn := 'the running gateway has no token; this config''s gateway.token is unused';
     Exit(True);
   end;
@@ -211,7 +211,7 @@ begin
   Printer := TPrinter.Create;
   try
     Printer.Quiet := Quiet;
-    Client.Token := Cfg.Gateway.Token;
+    Client.Token := GetEffectiveGatewayToken(Cfg);
     Client.SessionContext := True;   { the gateway merges its stored transcript }
     { What the flags asked for, on every turn -- see TChatTurnOptions. }
     Client.TurnOptions := TurnOpts;

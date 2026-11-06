@@ -66,11 +66,12 @@ type
       variable is not set is no token at all (GetEffectiveGatewayToken),
       never the marker's own text -- that text is public. }
     Token:    string;
-    (* With no token, the Host names besides localhost / 127.x / ::1 (and
-       the bind address, when it is one) that the gateway answers to --
-       a reverse proxy's name, a LAN address. Anything else is refused,
-       which is what stops a web page reaching a token-less gateway by
-       DNS rebinding. Unused when a token is set: the token is the gate. *)
+    (* With no token, the domain names besides localhost / *.localhost
+       that the gateway answers to -- a reverse proxy's name, a machine's
+       LAN name; IP addresses are always answered. Another domain name is refused, which is what
+       stops a web page reaching a token-less gateway by DNS rebinding;
+       a web page under one of these names may also call it. Unused when
+       a token is set: the token is the gate. *)
     AllowedHosts: array of string;
   end;
 
@@ -1257,6 +1258,12 @@ function GetEffectiveGatewayToken(const C: TConfig): string;
       gateway: bearer-token auth DISABLED -- gateway.token is ${PASCLAW_GATEWAY_TOKEN} and that env var is not set; ...
       gateway: bearer-token auth DISABLED -- no token configured; ...
 
+    What follows "DISABLED" depends on BindAddr, the address the gateway
+    listens on: on a loopback one, local clients use the API; on any
+    other (0.0.0.0, a LAN or public address), so does every client that
+    can reach it -- the line says so, shell and files included. '' is
+    an unknown address and gets the loopback wording.
+
     The marker case is the typo trap: an operator sets
     PASCAL_GATEWAY_TOKEN (no W) in the platform's env-var UI, and
     the marker resolves to nothing. It says which variable to set,
@@ -1269,17 +1276,21 @@ function GetEffectiveGatewayToken(const C: TConfig): string;
     token, and the token is presumed long). Suppressed for tokens
     shorter than 8 chars (we log `prefix=<short>` instead -- a 4-byte
     prefix of a 6-byte token leaks too much). *)
-function DescribeGatewayAuthState(const C: TConfig): string;
+function DescribeGatewayAuthState(const C: TConfig;
+                                  const BindAddr: string = ''): string;
+
+(*  NoTokenExposure -- what a token-less gateway listening on BindAddr is
+    open to, as one clause for a log line or a banner. *)
+function NoTokenExposure(const BindAddr: string): string;
 
 (*  GatewayAuthState -- which auth posture the gateway is actually in.
     Callers use it to pick the log LEVEL and the banner wording:
 
       gasRequired  a real token is set; clients must present it.
       gasOpen      no token (none configured, or a `${VAR}` marker whose
-                   env var is not set): no bearer is asked for, and the
-                   gateway answers only requests addressed to localhost
-                   (or gateway.allowed_hosts) that are not from another
-                   web site (PasClaw.Gateway.Auth.LocalRequestRefusal). *)
+                   env var is not set): no bearer is asked for; only web
+                   pages from other sites, and DNS-rebound names, are
+                   refused (PasClaw.Gateway.Auth.LocalRequestRefusal). *)
 type
   TGatewayAuthState = (gasRequired, gasOpen);
 
@@ -1676,7 +1687,7 @@ end;
 function TConfig.ToJSON: string;
 var
   Root, Gw, Tmp, Tmp2, Diag, OtelHdrs, WTmp: TJsonObject;
-  Arr, FallbacksArr: TJsonArray;
+  Arr, FallbacksArr, HostsArr: TJsonArray;
   i: Integer;
 begin
   Root := TJsonObject.Create;
@@ -1713,10 +1724,10 @@ begin
     if Gateway.Token <> '' then Gw.PutStr('token', Gateway.Token);
     if Length(Gateway.AllowedHosts) > 0 then
     begin
-      FallbacksArr := TJsonArray.Create;
+      HostsArr := TJsonArray.Create;
       for i := 0 to High(Gateway.AllowedHosts) do
-        FallbacksArr.AddStr(Gateway.AllowedHosts[i]);
-      Gw.PutArray('allowed_hosts', FallbacksArr);
+        HostsArr.AddStr(Gateway.AllowedHosts[i]);
+      Gw.PutArray('allowed_hosts', HostsArr);
     end;
     Root.PutObject('gateway', Gw);
 
@@ -3297,7 +3308,24 @@ begin
     Result := gasRequired;
 end;
 
-function DescribeGatewayAuthState(const C: TConfig): string;
+function NoTokenExposure(const BindAddr: string): string;
+var
+  A: string;
+begin
+  A := LowerCase(Trim(BindAddr));
+  if (A = '') or (A = 'localhost') or (A = '::1') or (A = '[::1]') or
+     (Copy(A, 1, 4) = '127.') then
+    Result := '/v1/* and /mcp answer any client on this machine with no ' +
+              'bearer (web pages from other sites are refused)'
+  else
+    Result := Format('the gateway listens on %s, so /v1/* and /mcp -- ' +
+                     'shell and files included -- answer ANY client that ' +
+                     'can reach it, with no bearer (only web pages from ' +
+                     'other sites are refused)', [BindAddr]);
+end;
+
+function DescribeGatewayAuthState(const C: TConfig;
+                                  const BindAddr: string): string;
 var
   Tok, Source: string;
 begin
@@ -3317,20 +3345,16 @@ begin
        MCP companion listener at --mcp-port, plus the /v1/mcp/rpc
        in-main-port path) so operators understand the full exposure.
        Codex P2 on PR #255. *)
-    Result := 'gateway: bearer-token auth DISABLED -- ' +
-              'no token configured; /v1/* and /mcp answer requests to ' +
-              'localhost (and gateway.allowed_hosts) that do not come ' +
-              'from another web site, with no bearer';
+    Result := 'gateway: bearer-token auth DISABLED -- no token ' +
+              'configured; ' + NoTokenExposure(BindAddr);
     Exit;
   end;
 
   if LooksLikeUnresolvedTemplate(Tok) then
   begin
     Result := Format('gateway: bearer-token auth DISABLED -- gateway.token ' +
-                     'is %s and that env var is not set; /v1/* and /mcp ' +
-                     'answer requests to localhost (and gateway.allowed_hosts) ' +
-                     'that do not come from another web site, with no bearer. ' +
-                     'Set the variable to require one', [Tok]);
+                     'is %s and that env var is not set; %s. Set the ' +
+                     'variable to require a token', [Tok, NoTokenExposure(BindAddr)]);
     Exit;
   end;
 

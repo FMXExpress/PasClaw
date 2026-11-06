@@ -347,7 +347,7 @@ begin
     try
       Server.Start(Args.Addr, Args.Port);
       { Same announcement `pasclaw gateway` makes -- see Cmd.Gateway. }
-      WriteGatewayRunFile(GetHome, Args.Addr, Args.Port, Cfg.Gateway.Token, FormatVersion);
+      WriteGatewayRunFile(GetHome, Args.Addr, Args.Port, GetEffectiveGatewayToken(Cfg), FormatVersion);
       InstallStopSignalHandler;   { Ctrl-C / SIGTERM -> WaitForStop returns -> the finally runs }
       if MCPServer <> nil then
         MCPServer.Start(Args.Addr, Args.MCPPort);
@@ -383,13 +383,14 @@ begin
         wrong, stated as what is currently true rather than as a flag
         reference. }
       (* No token (none set, or a ${VAR} marker whose variable is not
-         set): no bearer is asked for, and only requests to localhost that
-         are not from another web site are answered. *)
+         set): no bearer is asked for. Who that leaves the API open to
+         depends on the address -- this machine, or everyone who can
+         reach it. *)
       case GatewayAuthState(Cfg) of
         gasOpen:
           begin
             PrintLn('  ' + Ansi.Yellow + 'Unauthenticated' + Ansi.Reset +
-                    ' -- /v1/* and /mcp answer requests to localhost, not from other web sites.');
+                    ' -- ' + NoTokenExposure(Args.Addr) + '.');
             PrintLn('  ' + Ansi.Dim +
                     'Set gateway.token in config.json or $PASCLAW_GATEWAY_TOKEN to require a bearer.' +
                     Ansi.Reset);

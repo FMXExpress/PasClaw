@@ -261,17 +261,18 @@ Default off: per-session JSONs of flag-off operators are byte-identical to the p
 
 Off by default. The gateway runs without a token: the OpenAI-compatible endpoints accept any `api_key` string (it's ignored), and the safety is binding to `127.0.0.1` (loopback only).
 
-With no token, the gateway answers only what a local client sends. It refuses, with 403, what only a web browser sends:
+With no token, a web page the operator visits still runs on the same machine. The gateway refuses, with 403, the two things only such a page does:
 
-- **a `Host` that is not this machine** (`localhost`, `*.localhost`, `127.x`, `::1`, or a name in `gateway.allowed_hosts`). A web page can rebind its own name to `127.0.0.1` (DNS rebinding) and then be same-origin with the gateway, but its `Host` header still names it.
-- **an `Origin` that is not the gateway's own.** A page on another site can POST `text/plain` with no CORS preflight, and the gateway reads any body as JSON. The browser always says which page sent it. This also covers the `--apps-port` origin, so app code cannot call the main API.
-- **`Sec-Fetch-Site: cross-site`**, for requests that carry no `Origin`.
+- **an `Origin` from another site.** A page on another site can POST `text/plain` with no CORS preflight, and the gateway reads any body as JSON, so one visit could drive the agent. The browser always says which page sent such a request. An `Origin` is accepted when it is the gateway's own, or a name in `gateway.allowed_hosts`. This also refuses the `--apps-port` origin, so app code cannot call the main API.
+- **a `Host` that is a domain name other than `localhost`, `*.localhost` or a name in `gateway.allowed_hosts`.** A page can re-point its own domain at `127.0.0.1` (DNS rebinding) and then be same-origin with the gateway, but its `Host` header still names that domain. An IP address cannot be rebound, so a `Host` that is an IP address (`127.0.0.1`, `0.0.0.0`, a LAN address) is always fine.
 
-CLI tools, SDKs, MCP clients and the gateway's own web UI and desktop send none of these, so they are not affected. `/`, `/desktop`, `/v1/health`, `/v1/version` and `/webhooks/*` are exempt, as from the token. So is the relay surface when it presents the relay token, along with its CORS preflights. If the gateway is bound to a specific address, that address is an allowed name too. To reach a token-less gateway through a reverse proxy or under a LAN name, add the name:
+Nothing else is checked. CLI tools, SDKs, MCP clients, relay workers and the gateway's own web UI, desktop and app iframes are not affected. `/`, `/desktop`, `/v1/health`, `/v1/version` and `/webhooks/*` are exempt, as from the token. So is the relay surface when it presents the relay token, along with its CORS preflights; without that token, the relay surface also refuses `Sec-Fetch-Site: cross-site`, so a page cannot drain the job queue with an `<img>`. To reach a token-less gateway by a domain name, such as a reverse proxy or a LAN name, add it:
 
 ```json
-"gateway": { "allowed_hosts": ["pasclaw.lan", "192.168.1.5"] }
+"gateway": { "allowed_hosts": ["pasclaw.lan", "proxy.example.com"] }
 ```
+
+A proxy that rewrites `Host` to `127.0.0.1` works without this, as long as its pages are not cross-site: list its name so its `Origin` is accepted. Refusals are logged as a warning at most once every 10 seconds; the rest go to the debug log.
 
 None of this applies once a token is set: the token is the gate. A client that reaches the port directly can still send any `Host` it likes, so a token-less gateway reachable over the network is open to whoever reaches it. Bind it to `127.0.0.1`, or set a token.
 

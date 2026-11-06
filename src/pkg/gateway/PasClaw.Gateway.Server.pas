@@ -148,10 +148,13 @@ type
        separate storage, no reach into the desktop's DOM, and the postMessage
        broker still works because postMessage is cross-origin by design. *)
     FAppsOnly:         Boolean;
-    (* With no token: the Host names besides the loopback ones this listener
-       answers to -- gateway.allowed_hosts, and the address it is bound to
-       when that is a specific one. Set in Start. *)
-    FAllowedHosts:     TArray<string>;
+    (* LogRefusal's rate limit: a page that retries in a loop must not
+       fill the log. One warning per RefusalLogEveryMs, the rest counted
+       and at debug level. *)
+    FRefusalLogLock:   TCriticalSection;
+    FLastRefusalLog:   TDateTime;
+    FRefusalsQuiet:    Integer;
+    procedure LogRefusal(const Method, Doc, Why: string);
     function  GetOrCreateMCPInbound: TMCPServerCore;
     procedure HandleMCPRequest(ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
@@ -1289,6 +1292,7 @@ begin
     registered above, so a relay fallback resolves) -- rebuilt on config write. }
   FApplyLock := TCriticalSection.Create;
   FAskLock := TCriticalSection.Create;
+  FRefusalLogLock := TCriticalSection.Create;
   SetLength(FAsks, 0);
   FAskSeq := 0;
   FFallbacks := ResolveFallbacks(FCfg, FFallbackModels);
@@ -1327,6 +1331,7 @@ begin
   FRelayQueue.Free;
   FApplyLock.Free;
   FAskLock.Free;   { any pending ask has a loop thread that already stopped with the server }
+  FRefusalLogLock.Free;
   inherited Destroy;
 end;
 
@@ -1596,8 +1601,6 @@ begin
   if FStarted then Exit;
   FHTTP.Bindings.Clear;
   Binding := FHTTP.Bindings.Add;
-  { The names a token-less listener answers to besides localhost. }
-  FAllowedHosts := ListenerAllowedHosts(FCfg.Gateway.AllowedHosts, BindAddr);
   Binding.IP   := BindAddr;
   Binding.Port := Port;
   FHTTP.Active := True;
@@ -1620,10 +1623,41 @@ begin
       most consequential line of the whole startup, and at [info] it sat
       between two subsystem notices where it read as routine. }
     if GatewayAuthState(FCfg) <> gasRequired then
-      LogWarn('%s', [DescribeGatewayAuthState(FCfg)])
+      LogWarn('%s', [DescribeGatewayAuthState(FCfg, BindAddr)])
     else
-      LogInfo('%s', [DescribeGatewayAuthState(FCfg)]);
+      LogInfo('%s', [DescribeGatewayAuthState(FCfg, BindAddr)]);
   end;
+end;
+
+procedure TGatewayServer.LogRefusal(const Method, Doc, Why: string);
+const
+  RefusalLogEveryMs = 10000;
+var
+  Quiet: Integer;
+  Loud: Boolean;
+begin
+  FRefusalLogLock.Enter;
+  try
+    Loud := (FLastRefusalLog = 0) or
+            (MilliSecondsBetween(Now, FLastRefusalLog) >= RefusalLogEveryMs);
+    Quiet := FRefusalsQuiet;
+    if Loud then
+    begin
+      FLastRefusalLog := Now;
+      FRefusalsQuiet := 0;
+    end
+    else
+      Inc(FRefusalsQuiet);
+  finally
+    FRefusalLogLock.Leave;
+  end;
+  if not Loud then
+    LogDebug('gateway: refused %s %s -- %s', [Method, Doc, Why])
+  else if Quiet > 0 then
+    LogWarn('gateway: refused %s %s -- %s (and %d more since the last warning)',
+            [Method, Doc, Why, Quiet])
+  else
+    LogWarn('gateway: refused %s %s -- %s', [Method, Doc, Why]);
 end;
 
 procedure TGatewayServer.Stop;
@@ -1842,17 +1876,21 @@ begin
     to a compromised worker, the worst they can do is pull jobs
     and POST responses -- they can't impersonate the operator
     against the rest of the API. }
-  (* No token: the gateway is as private as the machine, and a web page the
-     operator visits runs on the machine. Refuse what only a browser sends
-     -- a foreign Host (a page that rebound its name to 127.0.0.1), a
-     foreign Origin, Sec-Fetch-Site: cross-site. See
-     PasClaw.Gateway.Auth.LocalRequestRefusal. Exempt: the routes the
-     bearer check exempts (static UI pages, health, version, webhooks,
-     which carry their own signatures), and the relay surface when it
-     presents the relay token -- a real credential, which the sandboxed
-     in-tab worker sends from an opaque origin. (That surface's CORS
-     preflights never get here: OnCommandOther answers them first.) PUT
-     and DELETE do: OnCommandOther hands them to this method. *)
+  (* No token: a web page the operator visits runs on the machine. Refuse
+     the two things only such a page does -- send an Origin from another
+     site, or address the gateway by a domain name it rebound to
+     127.0.0.1 -- and nothing else (PasClaw.Gateway.Auth.
+     LocalRequestRefusal). Plus one narrow rule for the relay surface:
+     GET /v1/relay/poll hands out a job, so a cross-site page could drain
+     the queue with an <img> -- which carries no Origin, only
+     Sec-Fetch-Site. Real workers either present the relay token or are
+     not browsers. Exempt: the routes the bearer check exempts (static UI
+     pages, health, version, webhooks, which carry their own signatures),
+     and the relay surface when it presents the relay token -- a real
+     credential, which the sandboxed in-tab worker sends from an opaque
+     origin. (That surface's CORS preflights never get here:
+     OnCommandOther answers them first.) PUT and DELETE do:
+     OnCommandOther hands them to this method. *)
   if (GetEffectiveGatewayToken(FCfg) = '') and
      not IsExemptRoute(ARequest.Command, Doc) and
      not RelayTokenAuthorises(Doc,
@@ -1861,13 +1899,16 @@ begin
   begin
     LocalRefusal := LocalRequestRefusal(ARequest.RawHeaders.Values['Host'],
                                         ARequest.RawHeaders.Values['Origin'],
-                                        ARequest.RawHeaders.Values['Sec-Fetch-Site'],
-                                        FAllowedHosts);
+                                        FCfg.Gateway.AllowedHosts);
+    if (LocalRefusal = '') and HasPrefix(Doc, '/v1/relay/') and
+       SameText(Trim(ARequest.RawHeaders.Values['Sec-Fetch-Site']), 'cross-site') then
+      LocalRefusal := 'this gateway has no token, so its relay surface ' +
+                      'refuses other web sites unless they present the relay token';
     if LocalRefusal <> '' then
     begin
       SetAttrInt(HttpSpan, 'http.response.status_code', 403);
       SetStatus(HttpSpan, oscError, 'forbidden');
-      LogWarn('gateway: refused %s %s -- %s', [ARequest.Command, Doc, LocalRefusal]);
+      LogRefusal(ARequest.Command, Doc, LocalRefusal);
       WriteJSON(AResponse, 403, '{"error":"forbidden","message":"' +
                 JsonEscape(LocalRefusal) + '"}');
       Exit;

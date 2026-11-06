@@ -499,7 +499,7 @@ begin
         `pasclaw agent --attach`, `pasclaw tui --attach` read this file.
         Removed in the finally below; a crash leaves it, and readers
         treat a dead pid as absent. }
-      WriteGatewayRunFile(GetHome, Args.Addr, Args.Port, Cfg.Gateway.Token, FormatVersion);
+      WriteGatewayRunFile(GetHome, Args.Addr, Args.Port, GetEffectiveGatewayToken(Cfg), FormatVersion);
       InstallStopSignalHandler;   { Ctrl-C / SIGTERM -> WaitForStop returns -> the finally runs }
       if MCPServer <> nil then
         MCPServer.Start(Args.Addr, Args.MCPPort);

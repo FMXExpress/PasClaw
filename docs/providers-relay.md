@@ -96,6 +96,15 @@ bearer token still gates access; `*` is safe because the token is
 the authentication boundary and no cookies are involved (no
 `credentials: include`).
 
+**A gateway with no token** answers relay workers with no bearer, with
+two limits ([Gateway § Authentication](./gateway.md#authentication)): a
+browser worker on another origin must present the per-process relay
+token (printed at startup as "Relay worker token"), because a page from
+another site is refused otherwise; and a worker that reaches the gateway
+by a domain name, rather than `localhost` or an IP address, needs that
+name in `gateway.allowed_hosts`. `pasclaw relay --gateway-url
+http://192.168.1.5:8088` works as it is.
+
 The queue does first-come-first-served dispatch: pending requests go to
 the first connected worker whose capabilities match the request's
 model. If no matching worker is connected, the request stays in the
