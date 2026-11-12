@@ -9,6 +9,12 @@ program streaming_tests;
       ChatStream does -- text pieces passed on, tool calls from id/name and
       argument fragments, finish_reason, usage with cached tokens, a name a
       server repeats, an error sent inside the stream
+    - ParseAnthropicStream: a Messages API stream the way ChatStream reads
+      it -- text blocks joined as Chat joins them, thinking kept but not
+      shown, a tool call from input_json fragments, usage from message_start
+      and message_delta, the content array rebuilt block for block (thinking
+      with its signature, citations) for a pause_turn continuation, an error
+      event
     - the tool loop's OnTextDelta: a streamed round goes to OnTextDelta and
       not to OnText; without OnTextDelta, or with a provider that does not
       stream, OnText as before; a round that ended with something else than
@@ -29,6 +35,8 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Providers.Stream,
   PasClaw.Providers.OpenAI,
+  PasClaw.Providers.Anthropic,
+  PasClaw.JSON,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
   PasClaw.Tools.ToolLoop;
@@ -213,6 +221,124 @@ begin
                       nil, Failed);
   AssertEq(Failed, 'overloaded', 'an error sent inside the stream is reported');
   WriteLn('  ok: a Chat Completions stream: text pieces, tool-call fragments, finish, usage, an error');
+end;
+
+{ ------------------------------------------------- the Anthropic stream -- }
+
+function AEv(const Name, JSON: string): string;
+begin
+  Result := 'event: ' + Name + #10 + 'data: ' + JSON + #10#10;
+end;
+
+procedure TestAnthropicStream;
+var
+  K: TChunks;
+  R: TLLMResponse;
+  Failed, Content, SSE: string;
+  Root, B, In_: TJsonObject;
+  Arr, Cits: TJsonArray;
+begin
+  SSE :=
+    AEv('message_start', '{"type":"message_start","message":{"model":"claude-x","usage":' +
+        '{"input_tokens":12,"cache_read_input_tokens":3,"cache_creation_input_tokens":2,"output_tokens":1}}}') +
+    AEv('content_block_start', '{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}') +
+    AEv('content_block_delta', '{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me"}}') +
+    AEv('content_block_delta', '{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig1"}}') +
+    AEv('content_block_stop', '{"type":"content_block_stop","index":0}') +
+    AEv('content_block_start', '{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}') +
+    AEv('content_block_delta', '{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hel"}}') +
+    AEv('ping', '{"type":"ping"}') +
+    AEv('content_block_delta', '{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"lo"}}') +
+    AEv('content_block_delta', '{"type":"content_block_delta","index":1,"delta":{"type":"citations_delta",' +
+        '"citation":{"type":"web_search_result_location","url":"https://x.example","title":"X","cited_text":"c"}}}') +
+    AEv('content_block_stop', '{"type":"content_block_stop","index":1}') +
+    AEv('content_block_start', '{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}') +
+    AEv('content_block_delta', '{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"World"}}') +
+    AEv('content_block_stop', '{"type":"content_block_stop","index":2}') +
+    AEv('content_block_start', '{"type":"content_block_start","index":3,"content_block":' +
+        '{"type":"tool_use","id":"toolu_1","name":"read_file","input":{}}}') +
+    AEv('content_block_delta', '{"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"{\"pa"}}') +
+    AEv('content_block_delta', '{"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"th\": \"a\"}"}}') +
+    AEv('content_block_stop', '{"type":"content_block_stop","index":3}') +
+    AEv('message_delta', '{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}') +
+    AEv('message_stop', '{"type":"message_stop"}');
+  K := TChunks.Create;
+  try
+    R := ParseAnthropicStream(SSE, K.OnChunk, Failed, Content);
+    AssertEq(Failed, '', 'no error');
+    AssertTrue((K.Texts.Count = 4) and (K.Texts[0] = 'Hel') and (K.Texts[1] = 'lo') and
+               (K.Texts[2] = sLineBreak) and (K.Texts[3] = 'World'),
+               'text pieces as they come, a line break between text blocks, thinking not shown');
+    AssertEq(R.Content, 'Hello' + sLineBreak + 'World', 'text blocks joined as Chat joins them');
+    AssertEq(R.Model, 'claude-x', 'the model');
+    AssertEq(R.FinishReason, 'tool_use', 'the stop reason');
+    AssertTrue((R.Usage.InputTokens = 12) and (R.Usage.OutputTokens = 9) and
+               (R.Usage.CacheReadTokens = 3) and (R.Usage.CacheCreatedTokens = 2),
+               'usage from message_start and message_delta');
+    AssertTrue(Length(R.ToolCalls) = 1, 'one tool call');
+    AssertEq(R.ToolCalls[0].Id, 'toolu_1', 'its id');
+    AssertEq(R.ToolCalls[0].Func.Name, 'read_file', 'its name');
+    In_ := TJsonObject.Parse(R.ToolCalls[0].Func.Arguments);
+    try
+      AssertEq(In_.GetStr('path', ''), 'a', 'its input, from input_json fragments');
+    finally
+      In_.Free;
+    end;
+  finally
+    K.Free;
+  end;
+
+  { The content array, block for block, as a pause_turn continuation
+    re-sends it. }
+  Root := TJsonObject.Parse('{"c":' + Content + '}');
+  try
+    Arr := Root.ChildArray('c');
+    try
+      AssertTrue(Arr.Count = 4, 'four blocks in the content array');
+      B := Arr.ItemObject(0);
+      try
+        AssertTrue((B.GetStr('type', '') = 'thinking') and (B.GetStr('thinking', '') = 'Let me') and
+                   (B.GetStr('signature', '') = 'sig1'), 'thinking kept with its signature');
+      finally
+        B.Free;
+      end;
+      B := Arr.ItemObject(1);
+      try
+        AssertEq(B.GetStr('text', ''), 'Hello', 'a text block''s text');
+        Cits := B.ChildArray('citations');
+        try
+          AssertTrue((Cits <> nil) and (Cits.Count = 1), 'and its citation');
+        finally
+          Cits.Free;
+        end;
+      finally
+        B.Free;
+      end;
+      B := Arr.ItemObject(3);
+      try
+        In_ := B.ChildObject('input');
+        try
+          AssertTrue((B.GetStr('type', '') = 'tool_use') and (In_ <> nil) and
+                     (In_.GetStr('path', '') = 'a'), 'a tool block with its input');
+        finally
+          In_.Free;
+        end;
+      finally
+        B.Free;
+      end;
+    finally
+      Arr.Free;
+    end;
+  finally
+    Root.Free;
+  end;
+
+  R := ParseAnthropicStream(
+    AEv('message_start', '{"type":"message_start","message":{"model":"m","usage":{"input_tokens":1}}}') +
+    AEv('error', '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'),
+    nil, Failed, Content);
+  AssertEq(Failed, 'Overloaded', 'an error event is reported');
+  WriteLn('  ok: an Anthropic stream: text blocks, thinking kept, tool input, usage, content for a continuation, an error');
 end;
 
 { ------------------------------------------------------------- the loop -- }
@@ -425,6 +551,7 @@ end;
 begin
   TestParser;
   TestOAIStream;
+  TestAnthropicStream;
   TestLoop;
   WriteLn('PASS');
 end.

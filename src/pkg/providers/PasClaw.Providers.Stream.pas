@@ -33,7 +33,6 @@ uses
 
 type
   TSSECallback = procedure(const Event, Data: string) of object;
-  TSSECallbackProc = procedure(const Event, Data: string);
 
   (* A write-only stream that parses SSE as bytes are written to it.
      OnEvent fires for each complete event (its `event:` name, if any, and
@@ -75,14 +74,6 @@ function PostSSE(const URL, JSON: string;
                  out StatusCode: Integer;
                  out ErrMsg, Raw: string;
                  out Events: Integer): Boolean;
-
-{ The same, for a plain-procedure callback. }
-function PostStreaming(const URL, JSON: string;
-                       const Headers: array of THeaderPair;
-                       TimeoutSeconds: Integer;
-                       OnLine: TSSECallbackProc;
-                       out StatusCode: Integer;
-                       out ErrMsg: string): Boolean;
 
 implementation
 
@@ -225,39 +216,6 @@ begin
     Result := (StatusCode >= 200) and (StatusCode < 300);
   finally
     S.Free;
-  end;
-end;
-
-type
-  { Adapts a plain-procedure callback to TSSECallback. }
-  TProcAdapter = class
-    Proc: TSSECallbackProc;
-    procedure Call(const Event, Data: string);
-  end;
-
-procedure TProcAdapter.Call(const Event, Data: string);
-begin
-  if Assigned(Proc) then Proc(Event, Data);
-end;
-
-function PostStreaming(const URL, JSON: string;
-                       const Headers: array of THeaderPair;
-                       TimeoutSeconds: Integer;
-                       OnLine: TSSECallbackProc;
-                       out StatusCode: Integer;
-                       out ErrMsg: string): Boolean;
-var
-  A: TProcAdapter;
-  Raw: string;
-  Events: Integer;
-begin
-  A := TProcAdapter.Create;
-  try
-    A.Proc := OnLine;
-    Result := PostSSE(URL, JSON, Headers, TimeoutSeconds, A.Call,
-                      StatusCode, ErrMsg, Raw, Events);
-  finally
-    A.Free;
   end;
 end;
 
