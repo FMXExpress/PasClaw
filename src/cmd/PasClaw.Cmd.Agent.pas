@@ -2295,42 +2295,50 @@ begin
   try
     for i := 0 to Servers.Count - 1 do
     begin
-      O := Servers.ItemObject(i);
+      O := Servers.ItemObject(i);   { wrappers the caller frees: O, Args, Env }
       if O = nil then Continue;
-      Name := O.GetStr('name', '');
-      Typ := O.GetStr('type', '');
-      if (Typ <> '') and (Typ <> 'stdio') then
-      begin
-        LogWarn('acp: mcp server "%s" uses %s, which this agent does not take (stdio only)',
-                [Name, Typ]);
-        Continue;
-      end;
-      if (Name = '') or (O.GetStr('command', '') = '') or
-         (FMCPNames.IndexOf(Name) >= 0) then
-        Continue;
-      { args go through the launcher's quote-aware split, so quote each. }
-      ArgStr := '';
-      Args := O.ChildArray('args');
-      if Args <> nil then
-        for j := 0 to Args.Count - 1 do
+      Args := nil;
+      Env := nil;
+      try
+        Name := O.GetStr('name', '');
+        Typ := O.GetStr('type', '');
+        if (Typ <> '') and (Typ <> 'stdio') then
         begin
-          A := Args.ItemStr(j);
-          if Pos('"', A) > 0 then A := '''' + A + '''' else A := '"' + A + '"';
-          if ArgStr <> '' then ArgStr := ArgStr + ' ';
-          ArgStr := ArgStr + A;
+          LogWarn('acp: mcp server "%s" uses %s, which this agent does not take (stdio only)',
+                  [Name, Typ]);
+          Continue;
         end;
-      Env := O.ChildArray('env');
-      if (Env <> nil) and (Env.Count > 0) then
-        LogWarn('acp: mcp server "%s": its env is not passed on -- PasClaw''s MCP ' +
-                'launcher starts servers with the agent''s own environment', [Name]);
-      SetLength(Add, Length(Add) + 1);
-      Add[High(Add)] := Default(TMCPServer);
-      Add[High(Add)].Name := Name;
-      Add[High(Add)].Cmd := O.GetStr('command', '');
-      Add[High(Add)].Args := ArgStr;
-      Add[High(Add)].Enabled := True;
-      Add[High(Add)].CodeMode := FCfg.MCPCodeModeDefault;
-      FMCPNames.Add(Name);
+        if (Name = '') or (O.GetStr('command', '') = '') or
+           (FMCPNames.IndexOf(Name) >= 0) then
+          Continue;
+        { args go through the launcher's quote-aware split, so quote each. }
+        ArgStr := '';
+        Args := O.ChildArray('args');
+        if Args <> nil then
+          for j := 0 to Args.Count - 1 do
+          begin
+            A := Args.ItemStr(j);
+            if Pos('"', A) > 0 then A := '''' + A + '''' else A := '"' + A + '"';
+            if ArgStr <> '' then ArgStr := ArgStr + ' ';
+            ArgStr := ArgStr + A;
+          end;
+        Env := O.ChildArray('env');
+        if (Env <> nil) and (Env.Count > 0) then
+          LogWarn('acp: mcp server "%s": its env is not passed on -- PasClaw''s MCP ' +
+                  'launcher starts servers with the agent''s own environment', [Name]);
+        SetLength(Add, Length(Add) + 1);
+        Add[High(Add)] := Default(TMCPServer);
+        Add[High(Add)].Name := Name;
+        Add[High(Add)].Cmd := O.GetStr('command', '');
+        Add[High(Add)].Args := ArgStr;
+        Add[High(Add)].Enabled := True;
+        Add[High(Add)].CodeMode := FCfg.MCPCodeModeDefault;
+        FMCPNames.Add(Name);
+      finally
+        Env.Free;
+        Args.Free;
+        O.Free;
+      end;
     end;
     if Length(Add) = 0 then Exit;
     { The shared config stays as it is: turns of other sessions read it. }
@@ -2396,6 +2404,15 @@ begin
     workspace (what Save records by default): `pasclaw resume <id>` goes
     back to it. }
   St.Session.Meta.Location := S.Cwd;
+  { The shell backend makes the project visible to the session's commands
+    (docker mounts it in the session's container). A container already
+    started for another project does not have this one: stop it, and the
+    next command starts one that does. }
+  if ShellSessionDir(S.Id) <> S.Cwd then
+  begin
+    if ShellSessionDir(S.Id) <> '' then CloseShellSession(S.Id);
+    SetShellSessionDir(S.Id, S.Cwd);
+  end;
   ConnectClientMCP(McpServers);
   S.Mode := FArgs.Mode;
   S.Data := St;
@@ -2481,6 +2498,7 @@ begin
                                       LoopCfg.Options.SystemPrompt;
     { The loop's events are the protocol's events. }
     LoopCfg.OnText       := Turn.Text;
+    LoopCfg.OnTextDelta  := Turn.TextDelta;   { as it is written, when the provider streams }
     LoopCfg.OnToolCall   := Turn.ToolCall;
     LoopCfg.OnToolResult := Turn.ToolResult;
     LoopCfg.OnAsk        := Turn.Ask;

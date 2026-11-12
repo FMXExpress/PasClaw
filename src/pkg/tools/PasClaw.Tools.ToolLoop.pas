@@ -32,6 +32,9 @@ uses
   PasClaw.Config;   { TConfig + SetActiveConfig for the per-dispatch override }
 
 type
+  { A piece of a reply as the model writes it; First marks a round's first. }
+  TToolLoopTextDeltaFn = procedure(const Delta: string; First: Boolean) of object;
+
   TToolLoopConfig = record
     Provider:      ILLMProvider;
     Registry:      TToolRegistry;
@@ -46,6 +49,16 @@ type
     MaxIterations: Integer;
     Options:       TChatOptions;
     OnText:        procedure(const S: string) of object;   { streaming-ish stdout }
+    (* The reply as the model writes it, for a caller that shows text as it
+       arrives (an editor under `pasclaw acp`). When set and the provider
+       streams (SupportsStreaming), each round's first request is made with
+       ChatStream and every piece of text is passed here as it comes. A
+       round whose text arrived this way is not passed to OnText as well --
+       unless the round ended with something other than what was streamed
+       (a retry or a fallback answered instead), and then OnText gets it as
+       usual. Retries and fallbacks are not streamed. nil = OnText only,
+       once per round, as before. *)
+    OnTextDelta:   TToolLoopTextDeltaFn;
     OnToolCall:    procedure(const Name, ArgsJSON: string) of object;
     OnToolResult:  procedure(const Name, ResultText, Err: string) of object;
     (* Cooperative cancellation. Asked at every SAFE BOUNDARY -- before
@@ -470,6 +483,22 @@ uses
                                All helpers are no-ops when OTel is
                                disabled, so the wiring costs ~5 ns per
                                call in the default-off shape. *)
+
+type
+  { Passes a streamed round's text on to Cfg.OnTextDelta and keeps it, so
+    the round's end knows what was already shown. }
+  TLoopTextStreamer = class
+    Fn: TToolLoopTextDeltaFn;
+    Text: string;
+    procedure OnChunk(const C: TStreamChunk);
+  end;
+
+procedure TLoopTextStreamer.OnChunk(const C: TStreamChunk);
+begin
+  if (C.Kind <> 'text') or (C.Text = '') then Exit;
+  Fn(C.Text, Text = '');
+  Text := Text + C.Text;
+end;
 
 type
   { Per-call work unit. The same record is filled in by a worker thread
@@ -1912,6 +1941,8 @@ var
   Batch: TToolBatch;
   Workers: array of TToolCallWorker;
   Steering, BatchSteering, HistSystem, LastProviderErrText, BgBlock, PersistentSP: string;
+  StreamedText: string;      { this round's text already passed to OnTextDelta }
+  Streamer: TLoopTextStreamer;
   Nm: string;   { supersession: the current dispatch's tool name }
   Ledger: TProgressLedger;
   LedgerBlock: string;
@@ -2278,13 +2309,34 @@ begin
       SetAttrStr(ChatSpan, 'gen_ai.request.model',  Cfg.Model);
       SetAttrStr(ChatSpan, 'gen_ai.provider.name',  Cfg.Provider.GetName);
       SetAttrInt(ChatSpan, 'openclaw.turn.iteration', Iter);
+      StreamedText := '';
       try
-        { Empty-turn auto-retry. When StreamReliability.EmptyRetryAttempts
-          is 0 (default record zero, the legacy shape) ChatWithEmptyRetry
-          is a one-shot call -- identical to the pre-PR behaviour. }
-        Resp := ChatWithEmptyRetry(Cfg.Provider, CallHist,
-                                    Tools, Cfg.Model,
-                                    LiveOptions, Cfg.StreamReliability);
+        if Assigned(Cfg.OnTextDelta) and Cfg.Provider.SupportsStreaming then
+        begin
+          { Streamed: the caller sees the text as it is written. }
+          Streamer := TLoopTextStreamer.Create;
+          try
+            Streamer.Fn := Cfg.OnTextDelta;
+            Resp := Cfg.Provider.ChatStream(CallHist, Tools, Cfg.Model,
+                                            LiveOptions, Streamer.OnChunk);
+          finally
+            StreamedText := Streamer.Text;
+            Streamer.Free;
+          end;
+          { An empty turn showed nothing, so it can be asked again, as
+            ChatWithEmptyRetry does for an unstreamed one. }
+          if (StreamedText = '') and (Cfg.StreamReliability.EmptyRetryAttempts > 0) and
+             (Resp.StatusCode >= 200) and (Resp.StatusCode < 300) and IsEmptyTurn(Resp) then
+            Resp := ChatWithEmptyRetry(Cfg.Provider, CallHist, Tools, Cfg.Model,
+                                        LiveOptions, Cfg.StreamReliability);
+        end
+        else
+          { Empty-turn auto-retry. When StreamReliability.EmptyRetryAttempts
+            is 0 (default record zero, the legacy shape) ChatWithEmptyRetry
+            is a one-shot call -- identical to the pre-PR behaviour. }
+          Resp := ChatWithEmptyRetry(Cfg.Provider, CallHist,
+                                      Tools, Cfg.Model,
+                                      LiveOptions, Cfg.StreamReliability);
       except
         on E: Exception do
         begin
@@ -2545,9 +2597,19 @@ begin
       Exit(True);
     end;
 
-    { Stream the text part to the caller now so they can show progress. }
-    if Assigned(Cfg.OnText) and (Resp.Content <> '') then
-      Cfg.OnText(Resp.Content);
+    { Stream the text part to the caller now so they can show progress --
+      unless it was already shown as it was written. }
+    if Resp.Content <> '' then
+    begin
+      if (StreamedText <> '') and
+         (Copy(Resp.Content, 1, Length(StreamedText)) = StreamedText) then
+      begin
+        if Length(Resp.Content) > Length(StreamedText) then
+          Cfg.OnTextDelta(Copy(Resp.Content, Length(StreamedText) + 1, MaxInt), False);
+      end
+      else if Assigned(Cfg.OnText) then
+        Cfg.OnText(Resp.Content);
+    end;
 
     if Length(Resp.ToolCalls) = 0 then
     begin

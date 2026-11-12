@@ -232,6 +232,15 @@ begin
     Turn.ToolCall('shell_exec', '{"command":"c"}');
     Turn.ToolResult('shell_exec', 'c done', '');
   end
+  else if Pos('deltas', PromptText) > 0 then
+  begin
+    { Streamed text: pieces as written, a new round's first marked. }
+    Turn.TextDelta('Hel', True);
+    Turn.TextDelta('lo', False);
+    Turn.ToolCall('list_dir', '{"path":"."}');
+    Turn.ToolResult('list_dir', 'a.txt', '');
+    Turn.TextDelta('Next', True);
+  end
   else if Pos('utf8', PromptText) > 0 then
   begin
     { A two-byte character straddling the 32 KiB display cut. }
@@ -515,7 +524,7 @@ procedure TestLoad;
 var
   N, iUser, iAgent, iCall, iUpd, iResp: Integer;
 begin
-  SetLength(Host.History, 6);
+  SetLength(Host.History, 7);
   Host.History[0] := MakeMessage(mrSystem, 'a note the user never typed');
   Host.History[1] := MakeMessage(mrUser, 'read a' + LineEnding + LineEnding +
                                  '[current date/time: Thu 2026-11-12 10:00:00 UTC+00:00 (2026-11-12T10:00:00Z)]');
@@ -533,6 +542,12 @@ begin
   Host.History[4].ToolCalls[0].Func.Arguments := '{"path":"b"}';
   Host.History[5] := MakeMessage(mrTool, 'refused: tool "write_file" needs build mode');
   Host.History[5].ToolCallId := 't2';
+  { A call its turn never finished: no result recorded. }
+  Host.History[6] := MakeMessage(mrAssistant, '');
+  SetLength(Host.History[6].ToolCalls, 1);
+  Host.History[6].ToolCalls[0].Id := 't3';
+  Host.History[6].ToolCalls[0].Func.Name := 'shell_exec';
+  Host.History[6].ToolCalls[0].Func.Arguments := '{"command":"sleep 9"}';
   N := Cap.Count;
   Send('{"jsonrpc":"2.0","id":50,"method":"session/load","params":{"sessionId":"saved",' +
        '"cwd":"/tmp","mcpServers":[]}}');
@@ -550,6 +565,17 @@ begin
   iUpd := Cap.WaitFor('"tool_call_update","toolCallId":"t2"', N, 100);
   AssertTrue((iUpd >= 0) and (Pos('"status":"failed"', Cap.Line(iUpd)) > 0),
              'a refused call replays as failed, as it was shown live');
+  { Announced with the status it ended with: never done first, failed after. }
+  AssertTrue(Pos('"status":"completed"', Cap.Line(iCall)) > 0, 'a call that ran is announced completed');
+  iCall := Cap.WaitFor('"tool_call","toolCallId":"t2"', N, 100);
+  AssertTrue((iCall >= 0) and (Pos('"status":"failed"', Cap.Line(iCall)) > 0),
+             'a refused call is announced failed, not completed');
+  iCall := Cap.WaitFor('"tool_call","toolCallId":"t3"', N, 100);
+  iUpd := Cap.WaitFor('"tool_call_update","toolCallId":"t3"', N, 100);
+  AssertTrue((iCall >= 0) and (Pos('"status":"failed"', Cap.Line(iCall)) > 0) and
+             (iUpd > iCall) and (Pos('ended before this call finished', Cap.Line(iUpd)) > 0),
+             'a call with no result replays failed, as it was closed live');
+  AssertTrue(iUpd < iResp, 'all before the response');
   N := Cap.Count;
   Send('{"jsonrpc":"2.0","id":51,"method":"session/load","params":{"sessionId":"gone",' +
        '"cwd":"/tmp","mcpServers":[]}}');
@@ -607,6 +633,58 @@ begin
   AssertTrue(BytesAreValidUTF8(B), 'and the cut line is still valid UTF-8');
   AssertTrue(Utf8SafeTruncate('a' + #$C3#$A9, 2) = 'a', 'the cut backs off a split character');
   AssertTrue(Utf8SafeTruncate('a' + #$C3#$A9, 3) = 'a' + #$C3#$A9, 'and keeps a whole one');
+end;
+
+procedure TestTextDeltas;
+var
+  N, iDone, i: Integer;
+  Got: string;
+  O, U, C: TJsonObject;
+begin
+  N := Cap.Count;
+  Send('{"jsonrpc":"2.0","id":10,"method":"session/new","params":{"cwd":"' +
+       ExcludeTrailingPathDelimiter(Host.Dir) + '","mcpServers":[]}}');
+  iDone := Cap.WaitFor('"id":10,"result"', N);
+  O := TJsonObject.Parse(Cap.Line(iDone));
+  try
+    C := O.ChildObject('result');
+    try
+      Got := C.GetStr('sessionId', '');
+    finally
+      C.Free;
+    end;
+  finally
+    O.Free;
+  end;
+  N := Cap.Count;
+  Send(Prompt('80', Got, 'deltas'));
+  iDone := Cap.WaitFor('"id":80,"result"', N);
+  AssertTrue(iDone >= 0, 'the turn answers');
+  Got := '';
+  for i := N to iDone - 1 do
+    if Pos('"agent_message_chunk"', Cap.Line(i)) > 0 then
+    begin
+      O := TJsonObject.Parse(Cap.Line(i));
+      try
+        U := O.ChildObject('params');
+        try
+          C := U.ChildObject('update');
+          try
+            U.Free;
+            U := C.ChildObject('content');
+            Got := Got + '[' + U.GetStr('text', '') + ']';
+          finally
+            C.Free;
+          end;
+        finally
+          U.Free;
+        end;
+      finally
+        O.Free;
+      end;
+    end;
+  AssertTrue((Got = '[Hel][lo][' + #10#10 + 'Next]') or (Got = '[Hel][lo][' + #13#10#13#10 + 'Next]'),
+             'pieces as they come, one chunk each; a new round opens a paragraph (got ' + Got + ')');
 end;
 
 procedure TestNullId;
@@ -683,6 +761,8 @@ begin
     WriteLn('  ok: a result cut for display stays valid UTF-8');
     TestNullId;
     WriteLn('  ok: a null id is echoed as null');
+    TestTextDeltas;
+    WriteLn('  ok: streamed text goes out piece by piece, a paragraph between rounds');
     TestStdoutIsJSON;
     WriteLn('  ok: every line written is JSON-RPC 2.0');
     Agent.Shutdown;

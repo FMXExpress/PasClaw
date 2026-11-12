@@ -123,6 +123,9 @@ type
   public
     constructor Create(Agent: TACPAgent; Session: TACPSession);
     procedure Text(const S: string);
+    { A piece of the reply as the model writes it (TToolLoopConfig.
+      OnTextDelta); First marks a round's first piece. }
+    procedure TextDelta(const Delta: string; First: Boolean);
     procedure ToolCall(const Name, ArgsJSON: string);
     procedure ToolResult(const Name, ResultText, Err: string);
     function  Ask(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
@@ -217,6 +220,9 @@ const
     diff is built for. Both are display: the model's own copy of a result
     is untouched. }
   ResultShowBytes = 32 * 1024;
+  { A call announced but never given a result: its turn was cancelled with
+    a batch half run, or stopped in between. Live and on replay alike. }
+  CallNotFinishedText = 'The turn ended before this call finished.';
   DiffMaxBytes    = 1024 * 1024;
   { How every gate words its refusal (PasClaw.Permissions, Agent.Mode). }
   RefusedPrefix   = 'refused: ';
@@ -469,33 +475,39 @@ begin
   if Blocks = nil then Exit;
   for i := 0 to Blocks.Count - 1 do
   begin
-    B := Blocks.ItemObject(i);
+    B := Blocks.ItemObject(i);   { a wrapper the caller frees }
     if B = nil then Continue;
-    Kind := B.GetStr('type', '');
-    Part := '';
-    if Kind = 'text' then
-      Part := B.GetStr('text', '')
-    else if Kind = 'resource_link' then
-    begin
-      Uri := B.GetStr('uri', '');
-      Part := '@' + B.GetStr('name', Uri);
-      if Uri <> '' then Part := Part + ' (' + Uri + ')';
-    end
-    else if Kind = 'resource' then
-    begin
-      R := B.ChildObject('resource');
-      if R <> nil then
+    try
+      Kind := B.GetStr('type', '');
+      Part := '';
+      if Kind = 'text' then
+        Part := B.GetStr('text', '')
+      else if Kind = 'resource_link' then
       begin
-        Uri := R.GetStr('uri', '');
-        if R.Has('text') then
-          Part := '<context uri="' + Uri + '">' + sLineBreak +
-                  R.GetStr('text', '') + sLineBreak + '</context>'
-        else
-          Part := '[' + Uri + ': binary content left out]';
-      end;
-    end
-    else if Kind <> '' then
-      Part := '[' + Kind + ' content left out: this agent takes text]';
+        Uri := B.GetStr('uri', '');
+        Part := '@' + B.GetStr('name', Uri);
+        if Uri <> '' then Part := Part + ' (' + Uri + ')';
+      end
+      else if Kind = 'resource' then
+      begin
+        R := B.ChildObject('resource');
+        if R <> nil then
+        try
+          Uri := R.GetStr('uri', '');
+          if R.Has('text') then
+            Part := '<context uri="' + Uri + '">' + sLineBreak +
+                    R.GetStr('text', '') + sLineBreak + '</context>'
+          else
+            Part := '[' + Uri + ': binary content left out]';
+        finally
+          R.Free;
+        end;
+      end
+      else if Kind <> '' then
+        Part := '[' + Kind + ' content left out: this agent takes text]';
+    finally
+      B.Free;
+    end;
     if Part = '' then Continue;
     if Result <> '' then Result := Result + sLineBreak;
     Result := Result + Part;
@@ -673,6 +685,28 @@ begin
     '{"sessionUpdate":"agent_message_chunk","content":' + TextBlock(Chunk) + '}');
 end;
 
+procedure TACPTurn.TextDelta(const Delta: string; First: Boolean);
+var
+  Chunk: string;
+begin
+  if Delta = '' then Exit;
+  Chunk := Delta;
+  { A round's first piece opens a paragraph after earlier text, as a
+    whole round does in Text. }
+  if First then
+  begin
+    FAgent.FLock.Enter;
+    try
+      if FSession.FTextSent then Chunk := sLineBreak + sLineBreak + Chunk;
+      FSession.FTextSent := True;
+    finally
+      FAgent.FLock.Leave;
+    end;
+  end;
+  FAgent.SessionUpdate(FSession.Id,
+    '{"sessionUpdate":"agent_message_chunk","content":' + TextBlock(Chunk) + '}');
+end;
+
 procedure TACPTurn.Notice(const S: string);
 begin
   Text(S);
@@ -845,8 +879,12 @@ begin
   try
     O := R.ChildObject('outcome');
     if O = nil then Exit;
-    Outcome := O.GetStr('outcome', '');
-    Option := O.GetStr('optionId', '');
+    try
+      Outcome := O.GetStr('outcome', '');
+      Option := O.GetStr('optionId', '');
+    finally
+      O.Free;
+    end;
     if Outcome <> 'selected' then Exit;
     if Option = 'allow_once' then Result := aaAllowOnce
     else if Option = 'allow_session' then Result := aaAllowSession;
@@ -963,18 +1001,22 @@ begin
       if Obj.Has('id') then HandleResponse(Obj);
       Exit;
     end;
-    Params := Obj.ChildObject('params');
-    if not Obj.Has('id') then
-      HandleNotification(Method, Params)
-    else
-    begin
-      IdRaw := JsonIdLiteral(Obj);
-      try
-        HandleRequest(IdRaw, Method, Params);
-      except
-        on E: Exception do
-          RespondError(IdRaw, ACPInternalError, E.Message);
+    Params := Obj.ChildObject('params');   { a wrapper; freed below }
+    try
+      if not Obj.Has('id') then
+        HandleNotification(Method, Params)
+      else
+      begin
+        IdRaw := JsonIdLiteral(Obj);
+        try
+          HandleRequest(IdRaw, Method, Params);
+        except
+          on E: Exception do
+            RespondError(IdRaw, ACPInternalError, E.Message);
+        end;
       end;
+    finally
+      Params.Free;
     end;
   finally
     Obj.Free;
@@ -1029,7 +1071,14 @@ begin
         P.Done := True;
         P.Ok := Obj.Has('result');
         R := Obj.ChildObject('result');
-        if R <> nil then P.ResultJSON := R.ToJSON else P.ResultJSON := '{}';
+        if R <> nil then
+        try
+          P.ResultJSON := R.ToJSON;
+        finally
+          R.Free;
+        end
+        else
+          P.ResultJSON := '{}';
         P.Event.SetEvent;
         Break;
       end;
@@ -1058,7 +1107,8 @@ var
   S, Existing: TACPSession;
   Cwd, Err, Id: string;
   History: TMessageArray;
-  NotFound: Boolean;
+  NotFound, Opened: Boolean;
+  Servers: TJsonArray;
 begin
   if Params = nil then
   begin
@@ -1091,8 +1141,13 @@ begin
   S := TACPSession.Create(Id);
   S.Cwd := ExcludeTrailingPathDelimiter(Cwd);
   S.Mode := pmBuild;
-  if not FHost.OpenSession(S, Params.ChildArray('mcpServers'), Load, History,
-                           NotFound, Err) then
+  Servers := Params.ChildArray('mcpServers');   { a wrapper the caller frees }
+  try
+    Opened := FHost.OpenSession(S, Servers, Load, History, NotFound, Err);
+  finally
+    Servers.Free;
+  end;
+  if not Opened then
   begin
     S.Free;
     if NotFound then
@@ -1150,7 +1205,7 @@ begin
       try
         SessionUpdate(S.Id, '{"sessionUpdate":"tool_call_update","toolCallId":' +
           Q(Slot.Id) + ',"status":"failed","content":[{"type":"content","content":' +
-          TextBlock('The turn ended before this call finished.') + '}]}');
+          TextBlock(CallNotFinishedText) + '}]}');
       finally
         Slot.Free;
       end;
@@ -1160,13 +1215,33 @@ begin
   end;
 end;
 
+{ How a recorded result was shown live: a refusal from a gate as failed,
+  anything else as completed. }
+function ReplayResultStatus(const Content: string): string;
+begin
+  if Copy(Content, 1, Length(RefusedPrefix)) = RefusedPrefix then
+    Result := 'failed'
+  else
+    Result := 'completed';
+end;
+
 procedure TACPAgent.ReplayHistory(S: TACPSession; const History: TMessageArray);
 var
-  i, j: Integer;
+  i, j, k: Integer;
   M: TMessage;
   Id, Raw, Shown, Txt, Status, Title: string;
   Args: TJsonObject;
+  Results: TStringList;   { tool call id -> its result's status }
 begin
+  (* Each call is announced with the status it ended with, so a client
+     never shows a refused call as done first and failed after. Results
+     come later in the history than their calls, so they are looked up
+     first. *)
+  Results := TStringList.Create;
+  try
+  for i := 0 to High(History) do
+    if (History[i].Role = mrTool) and (History[i].ToolCallId <> '') then
+      Results.Values[History[i].ToolCallId] := ReplayResultStatus(History[i].Content);
   for i := 0 to High(History) do
   begin
     M := History[i];
@@ -1194,11 +1269,26 @@ begin
             finally
               Args.Free;
             end;
+            { No id to match (none recorded): completed, as before. A call
+              with an id and no result never finished -- shown live as
+              failed when its turn ended, so replayed the same way. }
+            Status := 'completed';
+            k := 0;
+            if M.ToolCalls[j].Id <> '' then
+            begin
+              k := Results.IndexOfName(Id);
+              if k >= 0 then Status := Results.ValueFromIndex[k]
+              else Status := 'failed';
+            end;
             SessionUpdate(S.Id, '{"sessionUpdate":"tool_call","toolCallId":' + Q(Id) +
               ',"title":' + Q(Title) +
               ',"name":' + Q(M.ToolCalls[j].Func.Name) +
               ',"kind":' + Q(ACPToolKind(M.ToolCalls[j].Func.Name)) +
-              ',"status":"completed","rawInput":' + Raw + '}');
+              ',"status":' + Q(Status) + ',"rawInput":' + Raw + '}');
+            if (M.ToolCalls[j].Id <> '') and (k < 0) then
+              SessionUpdate(S.Id, '{"sessionUpdate":"tool_call_update","toolCallId":' +
+                Q(Id) + ',"status":"failed","content":[{"type":"content","content":' +
+                TextBlock(CallNotFinishedText) + '}]}');
           end;
         end;
       mrTool:
@@ -1208,15 +1298,14 @@ begin
           if Length(Shown) > ResultShowBytes then
             Shown := Utf8SafeTruncate(Shown, ResultShowBytes) + sLineBreak +
                      '[... shortened for display]';
-          if Copy(M.Content, 1, Length(RefusedPrefix)) = RefusedPrefix then
-            Status := 'failed'   { as it was shown live }
-          else
-            Status := 'completed';
           SessionUpdate(S.Id, '{"sessionUpdate":"tool_call_update","toolCallId":' +
-            Q(M.ToolCallId) + ',"status":' + Q(Status) + ',"content":[' +
-            '{"type":"content","content":' + TextBlock(Shown) + '}]}');
+            Q(M.ToolCallId) + ',"status":' + Q(ReplayResultStatus(M.Content)) +
+            ',"content":[{"type":"content","content":' + TextBlock(Shown) + '}]}');
         end;
     end;
+  end;
+  finally
+    Results.Free;
   end;
 end;
 
@@ -1226,6 +1315,7 @@ var
   Text, Id: string;
   T: TACPPromptThread;
   Busy: Boolean;
+  Blocks: TJsonArray;
 begin
   if Params = nil then
   begin
@@ -1239,7 +1329,12 @@ begin
     RespondError(IdRaw, ACPNotFound, 'no such session', '{"sessionId":' + Q(Id) + '}');
     Exit;
   end;
-  Text := ACPPromptText(Params.ChildArray('prompt'));
+  Blocks := Params.ChildArray('prompt');   { a wrapper the caller frees }
+  try
+    Text := ACPPromptText(Blocks);
+  finally
+    Blocks.Free;
+  end;
   if Trim(Text) = '' then
   begin
     RespondError(IdRaw, ACPInvalidParams, 'the prompt is empty');

@@ -180,9 +180,18 @@ function  GetCurrentSessionId: string;
 procedure SetThreadShellSessionId(const SessionId: string);
 function  ThreadShellSessionId: string;
 
+{ The directory a session works in when it is not under the workspace:
+  the editor's project, for a session of `pasclaw acp`. A backend that
+  isolates commands has to make it visible to that session -- the docker
+  backend mounts it at the same path when it starts the session's
+  container. '' forgets it. }
+procedure SetShellSessionDir(const SessionId, Dir: string);
+function  ShellSessionDir(const SessionId: string): string;
+
 implementation
 
 uses
+  SyncObjs,
   PasClaw.Platform;   { used by the local-fallback path when no
                         backend is installed at call time -- keeps
                         legacy test paths working without changes }
@@ -193,6 +202,10 @@ var
 
 threadvar
   GThreadSessionId: string;
+
+var
+  GSessionDirs: TStringList = nil;   { SessionId=Dir; under GSessionDirsLock }
+  GSessionDirsLock: TCriticalSection = nil;
 
 procedure SetActiveShellBackend(Backend: IShellBackend);
 begin
@@ -333,5 +346,49 @@ function ThreadShellSessionId: string;
 begin
   Result := GThreadSessionId;
 end;
+
+procedure SetShellSessionDir(const SessionId, Dir: string);
+var
+  i: Integer;
+begin
+  if SessionId = '' then Exit;
+  GSessionDirsLock.Enter;
+  try
+    i := GSessionDirs.IndexOfName(SessionId);
+    if Dir = '' then
+    begin
+      if i >= 0 then GSessionDirs.Delete(i);
+    end
+    else if i >= 0 then
+      GSessionDirs.ValueFromIndex[i] := Dir
+    else
+      GSessionDirs.Add(SessionId + '=' + Dir);
+  finally
+    GSessionDirsLock.Leave;
+  end;
+end;
+
+function ShellSessionDir(const SessionId: string): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  if SessionId = '' then Exit;
+  GSessionDirsLock.Enter;
+  try
+    i := GSessionDirs.IndexOfName(SessionId);
+    if i >= 0 then Result := GSessionDirs.ValueFromIndex[i];
+  finally
+    GSessionDirsLock.Leave;
+  end;
+end;
+
+initialization
+  GSessionDirsLock := TCriticalSection.Create;
+  GSessionDirs := TStringList.Create;
+
+finalization
+  FreeAndNil(GSessionDirs);
+  FreeAndNil(GSessionDirsLock);
 
 end.

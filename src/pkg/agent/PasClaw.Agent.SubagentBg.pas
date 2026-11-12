@@ -567,9 +567,15 @@ begin
     { For what runs on this thread outside a dispatch (held-out
       scenarios); dispatches set it from the config themselves. }
     SetThreadShellSessionId(FShellSessionId);
-    SetLength(Hist, 1);
-    Hist[0] := MakeMessage(mrUser, FPrompt);
-    Ok := RunToolLoop(TLoopCfgBox(FCfg).Cfg, Hist, Loop);
+    try
+      SetLength(Hist, 1);
+      Hist[0] := MakeMessage(mrUser, FPrompt);
+      Ok := RunToolLoop(TLoopCfgBox(FCfg).Cfg, Hist, Loop);
+    finally
+      { Cleared before the thread ends: Delphi does not finalize a
+        string threadvar when its thread exits, so it would leak. }
+      SetThreadShellSessionId('');
+    end;
   except
     on E: Exception do
     begin

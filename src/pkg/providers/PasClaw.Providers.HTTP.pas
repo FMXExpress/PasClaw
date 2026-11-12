@@ -1191,7 +1191,10 @@ begin
       on E: EIdHTTPProtocolException do
       begin
         StatusCode := E.ErrorCode;
-        ErrMsg     := E.Message;
+        { Indy keeps an error response's body here, not in RespStream:
+          it is the provider's own explanation, so it is the message. }
+        if E.ErrorMessage <> '' then ErrMsg := E.ErrorMessage
+        else ErrMsg := E.Message;
         { fall through -- caller may still want to parse what we got }
       end;
       on E: Exception do

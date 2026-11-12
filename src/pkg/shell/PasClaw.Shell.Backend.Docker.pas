@@ -438,7 +438,7 @@ procedure TDockerShellBackend.BuildRunArgv(const SessionId: string;
   there). The command is built as an argv vector and spawned without a
   host shell -- no quoting, no cmd.exe percent-expansion. }
 var
-  WorkspacePath{$IFNDEF MSWINDOWS}, WtMount{$ENDIF}: string;
+  WorkspacePath{$IFNDEF MSWINDOWS}, WtMount, SessDir{$ENDIF}: string;
   i: Integer;
 begin
   WorkspacePath := JoinPath(GetHome, ActiveWorkspaceName);
@@ -481,6 +481,18 @@ begin
      (Pos(IncludeTrailingPathDelimiter(ExpandFileName(WorkspacePath)),
           IncludeTrailingPathDelimiter(WtMount)) <> 1) then
     AddBindIfExists(Args, WtMount);
+  (* The session's own project, at the same path: an editor's, under
+     `pasclaw acp`, where shell_exec runs with -w set to it. Outside the
+     workspace it was not mounted, so every command there failed in the
+     container. Not mounted when it is under the workspace (already
+     there) or does not exist (AddBindIfExists would create it, as
+     root). POSIX only, like the worktree mount: a same-path mount cannot
+     hold a C:\ path. *)
+  SessDir := ShellSessionDir(SessionId);
+  if (SessDir <> '') and DirectoryExists(SessDir) and
+     (Pos(IncludeTrailingPathDelimiter(ExpandFileName(WorkspacePath)),
+          IncludeTrailingPathDelimiter(ExpandFileName(SessDir))) <> 1) then
+    AddBindIfExists(Args, ExpandFileName(SessDir));
   {$ENDIF}
   Args.Add('-w');
   Args.Add(ContainerPath(WorkspacePath));

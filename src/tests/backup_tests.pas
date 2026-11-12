@@ -344,13 +344,36 @@ begin
   WriteLn('  ok: with-secrets archive round-trips config.json; nested destination excluded');
 end;
 
+procedure RemoveTree(const Path: string);
+var
+  SR: TSearchRec;
+  Child: string;
+begin
+  if FindFirst(JoinPath(Path, '*'), faAnyFile, SR) = 0 then
+  begin
+    repeat
+      if (SR.Name = '.') or (SR.Name = '..') then Continue;
+      Child := JoinPath(Path, SR.Name);
+      if (SR.Attr and faDirectory) <> 0 then RemoveTree(Child)
+      else DeleteFile(Child);
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+  RemoveDir(Path);
+end;
+
 begin
   GTmp := JoinPath(GetTempDir, 'pasclaw-backup-test-' + IntToStr(GetProcessID));
+  { Named by pid, so a reused pid would find an earlier run's archives in
+    backups/ and the rotation counts would be off: start empty, and clean
+    up after a pass. }
+  RemoveTree(GTmp);
   EnsureDir(GTmp);
   TestNames;
   TestRotation;
   TestMask;
   TestBackupAndRestore;
   TestWithSecretsAndNestedDest;
+  RemoveTree(GTmp);
   WriteLn('PASS');
 end.
