@@ -151,7 +151,7 @@ end;
 
 type
   TChunks = class
-    Texts: TStringList;
+    Texts, Thoughts: TStringList;
     constructor Create;
     destructor Destroy; override;
     procedure OnChunk(const C: TStreamChunk);
@@ -160,17 +160,20 @@ type
 constructor TChunks.Create;
 begin
   Texts := TStringList.Create;
+  Thoughts := TStringList.Create;
 end;
 
 destructor TChunks.Destroy;
 begin
   Texts.Free;
+  Thoughts.Free;
   inherited;
 end;
 
 procedure TChunks.OnChunk(const C: TStreamChunk);
 begin
-  if C.Kind = 'text' then Texts.Add(C.Text);
+  if C.Kind = 'text' then Texts.Add(C.Text)
+  else if C.Kind = 'thinking' then Thoughts.Add(C.Text);
 end;
 
 function Ev(const JSON: string): string;
@@ -212,6 +215,20 @@ begin
     AssertEq(R.FinishReason, 'tool_calls', 'finish_reason');
     AssertTrue((R.Usage.InputTokens = 11) and (R.Usage.OutputTokens = 7) and
                (R.Usage.CacheReadTokens = 4), 'usage from the last chunk, cached tokens too');
+  finally
+    K.Free;
+  end;
+
+  K := TChunks.Create;
+  try
+    R := ParseOAIStream(
+      Ev('{"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Think"}}]}') +
+      Ev('{"choices":[{"index":0,"delta":{"reasoning":"ing."}}]}') +
+      Ev('{"choices":[{"index":0,"delta":{"content":"Answer"}}]}') +
+      Ev('{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}'), K.OnChunk, Failed);
+    AssertTrue((K.Thoughts.Count = 2) and (K.Thoughts[0] = 'Think') and (K.Thoughts[1] = 'ing.'),
+               'reasoning_content and reasoning passed on as thinking');
+    AssertEq(R.Content, 'Answer', 'and kept out of the reply');
   finally
     K.Free;
   end;
@@ -268,7 +285,9 @@ begin
     AssertEq(Failed, '', 'no error');
     AssertTrue((K.Texts.Count = 4) and (K.Texts[0] = 'Hel') and (K.Texts[1] = 'lo') and
                (K.Texts[2] = sLineBreak) and (K.Texts[3] = 'World'),
-               'text pieces as they come, a line break between text blocks, thinking not shown');
+               'text pieces as they come, a line break between text blocks, thinking not in them');
+    AssertTrue((K.Thoughts.Count = 1) and (K.Thoughts[0] = 'Let me'),
+               'thinking passed on as thinking chunks');
     AssertEq(R.Content, 'Hello' + sLineBreak + 'World', 'text blocks joined as Chat joins them');
     AssertEq(R.Model, 'claude-x', 'the model');
     AssertEq(R.FinishReason, 'tool_use', 'the stop reason');
@@ -347,6 +366,7 @@ type
   { One scripted round per call: the text pieces ChatStream passes on, and
     the response it (or Chat) then returns. }
   TRound = record
+    Thoughts: array of string;   { thinking pieces streamed before the text }
     Pieces: array of string;
     Content: string;
     Tool: string;            { a tool to call, '' = none }
@@ -403,6 +423,13 @@ var
   C: TStreamChunk;
 begin
   Inc(StreamCalls);
+  for i := 0 to High(Rounds[Call].Thoughts) do
+  begin
+    C := Default(TStreamChunk);
+    C.Kind := 'thinking';
+    C.Text := Rounds[Call].Thoughts[i];
+    OnChunk(C);
+  end;
   for i := 0 to High(Rounds[Call].Pieces) do
   begin
     C := Default(TStreamChunk);
@@ -421,29 +448,37 @@ function TFakeStreamer.SupportsStreaming: Boolean; begin Result := Streams; end;
 
 type
   TSeen = class
-    Deltas, Texts: TStringList;
+    Deltas, Texts, Thoughts: TStringList;
     constructor Create;
     destructor Destroy; override;
     procedure OnDelta(const Delta: string; First: Boolean);
     procedure OnText(const S: string);
+    procedure OnThought(const Delta: string; First: Boolean);
   end;
 
 constructor TSeen.Create;
 begin
   Deltas := TStringList.Create;
   Texts := TStringList.Create;
+  Thoughts := TStringList.Create;
 end;
 
 destructor TSeen.Destroy;
 begin
   Deltas.Free;
   Texts.Free;
+  Thoughts.Free;
   inherited;
 end;
 
 procedure TSeen.OnDelta(const Delta: string; First: Boolean);
 begin
   if First then Deltas.Add('^' + Delta) else Deltas.Add(Delta);
+end;
+
+procedure TSeen.OnThought(const Delta: string; First: Boolean);
+begin
+  if First then Thoughts.Add('^' + Delta) else Thoughts.Add(Delta);
 end;
 
 procedure TSeen.OnText(const S: string);
@@ -465,9 +500,24 @@ begin
   for i := 0 to High(Pieces) do Result.Pieces[i] := Pieces[i];
   Result.Content := Content;
   Result.Tool := Tool;
+  SetLength(Result.Thoughts, 0);
+end;
+
+function RT(const Thoughts, Pieces: array of string; const Content: string;
+            const Tool: string = ''): TRound;
+var
+  i: Integer;
+begin
+  Result := R1(Pieces, Content, Tool);
+  SetLength(Result.Thoughts, Length(Thoughts));
+  for i := 0 to High(Thoughts) do Result.Thoughts[i] := Thoughts[i];
 end;
 
 { Run one turn over the scripted rounds; the seen deltas and texts, joined. }
+var
+  LastThoughts: string;   { what OnThoughtDelta saw in the last RunOne }
+  WantThoughts: Boolean;  { RunOne sets OnThoughtDelta }
+
 procedure RunOne(Streams, WantDeltas: Boolean; const Rounds: array of TRound;
                  out Deltas, Texts: string; out StreamCalls, ChatCalls: Integer);
 var
@@ -501,11 +551,13 @@ begin
     Cfg.Options := DefaultChatOptions;
     Cfg.OnText := Seen.OnText;
     if WantDeltas then Cfg.OnTextDelta := Seen.OnDelta;
+    if WantThoughts then Cfg.OnThoughtDelta := Seen.OnThought;
     SetLength(Msgs, 1);
     Msgs[0] := MakeMessage(mrUser, 'go');
     AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'the loop runs');
     Deltas := StringReplace(Trim(Seen.Deltas.Text), sLineBreak, '|', [rfReplaceAll]);
     Texts := StringReplace(Trim(Seen.Texts.Text), sLineBreak, '|', [rfReplaceAll]);
+    LastThoughts := StringReplace(Trim(Seen.Thoughts.Text), sLineBreak, '|', [rfReplaceAll]);
     StreamCalls := P.StreamCalls;
     ChatCalls := P.ChatCalls;
   finally
@@ -545,7 +597,22 @@ begin
   RunOne(True, True, [R1(['Look', 'ing'], 'Looking', 'noop'), R1(['Done'], 'Done')], D, T, SC, CC);
   AssertEq(D, '^Look|ing|^Done', 'each round''s first piece is marked');
   AssertTrue(SC = 2, 'both rounds streamed');
-  WriteLn('  ok: the loop''s OnTextDelta: streamed rounds, OnText otherwise, a mismatch, the rest, rounds');
+
+  { Thinking goes to OnThoughtDelta only, a round's first piece marked. }
+  WantThoughts := True;
+  try
+    RunOne(True, True, [RT(['Hm', 'm'], ['Look'], 'Look', 'noop'), RT(['Ok'], ['Done'], 'Done')], D, T, SC, CC);
+    AssertEq(LastThoughts, '^Hm|m|^Ok', 'thinking to OnThoughtDelta, each round''s first marked');
+    AssertEq(D, '^Look|^Done', 'the text stream is unchanged by it');
+    AssertEq(T, '', 'and thinking never reaches OnText');
+    RunOne(True, False, [RT(['Hmm'], ['Ans', 'wer'], 'Answer')], D, T, SC, CC);
+    AssertEq(LastThoughts, '^Hmm', 'OnThoughtDelta alone streams the round');
+    AssertTrue(SC = 1, 'through ChatStream');
+    AssertEq(T, 'Answer', 'and its text still goes to OnText whole');
+  finally
+    WantThoughts := False;
+  end;
+  WriteLn('  ok: the loop''s OnTextDelta and OnThoughtDelta: streamed rounds, OnText otherwise, a mismatch, the rest, rounds, thinking');
 end;
 
 begin

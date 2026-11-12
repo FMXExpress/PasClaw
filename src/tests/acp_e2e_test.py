@@ -40,6 +40,9 @@ editor would. What it pins:
     that re-sends the server-tool blocks as they came, an overloaded error
     event, and two sessions streaming at the same moment each getting only
     their own text
+  - the model's thinking reaches the editor as agent_thought_chunk, apart
+    from the reply and kept out of the saved session: Anthropic thinking
+    blocks, and a compatible server's reasoning_content
 """
 import http.server
 import json
@@ -112,6 +115,9 @@ PLAYBOOKS = {
     "stream two rounds": [
         ("tooltext", "list_dir", {"path": "."}, "Looking first."),
         ("text", "Done looking."),
+    ],
+    "reason check": [
+        ("reason", "Weigh it, then answer.", "Reasoned answer."),
     ],
     "stream refused": [
         ("text", "Answered without streaming."),
@@ -192,6 +198,8 @@ class Model(http.server.BaseHTTPRequestHandler):
         def delta(d, fin=None):
             self.sse(dict(base, choices=[{"index": 0, "delta": d, "finish_reason": fin}]))
         delta({"role": "assistant"})
+        for piece in re.findall(r"\S+\s*", message.get("reasoning_content") or ""):
+            delta({"reasoning_content": piece})
         text = message.get("content") or ""
         if text:
             n = max(1, len(text) // 3)
@@ -259,6 +267,9 @@ class Model(http.server.BaseHTTPRequestHandler):
                                        "function": {"name": step[1],
                                                     "arguments": json.dumps(step[2])}}]}
             finish = "tool_calls"
+        elif step[0] == "reason":
+            message = {"role": "assistant", "content": step[2], "reasoning_content": step[1]}
+            finish = "stop"
         else:
             message = {"role": "assistant", "content": step[1]}
             finish = "stop"
@@ -298,6 +309,12 @@ ANTH_PLAYBOOKS = {
                     {"type": "text", "text": "Searching."}],
          "stop": "pause_turn"},
         {"blocks": [{"type": "text", "text": "Found it."}], "stop": "end_turn"},
+    ],
+    "anth think": [
+        {"blocks": [{"type": "thinking", "thinking": "Weighing the options carefully.",
+                     "signature": "sig-x"},
+                    {"type": "text", "text": "Decided."}],
+         "stop": "end_turn"},
     ],
     "anth overloaded": [
         {"blocks": [{"type": "text", "text": "partial words here"}], "error": "Overloaded"},
@@ -395,6 +412,16 @@ class AnthModel(http.server.BaseHTTPRequestHandler):
                                           "error": {"type": "overloaded_error", "message": step["error"]}})
                         self.chunk(b"")
                         return
+                self.ev("content_block_stop", {"type": "content_block_stop", "index": i})
+            elif b["type"] == "thinking":
+                self.ev("content_block_start", {"type": "content_block_start", "index": i,
+                                                "content_block": {"type": "thinking", "thinking": ""}})
+                for piece in re.findall(r"\S+\s*", b["thinking"]):
+                    self.ev("content_block_delta", {"type": "content_block_delta", "index": i,
+                                                    "delta": {"type": "thinking_delta", "thinking": piece}})
+                self.ev("content_block_delta", {"type": "content_block_delta", "index": i,
+                                                "delta": {"type": "signature_delta",
+                                                          "signature": b["signature"]}})
                 self.ev("content_block_stop", {"type": "content_block_stop", "index": i})
             elif b["type"] in ("tool_use", "server_tool_use"):
                 self.ev("content_block_start", {"type": "content_block_start", "index": i,
@@ -527,6 +554,10 @@ class Client:
 def updates(notes, kind=None):
     out = [n["params"]["update"] for n in notes if n.get("method") == "session/update"]
     return [u for u in out if kind is None or u.get("sessionUpdate") == kind]
+
+
+def thought_text(notes):
+    return "".join(u["content"].get("text", "") for u in updates(notes, "agent_thought_chunk"))
 
 
 def agent_text(notes):
@@ -692,6 +723,12 @@ def main():
           r.get("result", {}).get("stopReason") == "end_turn" and
           agent_text(notes) == "Answered without streaming." and
           stream_log["plain_requests"] == before["plain_requests"] + 1, (r, agent_text(notes), stream_log))
+
+    r, notes = c.call("session/prompt", {"sessionId": sid,
+                                         "prompt": [{"type": "text", "text": "reason check"}]})
+    check("a compatible server's reasoning_content reaches the editor as thinking",
+          thought_text(notes) == "Weigh it, then answer." and
+          agent_text(notes) == "Reasoned answer.", (thought_text(notes), agent_text(notes)))
 
     print("-- the editor's MCP tools:")
     r, notes = c.call("session/prompt", {"sessionId": sid,
@@ -922,6 +959,16 @@ def main():
           done[-1].get("status") == "completed", (lst, done))
     check("and its rounds read as two paragraphs",
           agent_text(notes).replace("\r\n", "\n") == "Listing.\n\nListed it.", agent_text(notes))
+    r, notes = c.call("session/prompt", {"sessionId": asid,
+                                         "prompt": [{"type": "text", "text": "anth think"}]})
+    thoughts = updates(notes, "agent_thought_chunk")
+    check("Anthropic thinking streams to the editor as agent_thought_chunk",
+          len(thoughts) >= 3 and thought_text(notes) == "Weighing the options carefully.",
+          [t["content"]["text"] for t in thoughts])
+    check("apart from the reply",
+          agent_text(notes) == "Decided." and "Weighing" not in agent_text(notes), agent_text(notes))
+    check("and kept out of the saved session",
+          "Weighing" not in json.dumps(session_file(ahome, asid).get("messages", [])))
     before = len(anth_requests)
     r, notes = c.call("session/prompt", {"sessionId": asid,
                                          "prompt": [{"type": "text", "text": "anth pause"}]})

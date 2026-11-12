@@ -6,7 +6,8 @@
 
 ```sh
 pasclaw acp [--model M] [--provider P] [--mode build|plan|improve|space]
-            [--max-iterations N] [--system S] [--no-mcp] [--profile P] [--backend local|docker]
+            [--max-iterations N] [--system S] [--thinking low|medium|high]
+            [--no-mcp] [--profile P] [--backend local|docker]
 ```
 
 The flags mean what they mean for `pasclaw agent`. One default differs: `--max-iterations` is 50 rather than 8, because an editor turn is a working session, not a one-shot.
@@ -45,6 +46,7 @@ Any other ACP client works the same way: the command is `pasclaw`, the argument 
 | PasClaw | ACP |
 |---|---|
 | the model's text, as it is written | `agent_message_chunk`, piece by piece (see *Streaming*) |
+| the model's thinking, as it is written | `agent_thought_chunk`, piece by piece |
 | a tool call | `tool_call`: a kind (read, edit, execute, search, fetch, …), a title such as `Read src/a.pas` or the command itself, the file it names as a location, and the raw arguments |
 | its result | `tool_call_update`: completed or failed, with the output |
 | a file an edit tool rewrote (`write_file`, `edit_file`, `append_file`) | a diff in that update, before and after |
@@ -54,7 +56,7 @@ Any other ACP client works the same way: the command is `pasclaw`, the argument 
 | a provider that cannot answer (a bad key, a rate limit, no connection) | the prompt's JSON-RPC error, with the provider's message |
 | modes | session modes `build`, `plan`, `improve`, `space`, switched with `session/set_mode` from the next turn |
 
-**Streaming.** With Anthropic or an OpenAI-compatible provider (OpenAI, OpenRouter, Groq, DeepSeek, Mistral, Ollama, LM Studio, vLLM and the rest of the catalog's `openai` kind), the reply streams: each piece of text reaches the editor as the model writes it. An OpenAI-compatible server that refuses the streaming fields is asked again without them, and its reply arrives whole. Anthropic's thinking is kept for the conversation but not shown, as without streaming, and a `pause_turn` from its server tools is continued within the same turn. Gemini and the relay provider send each model round's text whole. A retry or a fallback after a failed call is not streamed either.
+**Streaming.** With Anthropic or an OpenAI-compatible provider (OpenAI, OpenRouter, Groq, DeepSeek, Mistral, Ollama, LM Studio, vLLM and the rest of the catalog's `openai` kind), the reply streams: each piece of text reaches the editor as the model writes it. An OpenAI-compatible server that refuses the streaming fields is asked again without them, and its reply arrives whole. The model's thinking streams too, as `agent_thought_chunk`, which an editor shows apart from the reply: Anthropic's thinking blocks (turn them on with `--thinking low|medium|high`), and the `reasoning_content` or `reasoning` a compatible server sends for a reasoning model. Thinking is shown, not saved: the session keeps the reply, as without streaming. A `pause_turn` from Anthropic's server tools is continued within the same turn. Gemini and the relay provider send each model round's text whole. A retry or a fallback after a failed call is not streamed either.
 
 **Prompts.** Text is passed as written. A file the user attaches as a link becomes a reference (`@name (uri)`). Embedded file contents become a `<context uri="…">` block. Images and audio are not accepted yet: the agent advertises text only, and anything else is named in the prompt as left out.
 
