@@ -475,33 +475,39 @@ begin
   if Blocks = nil then Exit;
   for i := 0 to Blocks.Count - 1 do
   begin
-    B := Blocks.ItemObject(i);
+    B := Blocks.ItemObject(i);   { a wrapper the caller frees }
     if B = nil then Continue;
-    Kind := B.GetStr('type', '');
-    Part := '';
-    if Kind = 'text' then
-      Part := B.GetStr('text', '')
-    else if Kind = 'resource_link' then
-    begin
-      Uri := B.GetStr('uri', '');
-      Part := '@' + B.GetStr('name', Uri);
-      if Uri <> '' then Part := Part + ' (' + Uri + ')';
-    end
-    else if Kind = 'resource' then
-    begin
-      R := B.ChildObject('resource');
-      if R <> nil then
+    try
+      Kind := B.GetStr('type', '');
+      Part := '';
+      if Kind = 'text' then
+        Part := B.GetStr('text', '')
+      else if Kind = 'resource_link' then
       begin
-        Uri := R.GetStr('uri', '');
-        if R.Has('text') then
-          Part := '<context uri="' + Uri + '">' + sLineBreak +
-                  R.GetStr('text', '') + sLineBreak + '</context>'
-        else
-          Part := '[' + Uri + ': binary content left out]';
-      end;
-    end
-    else if Kind <> '' then
-      Part := '[' + Kind + ' content left out: this agent takes text]';
+        Uri := B.GetStr('uri', '');
+        Part := '@' + B.GetStr('name', Uri);
+        if Uri <> '' then Part := Part + ' (' + Uri + ')';
+      end
+      else if Kind = 'resource' then
+      begin
+        R := B.ChildObject('resource');
+        if R <> nil then
+        try
+          Uri := R.GetStr('uri', '');
+          if R.Has('text') then
+            Part := '<context uri="' + Uri + '">' + sLineBreak +
+                    R.GetStr('text', '') + sLineBreak + '</context>'
+          else
+            Part := '[' + Uri + ': binary content left out]';
+        finally
+          R.Free;
+        end;
+      end
+      else if Kind <> '' then
+        Part := '[' + Kind + ' content left out: this agent takes text]';
+    finally
+      B.Free;
+    end;
     if Part = '' then Continue;
     if Result <> '' then Result := Result + sLineBreak;
     Result := Result + Part;
@@ -873,8 +879,12 @@ begin
   try
     O := R.ChildObject('outcome');
     if O = nil then Exit;
-    Outcome := O.GetStr('outcome', '');
-    Option := O.GetStr('optionId', '');
+    try
+      Outcome := O.GetStr('outcome', '');
+      Option := O.GetStr('optionId', '');
+    finally
+      O.Free;
+    end;
     if Outcome <> 'selected' then Exit;
     if Option = 'allow_once' then Result := aaAllowOnce
     else if Option = 'allow_session' then Result := aaAllowSession;
@@ -991,18 +1001,22 @@ begin
       if Obj.Has('id') then HandleResponse(Obj);
       Exit;
     end;
-    Params := Obj.ChildObject('params');
-    if not Obj.Has('id') then
-      HandleNotification(Method, Params)
-    else
-    begin
-      IdRaw := JsonIdLiteral(Obj);
-      try
-        HandleRequest(IdRaw, Method, Params);
-      except
-        on E: Exception do
-          RespondError(IdRaw, ACPInternalError, E.Message);
+    Params := Obj.ChildObject('params');   { a wrapper; freed below }
+    try
+      if not Obj.Has('id') then
+        HandleNotification(Method, Params)
+      else
+      begin
+        IdRaw := JsonIdLiteral(Obj);
+        try
+          HandleRequest(IdRaw, Method, Params);
+        except
+          on E: Exception do
+            RespondError(IdRaw, ACPInternalError, E.Message);
+        end;
       end;
+    finally
+      Params.Free;
     end;
   finally
     Obj.Free;
@@ -1057,7 +1071,14 @@ begin
         P.Done := True;
         P.Ok := Obj.Has('result');
         R := Obj.ChildObject('result');
-        if R <> nil then P.ResultJSON := R.ToJSON else P.ResultJSON := '{}';
+        if R <> nil then
+        try
+          P.ResultJSON := R.ToJSON;
+        finally
+          R.Free;
+        end
+        else
+          P.ResultJSON := '{}';
         P.Event.SetEvent;
         Break;
       end;
@@ -1086,7 +1107,8 @@ var
   S, Existing: TACPSession;
   Cwd, Err, Id: string;
   History: TMessageArray;
-  NotFound: Boolean;
+  NotFound, Opened: Boolean;
+  Servers: TJsonArray;
 begin
   if Params = nil then
   begin
@@ -1119,8 +1141,13 @@ begin
   S := TACPSession.Create(Id);
   S.Cwd := ExcludeTrailingPathDelimiter(Cwd);
   S.Mode := pmBuild;
-  if not FHost.OpenSession(S, Params.ChildArray('mcpServers'), Load, History,
-                           NotFound, Err) then
+  Servers := Params.ChildArray('mcpServers');   { a wrapper the caller frees }
+  try
+    Opened := FHost.OpenSession(S, Servers, Load, History, NotFound, Err);
+  finally
+    Servers.Free;
+  end;
+  if not Opened then
   begin
     S.Free;
     if NotFound then
@@ -1288,6 +1315,7 @@ var
   Text, Id: string;
   T: TACPPromptThread;
   Busy: Boolean;
+  Blocks: TJsonArray;
 begin
   if Params = nil then
   begin
@@ -1301,7 +1329,12 @@ begin
     RespondError(IdRaw, ACPNotFound, 'no such session', '{"sessionId":' + Q(Id) + '}');
     Exit;
   end;
-  Text := ACPPromptText(Params.ChildArray('prompt'));
+  Blocks := Params.ChildArray('prompt');   { a wrapper the caller frees }
+  try
+    Text := ACPPromptText(Blocks);
+  finally
+    Blocks.Free;
+  end;
   if Trim(Text) = '' then
   begin
     RespondError(IdRaw, ACPInvalidParams, 'the prompt is empty');
