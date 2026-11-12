@@ -29,6 +29,7 @@ program plan_build_mode_tests;
 
 uses
   SysUtils, Classes,
+  PasClaw.Config,
   PasClaw.Agent.Mode,
   PasClaw.Agent.Prompt,
   PasClaw.Providers.Types,
@@ -353,6 +354,54 @@ begin
   AssertEqS(Msgs[0].Content, 'hi', 'and the user turn is not touched');
 end;
 
+(* A chat keeps its system prompt across turns (a compaction summary can
+   live in it), so a mode switched mid-chat has to be carried into that
+   kept prompt -- `/mode` in the REPL and session/set_mode under `pasclaw
+   acp` both re-apply it. Without it the gate changed and the model was
+   never told. *)
+procedure TestRetargetModeSection;
+var
+  Built, P: string;
+  M: TPasClawMode;
+  Cfg: TConfig;
+begin
+  Cfg := TConfig.Create;
+  try
+    Built := BuildSystemPrompt(Cfg, '', True, '', pmBuild);
+    AssertTrue(Pos('## Plan Mode', Built) = 0, 'a build prompt has no mode directive');
+
+    P := RetargetModeSection(Built, pmPlan);
+    AssertTrue(Pos('## Plan Mode', P) = 1, 'switching to plan puts the plan directive first');
+    AssertTrue(Pos(Built, P) > 0, 'and keeps the rest of the prompt as it was');
+
+    P := RetargetModeSection(P, pmImprove);
+    AssertTrue(Pos('## Plan Mode', P) = 0, 'plan to improve drops the plan directive');
+    AssertTrue(Pos('## Improve Mode', P) = 1, 'and leads with improve');
+
+    P := RetargetModeSection(P, pmImprove);
+    AssertTrue(Pos('## Improve Mode', P) = 1, 'idempotent: still leads');
+    AssertTrue(Pos('## Improve Mode', Copy(P, 2, MaxInt)) = 0, 'and is not added twice');
+
+    P := RetargetModeSection(P, pmBuild);
+    AssertEqS(P, Built, 'back to build is the original build prompt, byte for byte');
+
+    { A prompt built in a mode retargets to the same text as one built in
+      the target mode -- the section is the one BuildSystemPrompt emits. }
+    for M := Low(TPasClawMode) to High(TPasClawMode) do
+      AssertEqS(RetargetModeSection(BuildSystemPrompt(Cfg, '', True, '', pmPlan), M),
+                BuildSystemPrompt(Cfg, '', True, '', M),
+                'plan prompt retargeted to ' + ModeName(M) + ' = built for it');
+
+    { Text after the directive (a compaction summary) survives the switch. }
+    P := RetargetModeSection(BuildSystemPrompt(Cfg, '', True, '', pmSpace) +
+                             sLineBreak + 'SUMMARY-OF-EARLIER-TURNS', pmBuild);
+    AssertTrue(Pos('## Space Mode', P) = 0, 'space directive gone');
+    AssertTrue(Pos('SUMMARY-OF-EARLIER-TURNS', P) > 0, 'the summary stays');
+  finally
+    Cfg.Free;
+  end;
+end;
+
 procedure TestParseModeFromBody;
 begin
   AssertTrue(ParseModeFromBody('{"mode":"plan"}') = pmPlan, 'body plan');
@@ -637,6 +686,7 @@ begin
   TestCycleAndName;
   TestModeSection;
   TestModeInjection;
+  TestRetargetModeSection;
   TestParseModeFromBody;
   TestRefusalText;
   TestDispatchGate;

@@ -72,6 +72,15 @@ type
   in background threads. Returns the list of loader threads -- pass it back
   to FreeMCPClients to drain on shutdown. }
 function ConnectMCPServers(Cfg: TConfig; Reg: TToolRegistry): TMCPClientList;
+
+{ Connect the enabled servers in Servers the same way, for servers that do
+  not come from the config (an editor's session/new under `pasclaw acp`).
+  Cfg supplies the shared MCP settings only: its MCPServers list is neither
+  read nor changed, and tool_search's disclosure tools are left as the
+  configured list registered them. code_catalog is registered when one of
+  Servers is in code mode. }
+function ConnectMCPServerList(const Servers: array of TMCPServer; Cfg: TConfig;
+                              Reg: TToolRegistry): TMCPClientList;
 procedure FreeMCPClients(var Clients: TMCPClientList);
 
 { Invoke a bridged MCP tool by its namespaced registry name (e.g.
@@ -599,7 +608,9 @@ end;
   Boot path.
   ============================================================ }
 
-function ConnectMCPServers(Cfg: TConfig; Reg: TToolRegistry): TMCPClientList;
+{ The per-server half of both entry points: state, cached tools, loader. }
+function ConnectEach(const Servers: array of TMCPServer; Cfg: TConfig;
+                     Reg: TToolRegistry; out AnyCodeMode: Boolean): TMCPClientList;
 var
   i, j: Integer;
   CachedTools: TMCPToolArray;
@@ -610,34 +621,35 @@ var
 begin
   SetLength(Result, 0);
   CachedRegistered := 0;
-  for i := 0 to High(Cfg.MCPServers) do
+  AnyCodeMode := False;
+  for i := 0 to High(Servers) do
   begin
-    if not Cfg.MCPServers[i].Enabled then Continue;
+    if not Servers[i].Enabled then Continue;
+    if Servers[i].CodeMode then AnyCodeMode := True;
 
-    State := TMCPServerState.Create(Cfg.MCPServers[i].Name,
-                                    Cfg.MCPCompactResults);
+    State := TMCPServerState.Create(Servers[i].Name, Cfg.MCPCompactResults);
     GStates.Add(State);
 
     { Cache pass: register cached tools with the state in lsLoading. }
     CachedCount := 0;
-    if LoadCachedTools(Cfg.MCPServers[i].Name, CachedTools) then
+    if LoadCachedTools(Servers[i].Name, CachedTools) then
     begin
       for j := 0 to High(CachedTools) do
       begin
         Dispatch := State.AddDispatch(CachedTools[j].Name);
-        RegisterToolViaDispatch(Reg, Cfg.MCPServers[i].Name,
+        RegisterToolViaDispatch(Reg, Servers[i].Name,
                                 CachedTools[j], Dispatch,
                                 Cfg.MCPProgressiveDisclosure,
-                                Cfg.MCPServers[i].CodeMode);
+                                Servers[i].CodeMode);
         Inc(CachedCount);
       end;
       if CachedCount > 0 then
         LogInfo('mcp[%s] cache hit: %d tool(s) registered (connecting in background)',
-                [Cfg.MCPServers[i].Name, CachedCount]);
+                [Servers[i].Name, CachedCount]);
       Inc(CachedRegistered, CachedCount);
     end;
 
-    Loader := TMCPLoader.Create(Cfg.MCPServers[i], Reg, State,
+    Loader := TMCPLoader.Create(Servers[i], Reg, State,
                                  Cfg.MCPProgressiveDisclosure);
     SetLength(Result, Length(Result) + 1);
     Result[High(Result)] := Loader;
@@ -646,7 +658,22 @@ begin
   if CachedRegistered > 0 then
     LogDebug('mcp: %d cached tool(s) registered across %d server(s); waiting on background refresh',
              [CachedRegistered, Length(Result)]);
+end;
 
+function ConnectMCPServerList(const Servers: array of TMCPServer; Cfg: TConfig;
+                              Reg: TToolRegistry): TMCPClientList;
+var
+  AnyCodeMode: Boolean;
+begin
+  Result := ConnectEach(Servers, Cfg, Reg, AnyCodeMode);
+  if AnyCodeMode then RegisterCodeCatalogTool(Reg);
+end;
+
+function ConnectMCPServers(Cfg: TConfig; Reg: TToolRegistry): TMCPClientList;
+var
+  AnyCodeMode: Boolean;
+begin
+  Result := ConnectEach(Cfg.MCPServers, Cfg, Reg, AnyCodeMode);
   { Register tool_search whenever progressive disclosure is on. The
     discovery tool is the only path the model has to load schemas
     for the deferred MCP tools registered above. No-op when
@@ -659,12 +686,7 @@ begin
   { code_catalog: the model's way to read a code-mode server's tools
     without a script. Registered whenever any enabled server is in code
     mode, independent of the disclosure flags. }
-  for i := 0 to High(Cfg.MCPServers) do
-    if Cfg.MCPServers[i].Enabled and Cfg.MCPServers[i].CodeMode then
-    begin
-      RegisterCodeCatalogTool(Reg);
-      Break;
-    end;
+  if AnyCodeMode then RegisterCodeCatalogTool(Reg);
 end;
 
 procedure FreeMCPClients(var Clients: TMCPClientList);

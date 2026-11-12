@@ -424,6 +424,16 @@ function PartitionToolBatches(const Calls: array of TToolCall;
 function HistWithTurnClock(const Hist: TMessageArray;
                            const Stamp: string): TMessageArray;
 
+(* Did the provider itself refuse, as opposed to the model answering?
+
+   StatusCode is the signal rather than sniffing the text: providers set
+   200 on success, -1 on socket/TLS/DNS failure, and the real code on an
+   HTTP error. 0 means a provider that never sets it, so it is not
+   treated as a failure. On refusal the loop's Content carries the
+   provider's own message, which is the only useful thing to say -- and
+   which is not a reply, so a caller must not keep it as one. *)
+function ProviderRefused(const Loop: TToolLoopResult; out Msg: string): Boolean;
+
 { Remove a turn-clock suffix, returning S unchanged when there is none.
 
   Anything that asserts on the exact text a provider received now has to cope
@@ -1154,6 +1164,18 @@ begin
       Result[i].Content := Result[i].Content + TurnClockPrefix + Stamp + ']';
       Exit;
     end;
+end;
+
+function ProviderRefused(const Loop: TToolLoopResult; out Msg: string): Boolean;
+begin
+  Msg := '';
+  Result := (Loop.LastResp.StatusCode <> 0) and
+            ((Loop.LastResp.StatusCode < 200) or (Loop.LastResp.StatusCode > 299));
+  if not Result then Exit;
+  Msg := Trim(Loop.Content);
+  if Msg = '' then
+    Msg := Format('the provider call failed (status %d)',
+                  [Loop.LastResp.StatusCode]);
 end;
 
 function StripTurnClock(const S: string): string;

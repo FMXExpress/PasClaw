@@ -158,6 +158,7 @@ type
     procedure DoCancel(Params: TJsonObject);
     function  FindSession(const Id: string): TACPSession;
     procedure ReplayHistory(S: TACPSession; const History: TMessageArray);
+    procedure CloseOpenCalls(S: TACPSession);
     procedure ReapThreads(WaitAll: Boolean);
     { Turn support. }
     function  Request(const SessionId, Method, ParamsJSON: string;
@@ -208,7 +209,7 @@ implementation
 
 uses
   PasClaw.Logger,
-  PasClaw.Utils,          { ReadFileText }
+  PasClaw.Utils,          { ReadFileText, Utf8SafeTruncate }
   PasClaw.Tools.ToolLoop; { StripTurnClock }
 
 const
@@ -270,57 +271,35 @@ begin
   for i := 1 to Length(Result) do
     if CharInSet(Result[i], [#9, #10, #13]) then Result[i] := ' ';
   Result := Trim(Result);
-  if Length(Result) > Max then Result := Copy(Result, 1, Max - 3) + '...';
+  if Length(Result) > Max then Result := Utf8SafeTruncate(Result, Max - 3) + '...';
 end;
 
-function ArgStr(const ArgsJSON, Key: string): string;
+{ A tool call's arguments as an object, or nil when they are not one. Each
+  call's arguments are parsed once, here; the caller frees the result. }
+function ParseArgsObj(const ArgsJSON: string): TJsonObject;
 var
-  O: TJsonObject;
+  T: string;
 begin
-  Result := '';
-  if Trim(ArgsJSON) = '' then Exit;
+  Result := nil;
+  T := Trim(ArgsJSON);
+  if (T = '') or (T[1] <> '{') then Exit;
   try
-    O := TJsonObject.Parse(ArgsJSON);
+    Result := TJsonObject.Parse(T);
   except
-    Exit;
-  end;
-  try
-    Result := O.GetStr(Key, '');
-  finally
-    O.Free;
+    Result := nil;
   end;
 end;
 
-function IsJsonObjectText(const S: string): Boolean;
-var
-  O: TJsonObject;
+function ArgOf(Args: TJsonObject; const Key: string): string;
 begin
-  Result := False;
-  if (Trim(S) = '') or (Trim(S)[1] <> '{') then Exit;
-  try
-    O := TJsonObject.Parse(S);
-    O.Free;
-    Result := True;
-  except
-    Result := False;
-  end;
+  if Args = nil then Result := '' else Result := Args.GetStr(Key, '');
 end;
 
-(* The JSON literal of a message's id, echoed back unchanged: a numeric id
-   stays numeric, a string stays a string. GetStr returns its default for a
-   non-string value, and no valid JSON string can hold raw control bytes,
-   so the sentinel tells the two apart. *)
-function IdRawOf(Obj: TJsonObject): string;
-const
-  Sentinel = #0#1#2;
-var
-  S: string;
+{ rawInput: the arguments as they came when they are an object, else as
+  a string. }
+function RawInputOf(Args: TJsonObject; const ArgsJSON: string): string;
 begin
-  Result := 'null';
-  if (Obj = nil) or not Obj.Has('id') then Exit;
-  S := Obj.GetStr('id', Sentinel);
-  if S <> Sentinel then Exit(Q(S));
-  Result := IntToStr(Obj.GetInt('id', 0));
+  if Args <> nil then Result := ArgsJSON else Result := Q(ArgsJSON);
 end;
 
 function TextBlock(const S: string): string;
@@ -397,7 +376,7 @@ begin
     Result := 'other';
 end;
 
-function ACPToolTitle(const ToolName, ArgsJSON: string): string;
+function ToolTitleOf(const ToolName: string; Args: TJsonObject): string;
 const
   Keys: array[0..8] of string = ('command', 'path', 'pattern', 'query', 'url',
                                  'symbol', 'name', 'action', 'prompt');
@@ -408,7 +387,7 @@ begin
   N := LowerCase(ToolName);
   if (N = 'shell_exec') or (N = 'shell_background') then
   begin
-    V := ArgStr(ArgsJSON, 'command');
+    V := ArgOf(Args, 'command');
     if V <> '' then Exit(Squash(V, 120));
   end
   else if N = 'todo_write' then
@@ -416,7 +395,7 @@ begin
   V := '';
   for i := Low(Keys) to High(Keys) do
   begin
-    V := ArgStr(ArgsJSON, Keys[i]);
+    V := ArgOf(Args, Keys[i]);
     if V <> '' then Break;
   end;
   if      N = 'read_file'   then Result := 'Read'
@@ -431,6 +410,18 @@ begin
   else Result := ToolName;
   if (V <> '') and (N <> 'apply_patch') then
     Result := Result + ' ' + Squash(V, 100);
+end;
+
+function ACPToolTitle(const ToolName, ArgsJSON: string): string;
+var
+  Args: TJsonObject;
+begin
+  Args := ParseArgsObj(ArgsJSON);
+  try
+    Result := ToolTitleOf(ToolName, Args);
+  finally
+    Args.Free;
+  end;
 end;
 
 function ACPPlanEntries(const Checklist: string): string;
@@ -511,13 +502,25 @@ begin
   end;
 end;
 
-function ACPToolPath(const ArgsJSON, Cwd: string): string;
+function ToolPathOf(Args: TJsonObject; const Cwd: string): string;
 var
   P: string;
 begin
-  P := ArgStr(ArgsJSON, 'path');
-  if P = '' then P := ArgStr(ArgsJSON, 'file');
+  P := ArgOf(Args, 'path');
+  if P = '' then P := ArgOf(Args, 'file');
   Result := ResolveAgainst(P, Cwd);
+end;
+
+function ACPToolPath(const ArgsJSON, Cwd: string): string;
+var
+  Args: TJsonObject;
+begin
+  Args := ParseArgsObj(ArgsJSON);
+  try
+    Result := ToolPathOf(Args, Cwd);
+  finally
+    Args.Free;
+  end;
 end;
 
 function ACPModesJSON(Current: TPasClawMode): string;
@@ -615,6 +618,7 @@ begin
   finally
     Turn.Free;
   end;
+  FAgent.CloseOpenCalls(FSession);
   FAgent.FLock.Enter;
   try
     FSession.FRunning := False;
@@ -677,15 +681,26 @@ end;
 procedure TACPTurn.ToolCall(const Name, ArgsJSON: string);
 var
   Slot: TACPCallSlot;
-  Kind, Raw, Loc: string;
+  Kind, Raw, Loc, Title, Plan: string;
+  Args: TJsonObject;
 begin
-  Slot := TACPCallSlot.Create;
+  Args := ParseArgsObj(ArgsJSON);
+  try
+    Title := ToolTitleOf(Name, Args);
+    Raw := RawInputOf(Args, ArgsJSON);
+    Plan := '';
+    if LowerCase(Name) = 'todo_write' then
+      Plan := ACPPlanEntries(ArgOf(Args, 'checklist'));
+    Slot := TACPCallSlot.Create;
+    Slot.Path := ToolPathOf(Args, FSession.Cwd);
+  finally
+    Args.Free;
+  end;
   Slot.Id := FAgent.NextCallId(FSession);
   Slot.Name := Name;
   Slot.Args := ArgsJSON;
   Kind := ACPToolKind(Name);
   Loc := '';
-  Slot.Path := ACPToolPath(ArgsJSON, FSession.Cwd);
   if Slot.Path <> '' then
     Loc := ',"locations":[{"path":' + Q(Slot.Path) + '}]';
   { For a file a tool is about to rewrite, keep what it says now: the
@@ -698,7 +713,6 @@ begin
     if Slot.Existed and Slot.Diff then
       Slot.OldText := ReadFileText(Slot.Path);
   end;
-  if IsJsonObjectText(ArgsJSON) then Raw := ArgsJSON else Raw := Q(ArgsJSON);
   FAgent.FLock.Enter;
   try
     FSession.FPending.Add(Slot);
@@ -707,14 +721,13 @@ begin
   end;
   FAgent.SessionUpdate(FSession.Id,
     '{"sessionUpdate":"tool_call","toolCallId":' + Q(Slot.Id) +
-    ',"title":' + Q(ACPToolTitle(Name, ArgsJSON)) +
+    ',"title":' + Q(Title) +
     ',"name":' + Q(Name) +
     ',"kind":' + Q(Kind) + ',"status":"in_progress"' + Loc +
     ',"rawInput":' + Raw + '}');
-  if LowerCase(Name) = 'todo_write' then
+  if Plan <> '' then
     FAgent.SessionUpdate(FSession.Id,
-      '{"sessionUpdate":"plan","entries":' +
-      ACPPlanEntries(ArgStr(ArgsJSON, 'checklist')) + '}');
+      '{"sessionUpdate":"plan","entries":' + Plan + '}');
 end;
 
 procedure TACPTurn.ToolResult(const Name, ResultText, Err: string);
@@ -761,7 +774,7 @@ begin
       Shown := ResultText;
     end;
     if Length(Shown) > ResultShowBytes then
-      Shown := Copy(Shown, 1, ResultShowBytes) + sLineBreak + '[... shortened for display]';
+      Shown := Utf8SafeTruncate(Shown, ResultShowBytes) + sLineBreak + '[... shortened for display]';
     Content := '{"type":"content","content":' + TextBlock(Shown) + '}';
     if (Err = '') and Slot.Diff and FileExists(Slot.Path) and
        (FileSize_(Slot.Path) <= DiffMaxBytes) then
@@ -955,7 +968,7 @@ begin
       HandleNotification(Method, Params)
     else
     begin
-      IdRaw := IdRawOf(Obj);
+      IdRaw := JsonIdLiteral(Obj);
       try
         HandleRequest(IdRaw, Method, Params);
       except
@@ -1111,11 +1124,48 @@ begin
     Respond(IdRaw, '{"sessionId":' + Q(S.Id) + ',"modes":' + ACPModesJSON(S.Mode) + '}');
 end;
 
+(* Calls the loop announced but never reported a result for: the turn was
+   cancelled with a batch half run, or stopped in between. Each is shown
+   as failed before the turn answers, so the editor is not left with a
+   spinner, and the session starts its next turn with none pending -- a
+   stale entry would take the next same-named call's result. *)
+procedure TACPAgent.CloseOpenCalls(S: TACPSession);
+var
+  Open: TList;
+  i: Integer;
+  Slot: TACPCallSlot;
+begin
+  Open := TList.Create;
+  try
+    FLock.Enter;
+    try
+      for i := 0 to S.FPending.Count - 1 do Open.Add(S.FPending[i]);
+      S.FPending.Clear;
+    finally
+      FLock.Leave;
+    end;
+    for i := 0 to Open.Count - 1 do
+    begin
+      Slot := TACPCallSlot(Open[i]);
+      try
+        SessionUpdate(S.Id, '{"sessionUpdate":"tool_call_update","toolCallId":' +
+          Q(Slot.Id) + ',"status":"failed","content":[{"type":"content","content":' +
+          TextBlock('The turn ended before this call finished.') + '}]}');
+      finally
+        Slot.Free;
+      end;
+    end;
+  finally
+    Open.Free;
+  end;
+end;
+
 procedure TACPAgent.ReplayHistory(S: TACPSession; const History: TMessageArray);
 var
   i, j: Integer;
   M: TMessage;
-  Id, Raw, Shown, Txt, Status: string;
+  Id, Raw, Shown, Txt, Status, Title: string;
+  Args: TJsonObject;
 begin
   for i := 0 to High(History) do
   begin
@@ -1137,13 +1187,15 @@ begin
           begin
             Id := M.ToolCalls[j].Id;
             if Id = '' then Id := NextCallId(S);
-            if IsJsonObjectText(M.ToolCalls[j].Func.Arguments) then
-              Raw := M.ToolCalls[j].Func.Arguments
-            else
-              Raw := Q(M.ToolCalls[j].Func.Arguments);
+            Args := ParseArgsObj(M.ToolCalls[j].Func.Arguments);
+            try
+              Raw := RawInputOf(Args, M.ToolCalls[j].Func.Arguments);
+              Title := ToolTitleOf(M.ToolCalls[j].Func.Name, Args);
+            finally
+              Args.Free;
+            end;
             SessionUpdate(S.Id, '{"sessionUpdate":"tool_call","toolCallId":' + Q(Id) +
-              ',"title":' + Q(ACPToolTitle(M.ToolCalls[j].Func.Name,
-                                           M.ToolCalls[j].Func.Arguments)) +
+              ',"title":' + Q(Title) +
               ',"name":' + Q(M.ToolCalls[j].Func.Name) +
               ',"kind":' + Q(ACPToolKind(M.ToolCalls[j].Func.Name)) +
               ',"status":"completed","rawInput":' + Raw + '}');
@@ -1154,7 +1206,7 @@ begin
         begin
           Shown := M.Content;
           if Length(Shown) > ResultShowBytes then
-            Shown := Copy(Shown, 1, ResultShowBytes) + sLineBreak +
+            Shown := Utf8SafeTruncate(Shown, ResultShowBytes) + sLineBreak +
                      '[... shortened for display]';
           if Copy(M.Content, 1, Length(RefusedPrefix)) = RefusedPrefix then
             Status := 'failed'   { as it was shown live }

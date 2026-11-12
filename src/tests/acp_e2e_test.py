@@ -19,6 +19,14 @@ editor would. What it pins:
   - session/load in a NEW process: the conversation is replayed
   - an MCP server the editor supplies is started
   - stdout carries nothing but JSON-RPC 2.0, one message per line
+  - the system prompt is built for the editor's project (its AGENTS.md) and
+    follows session/set_mode after the first turn
+  - a provider that fails is a JSON-RPC error, and is not saved as a reply
+  - the session records the project as where it works
+  - a session created under a profile is not opened without it
+  - an explicit --max-iterations is kept, even at the CLI default
+  - with the docker backend, shell commands run in the session's container
+    and the container is stopped when the agent exits (a fake docker CLI)
 """
 import http.server
 import json
@@ -67,8 +75,37 @@ PLAYBOOKS = {
         ("slow", "list_dir", {"path": "."}),
         ("text", "this round should never be asked for"),
     ],
+    "search editor tools": [
+        ("tool", "code_catalog", {"server": "editor-mcp"}),
+        ("text", "Found them."),
+    ],
+    "improve check": [
+        ("text", "Measured nothing yet."),
+    ],
+    "provider fails": [
+        ("fail", "fake key rejected by the provider"),
+    ],
+    "loop forever": [
+        ("tool", "list_dir", {"path": "."}),
+    ],
+    "docker shell": [
+        ("tool", "shell_exec", {"command": "echo from-docker > docker.txt"}),
+        ("text", "Ran it."),
+    ],
 }
 requests_seen = []
+slow_arrived = threading.Event()   # set when the slow round's request is in
+
+
+def system_of(body):
+    return "".join(text_of(m.get("content")) for m in body.get("messages", [])
+                   if m.get("role") == "system")
+
+
+def requests_for(prompt):
+    return [b for b in requests_seen
+            if any(prompt in text_of(m.get("content")) for m in b.get("messages", [])
+                   if m.get("role") == "user")]
 
 
 def text_of(content):
@@ -90,7 +127,16 @@ class Model(http.server.BaseHTTPRequestHandler):
             step = ("text", "no playbook for this prompt")
         else:
             step = PLAYBOOKS[key][min(done, len(PLAYBOOKS[key]) - 1)]
+        if step[0] == "fail":
+            out = json.dumps({"error": {"message": step[1], "type": "invalid_request_error"}}).encode()
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+            return
         if step[0] == "slow":
+            slow_arrived.set()
             time.sleep(1.5)
         if step[0] in ("tool", "slow"):
             message = {"role": "assistant", "content": None,
@@ -122,9 +168,9 @@ class Client:
     """An ACP client: spawns the agent, writes requests, answers the agent's
     own requests, and collects every notification in between."""
 
-    def __init__(self, env, label):
+    def __init__(self, env, label, args=()):
         self.stderr_path = os.path.join(WORK, "agent-%s.stderr" % label)
-        self.p = subprocess.Popen([BIN, "acp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.p = subprocess.Popen([BIN, "acp"] + list(args), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=open(self.stderr_path, "w"), env=env, cwd=WORK,
                                   text=True, encoding="utf-8", bufsize=1)
         self.q = queue.Queue()
@@ -205,6 +251,39 @@ def permission(choice):
     return lambda params: {"outcome": {"outcome": "selected", "optionId": choice}}
 
 
+def session_file(home, sid):
+    path = os.path.join(home, "workspace", "sessions", sid + ".json")
+    try:
+        return json.load(open(path))
+    except Exception:
+        return {}
+
+
+# A docker CLI that records what it is asked and runs `exec` on the host, in
+# the -w directory: enough to see which container each command was sent to.
+FAKE_DOCKER = r"""#!/bin/sh
+echo "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  info) echo 99.0; exit 0;;
+  run) echo fakecontainer; exit 0;;
+  exec)
+    shift
+    dir=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -e) shift 2;;
+        -w) dir="$2"; shift 2;;
+        *) break;;
+      esac
+    done
+    shift
+    [ -n "$dir" ] && cd "$dir"
+    exec "$@";;
+esac
+exit 0
+"""
+
+
 # -------------------------------------------------------------------- run --
 def main():
     shutil.rmtree(WORK, ignore_errors=True)
@@ -213,6 +292,8 @@ def main():
     project = os.path.join(WORK, "project")
     os.makedirs(home)
     os.makedirs(project)
+    with open(os.path.join(project, "AGENTS.md"), "w") as f:
+        f.write("# Rules\n\nRULES-OF-THE-EDITOR-PROJECT-7Q\n")
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model)
     port = srv.server_address[1]
@@ -290,6 +371,19 @@ def main():
           agent_text(notes))
     check("the session is saved",
           os.path.exists(os.path.join(home, "workspace", "sessions", sid + ".json")))
+    check("as working in the editor's project (where `pasclaw resume` goes)",
+          session_file(home, sid).get("meta", {}).get("location") == project,
+          session_file(home, sid).get("meta", {}).get("location"))
+    first = requests_for("build hello")
+    check("the system prompt carries the project's AGENTS.md",
+          first and "RULES-OF-THE-EDITOR-PROJECT-7Q" in system_of(first[0]))
+
+    print("-- the editor's MCP tools:")
+    r, notes = c.call("session/prompt", {"sessionId": sid,
+                                         "prompt": [{"type": "text", "text": "search editor tools"}]})
+    found = json.dumps([u.get("content") for u in updates(notes, "tool_call_update")])
+    check("code_catalog lists the editor-supplied server's tools (code mode, the default)",
+          "editor-mcp__" in found, found[:400])
 
     print("-- a denied ask:")
     c.answers["session/request_permission"] = permission("reject_once")
@@ -313,24 +407,61 @@ def main():
           not os.path.exists(os.path.join(project, "planned.txt")) and
           any("needs build mode" in json.dumps(u) for u in updates(notes, "tool_call_update")),
           updates(notes, "tool_call_update"))
+    planned = requests_for("plan mode write")
+    check("and the model was told it is in plan mode (a switch after the first turn)",
+          planned and "## Plan Mode" in system_of(planned[0]))
+    c.call("session/set_mode", {"sessionId": sid, "modeId": "improve"})
+    r, _ = c.call("session/prompt", {"sessionId": sid,
+                                     "prompt": [{"type": "text", "text": "improve check"}]})
+    improve = requests_for("improve check")
+    check("improve mode reaches the system prompt, and plan mode's directive is gone",
+          improve and "## Improve Mode" in system_of(improve[0]) and
+          "## Plan Mode" not in system_of(improve[0]))
     c.call("session/set_mode", {"sessionId": sid, "modeId": "build"})
 
+    print("-- a provider that fails:")
+    r, notes = c.call("session/prompt", {"sessionId": sid,
+                                         "prompt": [{"type": "text", "text": "provider fails"}]})
+    check("the turn is a JSON-RPC error with the provider's message",
+          "fake key rejected" in r.get("error", {}).get("message", ""), r)
+    saved = json.dumps(session_file(home, sid).get("messages", []))
+    check("the error is not saved as the assistant's reply", "fake key rejected" not in saved)
+    check("nor is the prompt nothing answered", "provider fails" not in saved)
+
     print("-- cancel:")
+    # Cancel once the model call is in flight -- not after a guessed delay.
     r, notes = c.call("session/prompt", {"sessionId": sid,
                                          "prompt": [{"type": "text", "text": "slow then cancel"}]},
-                      after_send=lambda: (time.sleep(0.5),
+                      after_send=lambda: (slow_arrived.wait(30),
                                           c.notify("session/cancel", {"sessionId": sid})))
     check("a cancelled turn answers cancelled", r.get("result", {}).get("stopReason") == "cancelled", r)
-    slow = [b for b in requests_seen
-            if any("slow then cancel" in text_of(m.get("content")) for m in b.get("messages", [])
-                   if m.get("role") == "user")]
+    slow = requests_for("slow then cancel")
     check("and never asked the model for the next round", len(slow) == 1, len(slow))
+    check("build mode again: no mode directive left in the prompt",
+          slow and "## Plan Mode" not in system_of(slow[0]) and
+          "## Improve Mode" not in system_of(slow[0]))
 
     time.sleep(1.0)
     mcp_started = "editor-mcp" in open(c.stderr_path).read()
     c.close()
     check("stdout carried only JSON-RPC", not c.bad_lines, c.bad_lines[:3])
     check("the editor's MCP server was started", mcp_started)
+
+    print("-- a profile, and an explicit --max-iterations:")
+    c = Client(env, "c", ["--profile", "low-token", "--max-iterations", "8"])
+    c.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+    r, _ = c.call("session/new", {"cwd": project, "mcpServers": []})
+    sid2 = r.get("result", {}).get("sessionId", "")
+    r, _ = c.call("session/prompt", {"sessionId": sid2,
+                                     "prompt": [{"type": "text", "text": "loop forever"}]})
+    check("--max-iterations 8 stops the turn at 8 rounds, not 50",
+          r.get("result", {}).get("stopReason") == "max_turn_requests" and
+          len(requests_for("loop forever")) <= 9,
+          (r, len(requests_for("loop forever"))))
+    c.close()
+    check("the session records its profile",
+          session_file(home, sid2).get("meta", {}).get("profile") == "low-token",
+          session_file(home, sid2).get("meta", {}))
 
     print("-- load in a new process:")
     c = Client(env, "b")
@@ -345,8 +476,53 @@ def main():
     check("and the replies", "Done: hello.py prints hi." in agent_text(notes))
     r, _ = c.call("session/load", {"sessionId": "../etc", "cwd": project, "mcpServers": []})
     check("a load of no such session is -32002", r.get("error", {}).get("code") == -32002, r)
+    r, _ = c.call("session/load", {"sessionId": sid2, "cwd": project, "mcpServers": []})
+    check("a session made under a profile is not opened without it",
+          "pasclaw acp --profile low-token" in r.get("error", {}).get("message", ""), r)
     c.close()
     check("stdout carried only JSON-RPC (second process)", not c.bad_lines, c.bad_lines[:3])
+    c = Client(env, "d", ["--profile", "low-token"])
+    c.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+    other = os.path.join(WORK, "other-project")
+    os.makedirs(other)
+    r, notes = c.call("session/load", {"sessionId": sid2, "cwd": other, "mcpServers": []})
+    check("and is opened with it", "modes" in r.get("result", {}), r)
+    c.call("session/prompt", {"sessionId": sid2, "prompt": [{"type": "text", "text": "improve check"}]})
+    c.close()
+    check("a session reopened in another project records that one",
+          session_file(home, sid2).get("meta", {}).get("location") == other,
+          session_file(home, sid2).get("meta", {}).get("location"))
+
+    print("-- the docker backend (a fake docker CLI):")
+    fakebin = os.path.join(WORK, "fakebin")
+    os.makedirs(fakebin)
+    with open(os.path.join(fakebin, "docker"), "w") as f:
+        f.write(FAKE_DOCKER)
+    os.chmod(os.path.join(fakebin, "docker"), 0o755)
+    dlog = os.path.join(WORK, "docker.log")
+    denv = dict(env)
+    denv["PATH"] = fakebin + os.pathsep + env.get("PATH", "")
+    denv["FAKE_DOCKER_LOG"] = dlog
+    c = Client(denv, "e", ["--backend", "docker"])
+    c.answers["session/request_permission"] = permission("allow_once")
+    c.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+    r, _ = c.call("session/new", {"cwd": project, "mcpServers": []})
+    sid3 = r.get("result", {}).get("sessionId", "")
+    r, notes = c.call("session/prompt", {"sessionId": sid3,
+                                         "prompt": [{"type": "text", "text": "docker shell"}]})
+    log = open(dlog).read() if os.path.exists(dlog) else ""
+    check("the shell command ran in the session's container",
+          os.path.exists(os.path.join(project, "docker.txt")) and
+          ("exec" in log and "pasclaw-" + sid3 in log),
+          (log[-500:], [u.get("content") for u in updates(notes, "tool_call_update")]))
+    r, _ = c.call("session/load", {"sessionId": sid3, "cwd": project, "mcpServers": []})
+    log = open(dlog).read() if os.path.exists(dlog) else ""
+    check("a reloaded session keeps its container",
+          "modes" in r.get("result", {}) and "stop" not in log, log[-300:])
+    c.close()
+    log = open(dlog).read() if os.path.exists(dlog) else ""
+    check("and the container is stopped when the agent exits",
+          "stop --time 2 pasclaw-" + sid3 in log, log[-500:])
 
     srv.shutdown()
     if fails:

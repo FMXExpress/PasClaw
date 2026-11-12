@@ -413,40 +413,12 @@ begin
 end;
 
 function ExtractIdRaw(Obj: TJsonObject): string;
-{ Return the JSON literal for the request's id field so we can echo
-  it back unchanged -- a numeric id ("42") stays numeric, a string id
-  ("\"req-1\"") stays a string. Reads from the PARSED object rather
-  than the raw line, so an "id" key sitting inside a nested params
-  field can't confuse a substring scan. Returns 'null' for missing /
-  unparseable ids.
-
-  Detection trick: GetStr returns the supplied default when the field
-  exists but isn't a string -- so a sentinel default that can never
-  appear in valid JSON (a literal NUL+SOH+STX triplet -- control chars
-  must be escaped in JSON strings) lets us reliably distinguish
-  "string id" from "numeric id". }
-const
-  StringSentinel = #0#1#2;
-var
-  S: string;
-  I: Int64;
+{ The JSON literal of the request's id, echoed back unchanged: a numeric id
+  stays numeric, a string id stays a string, anything else is null. Read
+  from the PARSED object, so an "id" key nested inside params can't confuse
+  it. }
 begin
-  Result := 'null';
-  if (Obj = nil) or (not Obj.Has('id')) then Exit;
-  S := Obj.GetStr('id', StringSentinel);
-  if S <> StringSentinel then
-  begin
-    Result := '"' + JsonEscape(S) + '"';
-    Exit;
-  end;
-  { Not a string -- emit numeric form. GetInt's default is harmless
-    here because Has() already confirmed the field is present, so
-    the return value is the id itself (or 0 for an unusual null /
-    float id, which is the best we can do without round-tripping
-    floating-point literals -- the spec discourages float ids
-    anyway, hosts use ints or strings). }
-  I := Obj.GetInt('id', 0);
-  Result := IntToStr(I);
+  Result := JsonIdLiteral(Obj);
 end;
 
 function TMCPServerCore.HandleDiscover(const Id: string): string;
