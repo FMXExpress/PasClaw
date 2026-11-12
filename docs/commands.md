@@ -17,6 +17,7 @@ Top-level commands are dispatched by `src/cmd/PasClaw.Cmd.Root.pas`. Run `pascla
 | [`config`](#config) | View or reset the JSON configuration. |
 | [`onboard`](#onboard) | Initialise `$PASCLAW_HOME`, workspace folders, and provider settings. |
 | [`agent`](#agent) | Chat with the assistant (interactive or one-shot). |
+| [`acp`](#acp) | Run as an Agent Client Protocol agent over stdio, for Zed, JetBrains and other editors. |
 | [`tui`](#tui) | Chat in the full-screen TUI. |
 | [`auth`](#auth) | Store, clear, or inspect provider API keys. |
 | [`gateway`](#gateway) | Start the HTTP gateway, embedded web UI, cron, and optional channels. |
@@ -224,6 +225,15 @@ through; the desktop clients show the same board. `export` writes a blueprint
 (the software, never the data or secrets) to stdout.
 
 See [Desktop](./desktop.md).
+
+## acp
+
+```sh
+pasclaw acp                          # an editor starts this; it speaks ACP on stdin/stdout
+pasclaw acp --model claude-opus-4-7 --mode plan
+```
+
+Takes the `agent` flags (`--model`, `--provider`, `--mode`, `--max-iterations` (default 50 here), `--system`, `--no-mcp`, `--profile`, `--backend`). See [Editors: the Agent Client Protocol](./acp.md).
 
 ## mcp
 
