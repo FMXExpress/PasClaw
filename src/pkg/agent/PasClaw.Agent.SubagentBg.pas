@@ -127,6 +127,12 @@ type
        coordinator: before this, a gateway turn could start a job and no
        turn ever heard it finish, because nothing set the key at all. *)
     FDrainKey:   string;
+    (* The shell session of the turn that spawned this job, captured on
+       the spawning thread like the drain key. The job outlives that turn,
+       and the docker backend keys its container on the id: read later
+       from the process-wide value it would be gone (an empty-session
+       refusal) or another session's (that session's container). *)
+    FShellSessionId: string;
     FState:      TBgJobState;
     FCollected:  Boolean;            { delivered via drain already }
     FAbandoned:  Boolean;            { coordinator gone; self-free }
@@ -443,7 +449,7 @@ begin
     try
       SetShellTimeoutOverrideMs(FTimeoutMs);
       try
-        Code := RunOneShotWithEnvViaBackend(GetCurrentSessionId, FCommand, FWorkDir, nil, Out_);
+        Code := RunOneShotWithEnvViaBackend(FShellSessionId, FCommand, FWorkDir, nil, Out_);
       finally
         SetShellTimeoutOverrideMs(-1);
       end;
@@ -558,6 +564,9 @@ begin
       worker thread starts with no context of its own). No-op when the
       parent had checkpoints off. }
     AdoptCheckpointHandle(FCheckpointHandle);
+    { For what runs on this thread outside a dispatch (held-out
+      scenarios); dispatches set it from the config themselves. }
+    SetThreadShellSessionId(FShellSessionId);
     SetLength(Hist, 1);
     Hist[0] := MakeMessage(mrUser, FPrompt);
     Ok := RunToolLoop(TLoopCfgBox(FCfg).Cfg, Hist, Loop);
@@ -884,6 +893,7 @@ begin
     Job.FCheckpointHandle := CurrentCheckpointHandle;
     Job.FDrainKey := CurrentDispatchDrainKey;
     if Job.FDrainKey = '' then Job.FDrainKey := FKey;
+    Job.FShellSessionId := GetCurrentSessionId;
     Job.FChildReg  := BuildFilteredRegistry(FCtx.ParentRegistry, Spec.Tools);
     Box := TLoopCfgBox.Create;
     { Give a child that inherited deferred MCP tools its own registry-bound
@@ -911,7 +921,13 @@ begin
     Box.Cfg.OnText        := nil;
     Box.Cfg.OnToolCall    := nil;
     Box.Cfg.OnToolResult  := nil;
-    Box.Cfg.Workspace     := WorkDir;   { '' = the parent's workspace }
+    { The job's thread has no thread-scoped context of its own, so what
+      the parent's dispatch had is copied in: the worktree, else the
+      parent's thread workspace ('' when it has none = the process-wide
+      one), and its shell session. }
+    if WorkDir <> '' then Box.Cfg.Workspace := WorkDir
+    else Box.Cfg.Workspace := ThreadSandboxWorkspace;
+    Box.Cfg.ShellSessionId := Job.FShellSessionId;
     if WorkDir <> '' then
       Box.Cfg.Options.SystemPrompt := Box.Cfg.Options.SystemPrompt + sLineBreak + sLineBreak +
         'You are working in the git worktree ' + WorkDir + ' (branch ' + Worktree + '). ' +
@@ -991,6 +1007,7 @@ begin
     Job.FCheckpointHandle := CurrentCheckpointHandle;
     Job.FDrainKey := CurrentDispatchDrainKey;
     if Job.FDrainKey = '' then Job.FDrainKey := FKey;
+    Job.FShellSessionId := GetCurrentSessionId;
     Job.FChildReg := nil;
     Job.FCfg := nil;
     FJobs.Add(Job);
