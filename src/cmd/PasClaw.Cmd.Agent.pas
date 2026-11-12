@@ -2396,6 +2396,15 @@ begin
     workspace (what Save records by default): `pasclaw resume <id>` goes
     back to it. }
   St.Session.Meta.Location := S.Cwd;
+  { The shell backend makes the project visible to the session's commands
+    (docker mounts it in the session's container). A container already
+    started for another project does not have this one: stop it, and the
+    next command starts one that does. }
+  if ShellSessionDir(S.Id) <> S.Cwd then
+  begin
+    if ShellSessionDir(S.Id) <> '' then CloseShellSession(S.Id);
+    SetShellSessionDir(S.Id, S.Cwd);
+  end;
   ConnectClientMCP(McpServers);
   S.Mode := FArgs.Mode;
   S.Data := St;

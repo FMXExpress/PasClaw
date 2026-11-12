@@ -217,6 +217,9 @@ const
     diff is built for. Both are display: the model's own copy of a result
     is untouched. }
   ResultShowBytes = 32 * 1024;
+  { A call announced but never given a result: its turn was cancelled with
+    a batch half run, or stopped in between. Live and on replay alike. }
+  CallNotFinishedText = 'The turn ended before this call finished.';
   DiffMaxBytes    = 1024 * 1024;
   { How every gate words its refusal (PasClaw.Permissions, Agent.Mode). }
   RefusedPrefix   = 'refused: ';
@@ -1150,7 +1153,7 @@ begin
       try
         SessionUpdate(S.Id, '{"sessionUpdate":"tool_call_update","toolCallId":' +
           Q(Slot.Id) + ',"status":"failed","content":[{"type":"content","content":' +
-          TextBlock('The turn ended before this call finished.') + '}]}');
+          TextBlock(CallNotFinishedText) + '}]}');
       finally
         Slot.Free;
       end;
@@ -1160,13 +1163,33 @@ begin
   end;
 end;
 
+{ How a recorded result was shown live: a refusal from a gate as failed,
+  anything else as completed. }
+function ReplayResultStatus(const Content: string): string;
+begin
+  if Copy(Content, 1, Length(RefusedPrefix)) = RefusedPrefix then
+    Result := 'failed'
+  else
+    Result := 'completed';
+end;
+
 procedure TACPAgent.ReplayHistory(S: TACPSession; const History: TMessageArray);
 var
-  i, j: Integer;
+  i, j, k: Integer;
   M: TMessage;
   Id, Raw, Shown, Txt, Status, Title: string;
   Args: TJsonObject;
+  Results: TStringList;   { tool call id -> its result's status }
 begin
+  (* Each call is announced with the status it ended with, so a client
+     never shows a refused call as done first and failed after. Results
+     come later in the history than their calls, so they are looked up
+     first. *)
+  Results := TStringList.Create;
+  try
+  for i := 0 to High(History) do
+    if (History[i].Role = mrTool) and (History[i].ToolCallId <> '') then
+      Results.Values[History[i].ToolCallId] := ReplayResultStatus(History[i].Content);
   for i := 0 to High(History) do
   begin
     M := History[i];
@@ -1194,11 +1217,26 @@ begin
             finally
               Args.Free;
             end;
+            { No id to match (none recorded): completed, as before. A call
+              with an id and no result never finished -- shown live as
+              failed when its turn ended, so replayed the same way. }
+            Status := 'completed';
+            k := 0;
+            if M.ToolCalls[j].Id <> '' then
+            begin
+              k := Results.IndexOfName(Id);
+              if k >= 0 then Status := Results.ValueFromIndex[k]
+              else Status := 'failed';
+            end;
             SessionUpdate(S.Id, '{"sessionUpdate":"tool_call","toolCallId":' + Q(Id) +
               ',"title":' + Q(Title) +
               ',"name":' + Q(M.ToolCalls[j].Func.Name) +
               ',"kind":' + Q(ACPToolKind(M.ToolCalls[j].Func.Name)) +
-              ',"status":"completed","rawInput":' + Raw + '}');
+              ',"status":' + Q(Status) + ',"rawInput":' + Raw + '}');
+            if (M.ToolCalls[j].Id <> '') and (k < 0) then
+              SessionUpdate(S.Id, '{"sessionUpdate":"tool_call_update","toolCallId":' +
+                Q(Id) + ',"status":"failed","content":[{"type":"content","content":' +
+                TextBlock(CallNotFinishedText) + '}]}');
           end;
         end;
       mrTool:
@@ -1208,15 +1246,14 @@ begin
           if Length(Shown) > ResultShowBytes then
             Shown := Utf8SafeTruncate(Shown, ResultShowBytes) + sLineBreak +
                      '[... shortened for display]';
-          if Copy(M.Content, 1, Length(RefusedPrefix)) = RefusedPrefix then
-            Status := 'failed'   { as it was shown live }
-          else
-            Status := 'completed';
           SessionUpdate(S.Id, '{"sessionUpdate":"tool_call_update","toolCallId":' +
-            Q(M.ToolCallId) + ',"status":' + Q(Status) + ',"content":[' +
-            '{"type":"content","content":' + TextBlock(Shown) + '}]}');
+            Q(M.ToolCallId) + ',"status":' + Q(ReplayResultStatus(M.Content)) +
+            ',"content":[{"type":"content","content":' + TextBlock(Shown) + '}]}');
         end;
     end;
+  end;
+  finally
+    Results.Free;
   end;
 end;
 

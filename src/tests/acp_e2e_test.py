@@ -29,6 +29,7 @@ editor would. What it pins:
     and the container is stopped when the agent exits (a fake docker CLI)
   - a background subagent a turn started keeps that session's container and
     the editor's project after the turn has answered
+  - the session's container mounts the editor's project
 """
 import http.server
 import json
@@ -574,6 +575,9 @@ def main():
     r, notes = c.call("session/prompt", {"sessionId": sid3,
                                          "prompt": [{"type": "text", "text": "docker shell"}]})
     log = open(dlog).read() if os.path.exists(dlog) else ""
+    run = [l for l in log.splitlines() if l.startswith("run") and ("pasclaw-" + sid3) in l]
+    check("the session's container mounts the editor's project (outside the workspace)",
+          run and ("-v %s:%s" % (project, project)) in run[0], run[:1])
     check("the shell command ran in the session's container",
           os.path.exists(os.path.join(project, "docker.txt")) and
           ("exec" in log and "pasclaw-" + sid3 in log),

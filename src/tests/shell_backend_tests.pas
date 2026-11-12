@@ -391,6 +391,59 @@ begin
              'none has no networking to reach us with at all');
 end;
 
+(* An editor's project outside the workspace, mounted at the same path in
+   that session's container: `pasclaw acp` runs shell_exec with -w set to
+   it, and unmounted every command there failed. Read off the argv. *)
+procedure TestSessionDirMount;
+{$IFDEF UNIX}
+var
+  Backend: TDockerShellBackend;
+  Ifc: IShellBackend;
+  Args: TStringList;
+  Ws, Proj, Inside: string;
+
+  function Mounted(const Sid, Path: string): Boolean;
+  begin
+    Args.Clear;
+    Backend.BuildRunArgv(Sid, Args);
+    Result := ArgvHas(Args, '-v', Path + ':' + Path);
+  end;
+
+begin
+  Ws := ExpandFileName(JoinPath(GetHome, ActiveWorkspaceName));
+  Proj := ExpandFileName(JoinPath(GetHome, 'editor-project'));
+  Inside := JoinPath(Ws, 'sub-project');
+  ForceDirectories(Ws);
+  ForceDirectories(Proj);
+  ForceDirectories(Inside);
+  Backend := TDockerShellBackend.Create(DefaultDockerBackendOptions);
+  Ifc := Backend;
+  Args := TStringList.Create;
+  try
+    AssertTrue(not Mounted('acp-a', Proj), 'no session dir, no mount');
+    SetShellSessionDir('acp-a', Proj);
+    AssertTrue(Mounted('acp-a', Proj), 'the session''s project is mounted at the same path');
+    AssertTrue(not Mounted('acp-b', Proj), 'only in that session''s container');
+    SetShellSessionDir('acp-b', Inside);
+    AssertTrue(not Mounted('acp-b', Inside), 'a project under the workspace is already there');
+    SetShellSessionDir('acp-c', JoinPath(GetHome, 'no-such-dir'));
+    Mounted('acp-c', JoinPath(GetHome, 'no-such-dir'));
+    AssertTrue(not DirectoryExists(JoinPath(GetHome, 'no-such-dir')),
+               'a missing directory is not mounted (docker would create it as root)');
+    SetShellSessionDir('acp-a', '');
+    AssertTrue(not Mounted('acp-a', Proj), 'forgotten, not mounted');
+    AssertEqStr(ShellSessionDir('acp-b'), Inside, 'the others are kept');
+  finally
+    SetShellSessionDir('acp-b', '');
+    SetShellSessionDir('acp-c', '');
+    Args.Free;
+  end;
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
 procedure TestDockerMountsTheWorktreeDirectory;
 (* The container has to see the worktree directory, at the same path.
 
@@ -533,5 +586,7 @@ begin
   WriteLn('  ok: docker backend wires the tool-RPC callback to the host');
   TestDockerMountsTheWorktreeDirectory;
   WriteLn('  ok: docker backend mounts the worktree directory at the same path');
+  TestSessionDirMount;
+  WriteLn('  ok: docker backend mounts a session''s project outside the workspace');
   WriteLn('PASS');
 end.

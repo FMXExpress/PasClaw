@@ -515,7 +515,7 @@ procedure TestLoad;
 var
   N, iUser, iAgent, iCall, iUpd, iResp: Integer;
 begin
-  SetLength(Host.History, 6);
+  SetLength(Host.History, 7);
   Host.History[0] := MakeMessage(mrSystem, 'a note the user never typed');
   Host.History[1] := MakeMessage(mrUser, 'read a' + LineEnding + LineEnding +
                                  '[current date/time: Thu 2026-11-12 10:00:00 UTC+00:00 (2026-11-12T10:00:00Z)]');
@@ -533,6 +533,12 @@ begin
   Host.History[4].ToolCalls[0].Func.Arguments := '{"path":"b"}';
   Host.History[5] := MakeMessage(mrTool, 'refused: tool "write_file" needs build mode');
   Host.History[5].ToolCallId := 't2';
+  { A call its turn never finished: no result recorded. }
+  Host.History[6] := MakeMessage(mrAssistant, '');
+  SetLength(Host.History[6].ToolCalls, 1);
+  Host.History[6].ToolCalls[0].Id := 't3';
+  Host.History[6].ToolCalls[0].Func.Name := 'shell_exec';
+  Host.History[6].ToolCalls[0].Func.Arguments := '{"command":"sleep 9"}';
   N := Cap.Count;
   Send('{"jsonrpc":"2.0","id":50,"method":"session/load","params":{"sessionId":"saved",' +
        '"cwd":"/tmp","mcpServers":[]}}');
@@ -550,6 +556,17 @@ begin
   iUpd := Cap.WaitFor('"tool_call_update","toolCallId":"t2"', N, 100);
   AssertTrue((iUpd >= 0) and (Pos('"status":"failed"', Cap.Line(iUpd)) > 0),
              'a refused call replays as failed, as it was shown live');
+  { Announced with the status it ended with: never done first, failed after. }
+  AssertTrue(Pos('"status":"completed"', Cap.Line(iCall)) > 0, 'a call that ran is announced completed');
+  iCall := Cap.WaitFor('"tool_call","toolCallId":"t2"', N, 100);
+  AssertTrue((iCall >= 0) and (Pos('"status":"failed"', Cap.Line(iCall)) > 0),
+             'a refused call is announced failed, not completed');
+  iCall := Cap.WaitFor('"tool_call","toolCallId":"t3"', N, 100);
+  iUpd := Cap.WaitFor('"tool_call_update","toolCallId":"t3"', N, 100);
+  AssertTrue((iCall >= 0) and (Pos('"status":"failed"', Cap.Line(iCall)) > 0) and
+             (iUpd > iCall) and (Pos('ended before this call finished', Cap.Line(iUpd)) > 0),
+             'a call with no result replays failed, as it was closed live');
+  AssertTrue(iUpd < iResp, 'all before the response');
   N := Cap.Count;
   Send('{"jsonrpc":"2.0","id":51,"method":"session/load","params":{"sessionId":"gone",' +
        '"cwd":"/tmp","mcpServers":[]}}');
