@@ -88,6 +88,16 @@ function BuildRequest(const Messages: array of TMessage;
    runs the bounded continuation loop. *)
 function ContinuePausedTurn(const ReqBody, RespBody: string): string;
 
+(* A whole Messages API SSE stream, as text, read the way ChatStream reads
+   it as it arrives: text pieces to OnChunk (text blocks joined with a line
+   break, as Chat joins them), the rest put together into one response.
+   Failed is the message of an `error` event, else ''. ContentJSON is the
+   content array as Anthropic sent it -- text, tool_use, server tool
+   blocks, thinking with its signature, citations -- for a pause_turn
+   continuation. Pure, for tests. *)
+function ParseAnthropicStream(const SSE: string; OnChunk: TStreamCallback;
+                              out Failed, ContentJSON: string): TLLMResponse;
+
 implementation
 
 uses
@@ -530,6 +540,34 @@ begin
   end;
 end;
 
+{ ReqBody with an assistant turn appended whose content is ContentRaw (a
+  JSON array), or '' when ReqBody does not parse. }
+function AppendAssistantContent(const ReqBody, ContentRaw: string): string;
+var
+  Req, AssistantMsg: TJsonObject;
+  MsgArr: TJsonArray;
+begin
+  Result := '';
+  if Trim(ContentRaw) = '' then Exit;
+  Req := SafeParseObject(ReqBody);
+  if Req = nil then Exit;
+  try
+    MsgArr := Req.ChildArray('messages');
+    if MsgArr = nil then Exit;
+    try
+      AssistantMsg := TJsonObject.Create;
+      AssistantMsg.PutStr('role', 'assistant');
+      AssistantMsg.PutRaw('content', ContentRaw);
+      MsgArr.AddObject(AssistantMsg);
+    finally
+      MsgArr.Free;
+    end;
+    Result := Req.ToJSON;
+  finally
+    Req.Free;
+  end;
+end;
+
 function ContinuePausedTurn(const ReqBody, RespBody: string): string;
 { Build the follow-up request body for a pause_turn continuation:
   take the prior response's content array verbatim and append it to
@@ -541,44 +579,25 @@ function ContinuePausedTurn(const ReqBody, RespBody: string): string;
   Returns the new wire body, or '' on parse failure (caller surfaces
   the prior response unchanged). }
 var
-  Req, Resp, AssistantMsg: TJsonObject;
-  MsgArr, ContentArr: TJsonArray;
+  Resp: TJsonObject;
+  ContentArr: TJsonArray;
   ContentRaw: string;
 begin
   Result := '';
-  Req := SafeParseObject(ReqBody);
-  if Req = nil then Exit;
+  Resp := SafeParseObject(RespBody);
+  if Resp = nil then Exit;
   try
-    Resp := SafeParseObject(RespBody);
-    if Resp = nil then Exit;
+    ContentArr := Resp.ChildArray('content');
+    if ContentArr = nil then Exit;
     try
-      ContentArr := Resp.ChildArray('content');
-      if ContentArr = nil then Exit;
-      try
-        ContentRaw := ContentArr.ToJSON;
-      finally
-        ContentArr.Free;
-      end;
-      if ContentRaw = '' then Exit;
-
-      MsgArr := Req.ChildArray('messages');
-      if MsgArr = nil then Exit;
-      try
-        AssistantMsg := TJsonObject.Create;
-        AssistantMsg.PutStr('role', 'assistant');
-        AssistantMsg.PutRaw('content', ContentRaw);
-        MsgArr.AddObject(AssistantMsg);
-      finally
-        MsgArr.Free;
-      end;
-
-      Result := Req.ToJSON;
+      ContentRaw := ContentArr.ToJSON;
     finally
-      Resp.Free;
+      ContentArr.Free;
     end;
   finally
-    Req.Free;
+    Resp.Free;
   end;
+  Result := AppendAssistantContent(ReqBody, ContentRaw);
 end;
 
 function TAnthropicProvider.Chat(const Messages: array of TMessage;
@@ -681,141 +700,361 @@ begin
   end;
 end;
 
-var
-  GStreamCB:   TStreamCallback;
-  GStreamAcc:  string;
-  GStreamLast: TLLMResponse;
-  { Tool-use accumulation across content_block_start / _delta / _stop.
-    Anthropic streams tool_use blocks as: start carries id+name+(empty)
-    input, delta carries partial_json fragments, stop signals end. We
-    buffer the JSON and flush into GStreamLast.ToolCalls on stop so
-    the streaming path matches Chat()'s non-streaming behavior -- without
-    this, tool-call-only assistant turns reached the gateway with no
-    ToolCalls and Codex never saw its function_call output items. }
-  GToolBlockActive: Boolean;
-  GToolBlockId:     string;
-  GToolBlockName:   string;
-  GToolBlockArgs:   string;
+type
+  { One content block of a streamed message, as it is put together. }
+  TAnthBlock = class
+    Kind: string;
+    Start: string;        { the content_block as content_block_start sent it }
+    Text: string;         { text_delta, or thinking_delta for a thinking block }
+    PartialJson: string;  { input_json_delta fragments }
+    Signature: string;    { signature_delta, for a thinking block }
+    Citations: string;    { citations_delta citations, JSON objects joined by ',' }
+  end;
 
-procedure HandleAnthropicSSE(const Event, Data: string);
-var
-  Root, Delta, Usage, MsgObj, CB: TJsonObject;
-  Kind, Text, BlockKind, PartialJson: string;
-  Chunk: TStreamChunk;
-  Tc: TToolCall;
+  (* One streamed answer, put back together, every bit of state its own --
+     no globals, so concurrent streams never meet. Content carries across
+     pause_turn rounds the way Chat joins them; the rest is per round. *)
+  TAnthropicStreamAcc = class
+  private
+    FBlocks: TList;
+    function Block(Index: Integer): TAnthBlock;
+    procedure Emit(const Text: string);
+    function InputOf(B: TAnthBlock): string;
+  public
+    OnChunk: TStreamCallback;
+    Content: string;
+    Round: TLLMResponse;     { this round: model, stop reason, usage, tool calls }
+    Failed, FailedType: string;
+    constructor Create;
+    destructor Destroy; override;
+    procedure NewRound;
+    procedure OnEvent(const Event, Data: string);
+    function ContentJSON: string;
+  end;
+
+constructor TAnthropicStreamAcc.Create;
 begin
-  if Data = '' then Exit;
-  Root := TJsonObject.Parse(Data);
+  inherited Create;
+  FBlocks := TList.Create;
+end;
+
+destructor TAnthropicStreamAcc.Destroy;
+begin
+  NewRound;
+  FBlocks.Free;
+  inherited;
+end;
+
+procedure TAnthropicStreamAcc.NewRound;
+var
+  i: Integer;
+begin
+  for i := 0 to FBlocks.Count - 1 do TObject(FBlocks[i]).Free;
+  FBlocks.Clear;
+  Round := Default(TLLMResponse);
+end;
+
+function TAnthropicStreamAcc.Block(Index: Integer): TAnthBlock;
+begin
+  if (Index >= 0) and (Index < FBlocks.Count) then
+    Result := TAnthBlock(FBlocks[Index])
+  else
+    Result := nil;
+end;
+
+procedure TAnthropicStreamAcc.Emit(const Text: string);
+var
+  C: TStreamChunk;
+begin
+  if Text = '' then Exit;
+  Content := Content + Text;
+  if Assigned(OnChunk) then
+  begin
+    C := Default(TStreamChunk);
+    C.Kind := 'text';
+    C.Text := Text;
+    OnChunk(C);
+  end;
+end;
+
+{ A tool block's input as Chat reports it: the object, re-serialised. }
+function TAnthropicStreamAcc.InputOf(B: TAnthBlock): string;
+var
+  O, In_: TJsonObject;
+begin
+  Result := '{}';
+  if Trim(B.PartialJson) <> '' then
+  begin
+    try
+      O := TJsonObject.Parse(B.PartialJson);
+    except
+      O := nil;
+    end;
+    if O <> nil then
+    try
+      Result := O.ToJSON;
+    finally
+      O.Free;
+    end;
+    Exit;
+  end;
+  { No fragments: the input the block started with, if any. }
+  try
+    O := TJsonObject.Parse(B.Start);
+  except
+    O := nil;
+  end;
+  if O <> nil then
+  try
+    In_ := O.ChildObject('input');
+    if In_ <> nil then
+    try
+      Result := In_.ToJSON;
+    finally
+      In_.Free;
+    end;
+  finally
+    O.Free;
+  end;
+end;
+
+procedure TAnthropicStreamAcc.OnEvent(const Event, Data: string);
+var
+  Root, Sub, Usage, D, Cit: TJsonObject;
+  Kind, DeltaKind, T: string;
+  B: TAnthBlock;
+  Tc: TToolCall;
+  Idx: Integer;
+begin
+  if Trim(Data) = '' then Exit;
+  try
+    Root := TJsonObject.Parse(Data);
+  except
+    Exit;   { a line we cannot read is skipped, not fatal }
+  end;
   if Root = nil then Exit;
   try
     Kind := Root.GetStr('type', Event);
 
-    if Kind = 'content_block_start' then
+    if Kind = 'message_start' then
     begin
-      CB := Root.ChildObject('content_block');
-      if CB <> nil then
+      Sub := Root.ChildObject('message');
+      if Sub <> nil then
       try
-        BlockKind := CB.GetStr('type', '');
-        if BlockKind = 'tool_use' then
-        begin
-          GToolBlockActive := True;
-          GToolBlockId     := CB.GetStr('id',   '');
-          GToolBlockName   := CB.GetStr('name', '');
-          GToolBlockArgs   := '';
-        end;
-      finally
-        CB.Free;
-      end;
-    end
-    else if Kind = 'content_block_delta' then
-    begin
-      Delta := Root.ChildObject('delta');
-      if Delta = nil then Exit;
-      try
-        if Delta.GetStr('type', '') = 'text_delta' then
-        begin
-          Text := Delta.GetStr('text', '');
-          if Text <> '' then
-          begin
-            GStreamAcc := GStreamAcc + Text;
-            Chunk.Kind := 'text';
-            Chunk.Text := Text;
-            if Assigned(GStreamCB) then GStreamCB(Chunk);
-          end;
-        end
-        else if (Delta.GetStr('type', '') = 'input_json_delta') and GToolBlockActive then
-        begin
-          PartialJson := Delta.GetStr('partial_json', '');
-          if PartialJson <> '' then
-            GToolBlockArgs := GToolBlockArgs + PartialJson;
-        end;
-      finally
-        Delta.Free;
-      end;
-    end
-    else if Kind = 'content_block_stop' then
-    begin
-      if GToolBlockActive then
-      begin
-        Tc.Id   := GToolBlockId;
-        Tc.Kind := 'function';
-        Tc.Func.Name := GToolBlockName;
-        if Trim(GToolBlockArgs) <> '' then
-          Tc.Func.Arguments := GToolBlockArgs
-        else
-          Tc.Func.Arguments := '{}';
-        SetLength(GStreamLast.ToolCalls, Length(GStreamLast.ToolCalls) + 1);
-        GStreamLast.ToolCalls[High(GStreamLast.ToolCalls)] := Tc;
-        GToolBlockActive := False;
-        GToolBlockId     := '';
-        GToolBlockName   := '';
-        GToolBlockArgs   := '';
-      end;
-    end
-    else if Kind = 'message_delta' then
-    begin
-      Usage := Root.ChildObject('usage');
-      if Usage <> nil then
-      try
-        GStreamLast.Usage.OutputTokens :=
-          Usage.GetInt('output_tokens', GStreamLast.Usage.OutputTokens);
-      finally
-        Usage.Free;
-      end;
-      Delta := Root.ChildObject('delta');
-      if Delta <> nil then
-      try
-        GStreamLast.FinishReason :=
-          Delta.GetStr('stop_reason', GStreamLast.FinishReason);
-      finally
-        Delta.Free;
-      end;
-    end
-    else if Kind = 'message_start' then
-    begin
-      MsgObj := Root.ChildObject('message');
-      if MsgObj <> nil then
-      try
-        GStreamLast.Model := MsgObj.GetStr('model', GStreamLast.Model);
-        Usage := MsgObj.ChildObject('usage');
+        Round.Model := Sub.GetStr('model', Round.Model);
+        Usage := Sub.ChildObject('usage');
         if Usage <> nil then
         try
-          GStreamLast.Usage.InputTokens := Usage.GetInt('input_tokens', 0);
+          Round.Usage.InputTokens        := Usage.GetInt('input_tokens', 0);
+          Round.Usage.OutputTokens       := Usage.GetInt('output_tokens', 0);
+          Round.Usage.CacheReadTokens    := Usage.GetInt('cache_read_input_tokens', 0);
+          Round.Usage.CacheCreatedTokens := Usage.GetInt('cache_creation_input_tokens', 0);
         finally
           Usage.Free;
         end;
       finally
-        MsgObj.Free;
+        Sub.Free;
       end;
     end
-    else if Kind = 'message_stop' then
+
+    else if Kind = 'content_block_start' then
     begin
-      Chunk.Kind := 'done';
-      Chunk.Text := '';
-      if Assigned(GStreamCB) then GStreamCB(Chunk);
+      Idx := Integer(Root.GetInt('index', FBlocks.Count));
+      Sub := Root.ChildObject('content_block');
+      if Sub <> nil then
+      try
+        B := TAnthBlock.Create;
+        B.Kind := Sub.GetStr('type', '');
+        B.Start := Sub.ToJSON;
+        while FBlocks.Count < Idx do FBlocks.Add(TAnthBlock.Create);   { a gap: keep indexes }
+        if Idx < FBlocks.Count then
+        begin
+          TObject(FBlocks[Idx]).Free;
+          FBlocks[Idx] := B;
+        end
+        else
+          FBlocks.Add(B);
+        if B.Kind = 'text' then
+        begin
+          { Chat joins text blocks -- and pause_turn rounds -- with a line
+            break; so does the stream, at the block's start. }
+          if Content <> '' then Emit(sLineBreak);
+          T := Sub.GetStr('text', '');
+          B.Text := T;
+          Emit(T);
+        end;
+      finally
+        Sub.Free;
+      end;
+    end
+
+    else if Kind = 'content_block_delta' then
+    begin
+      B := Block(Integer(Root.GetInt('index', -1)));
+      D := Root.ChildObject('delta');
+      if (B <> nil) and (D <> nil) then
+      begin
+        DeltaKind := D.GetStr('type', '');
+        if DeltaKind = 'text_delta' then
+        begin
+          T := D.GetStr('text', '');
+          B.Text := B.Text + T;
+          Emit(T);
+        end
+        else if DeltaKind = 'input_json_delta' then
+          B.PartialJson := B.PartialJson + D.GetStr('partial_json', '')
+        else if DeltaKind = 'thinking_delta' then
+          B.Text := B.Text + D.GetStr('thinking', '')     { kept, not shown: Chat drops it }
+        else if DeltaKind = 'signature_delta' then
+          B.Signature := B.Signature + D.GetStr('signature', '')
+        else if DeltaKind = 'citations_delta' then
+        begin
+          Cit := D.ChildObject('citation');
+          if Cit <> nil then
+          try
+            if B.Citations <> '' then B.Citations := B.Citations + ',';
+            B.Citations := B.Citations + Cit.ToJSON;
+          finally
+            Cit.Free;
+          end;
+        end;
+      end;
+      D.Free;
+    end
+
+    else if Kind = 'content_block_stop' then
+    begin
+      B := Block(Integer(Root.GetInt('index', -1)));
+      if (B <> nil) and (B.Kind = 'tool_use') then
+      begin
+        Sub := TJsonObject.Parse(B.Start);
+        try
+          Tc := Default(TToolCall);
+          Tc.Id := Sub.GetStr('id', '');
+          Tc.Kind := 'function';
+          Tc.Func.Name := Sub.GetStr('name', '');
+          Tc.Func.Arguments := InputOf(B);
+        finally
+          Sub.Free;
+        end;
+        SetLength(Round.ToolCalls, Length(Round.ToolCalls) + 1);
+        Round.ToolCalls[High(Round.ToolCalls)] := Tc;
+      end;
+    end
+
+    else if Kind = 'message_delta' then
+    begin
+      D := Root.ChildObject('delta');
+      if D <> nil then
+      try
+        Round.FinishReason := D.GetStr('stop_reason', Round.FinishReason);
+      finally
+        D.Free;
+      end;
+      Usage := Root.ChildObject('usage');
+      if Usage <> nil then
+      try
+        { Cumulative; newer API versions repeat the input counts here. }
+        Round.Usage.OutputTokens := Usage.GetInt('output_tokens', Round.Usage.OutputTokens);
+        if Usage.GetInt('input_tokens', 0) > 0 then
+          Round.Usage.InputTokens := Usage.GetInt('input_tokens', 0);
+        if Usage.GetInt('cache_read_input_tokens', 0) > 0 then
+          Round.Usage.CacheReadTokens := Usage.GetInt('cache_read_input_tokens', 0);
+        if Usage.GetInt('cache_creation_input_tokens', 0) > 0 then
+          Round.Usage.CacheCreatedTokens := Usage.GetInt('cache_creation_input_tokens', 0);
+      finally
+        Usage.Free;
+      end;
+    end
+
+    else if Kind = 'error' then
+    begin
+      Sub := Root.ChildObject('error');
+      if Sub <> nil then
+      try
+        Failed := Sub.GetStr('message', Data);
+        FailedType := Sub.GetStr('type', '');
+      finally
+        Sub.Free;
+      end
+      else
+        Failed := Data;
     end;
+    { ping and message_stop carry nothing to keep. }
   finally
     Root.Free;
+  end;
+end;
+
+{ The round's content array, block by block as Anthropic sent it, for the
+  assistant turn a pause_turn continuation re-sends. }
+function TAnthropicStreamAcc.ContentJSON: string;
+var
+  i: Integer;
+  B: TAnthBlock;
+  O: TJsonObject;
+begin
+  Result := '';
+  for i := 0 to FBlocks.Count - 1 do
+  begin
+    B := TAnthBlock(FBlocks[i]);
+    if B.Start = '' then Continue;
+    try
+      O := TJsonObject.Parse(B.Start);
+    except
+      Continue;
+    end;
+    if O = nil then Continue;
+    try
+      if B.Kind = 'text' then
+      begin
+        O.PutStr('text', B.Text);
+        if B.Citations <> '' then O.PutRaw('citations', '[' + B.Citations + ']');
+      end
+      else if (B.Kind = 'tool_use') or (B.Kind = 'server_tool_use') or
+              (B.Kind = 'mcp_tool_use') then
+        O.PutRaw('input', InputOf(B))
+      else if B.Kind = 'thinking' then
+      begin
+        O.PutStr('thinking', B.Text);
+        O.PutStr('signature', B.Signature);
+      end;
+      if Result <> '' then Result := Result + ',';
+      Result := Result + O.ToJSON;
+    finally
+      O.Free;
+    end;
+  end;
+  Result := '[' + Result + ']';
+end;
+
+function ParseAnthropicStream(const SSE: string; OnChunk: TStreamCallback;
+                              out Failed, ContentJSON: string): TLLMResponse;
+var
+  Acc: TAnthropicStreamAcc;
+  P: TSSEParseStream;
+  B: TBytes;
+begin
+  Acc := TAnthropicStreamAcc.Create;
+  P := TSSEParseStream.Create(Acc.OnEvent);
+  try
+    Acc.OnChunk := OnChunk;
+    Acc.NewRound;
+    {$IFDEF FPC}
+    SetLength(B, Length(SSE));
+    if Length(SSE) > 0 then Move(SSE[1], B[0], Length(SSE));
+    {$ELSE}
+    B := TEncoding.UTF8.GetBytes(SSE);
+    {$ENDIF}
+    if Length(B) > 0 then P.Write(B[0], Length(B));
+    P.Finish;
+    Result := Acc.Round;
+    Result.Content := Acc.Content;
+    Failed := Acc.Failed;
+    ContentJSON := Acc.ContentJSON;
+  finally
+    P.Free;
+    Acc.Free;
   end;
 end;
 
@@ -825,17 +1064,19 @@ function TAnthropicProvider.ChatStream(const Messages: array of TMessage;
                                        const Options:  TChatOptions;
                                        OnChunk: TStreamCallback): TLLMResponse;
 var
-  Body, URL, UseModel: string;
+  Body, NextBody, URL, UseModel, ErrMsg, Raw: string;
   Headers: array of THeaderPair;
   Opts: TChatOptions;
-  Status: Integer;
-  Err: string;
+  Status, Events, Continuations, i: Integer;
   Root: TJsonObject;
+  Acc: TAnthropicStreamAcc;
+  Plain: TLLMResponse;
+  C: TStreamChunk;
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL := FAPIBase + '/v1/messages';
 
-  { Force stream:true in the request body. }
+  { The same request Chat sends, streamed. }
   Opts := Options;
   Opts.Stream := True;
   if Opts.DisableServerTools then
@@ -868,31 +1109,115 @@ begin
   Headers[2] := MakeHeader('anthropic-dangerous-direct-browser-access', 'true');
   {$ENDIF}
 
-  GStreamCB  := OnChunk;
-  GStreamAcc := '';
-  Finalize(GStreamLast);
-  FillChar(GStreamLast, SizeOf(GStreamLast), 0);
-  GStreamLast.Model := UseModel;
-  GToolBlockActive := False;
-  GToolBlockId     := '';
-  GToolBlockName   := '';
-  GToolBlockArgs   := '';
+  Result := Default(TLLMResponse);
+  Acc := TAnthropicStreamAcc.Create;
   try
-    LogDebug('anthropic SSE POST %s (model=%s)', [URL, UseModel]);
-    PostStreaming(URL, Body, Headers, 120, @HandleAnthropicSSE, Status, Err);
-    Result.Content      := GStreamAcc;
-    Result.FinishReason := GStreamLast.FinishReason;
-    Result.Usage        := GStreamLast.Usage;
-    Result.Model        := GStreamLast.Model;
-    Result.ToolCalls    := Copy(GStreamLast.ToolCalls, 0, Length(GStreamLast.ToolCalls));
-    if (Status < 200) or (Status >= 300) then
+    Acc.OnChunk := OnChunk;
+    Continuations := 0;
+    while True do
     begin
-      if Result.Content = '' then
-        Result.Content := Format('anthropic stream error: status=%d msg=%s', [Status, Err]);
-      Result.FinishReason := 'error';
+      Acc.NewRound;
+      LogDebug('anthropic SSE POST %s (model=%s, body=%d bytes, continuation=%d)',
+               [URL, UseModel, Length(Body), Continuations]);
+      PostSSE(URL, Body, Headers, 120, Acc.OnEvent, Status, ErrMsg, Raw, Events);
+      Result.StatusCode := Status;
+
+      if (Status < 200) or (Status >= 300) then
+      begin
+        if ErrMsg <> '' then
+          Result.Content := Format('anthropic error %d: %s', [Status, ErrMsg])
+        else if Raw <> '' then
+          Result.Content := Format('anthropic error %d: %s', [Status, Raw])
+        else
+          Result.Content := Format('anthropic error: status=%d', [Status]);
+        Result.FinishReason := 'error';
+        SetLength(Result.ToolCalls, 0);
+        Break;
+      end;
+
+      if Acc.Failed <> '' then
+      begin
+        { An error event inside a 200 stream (overloaded, api_error): the
+          turn failed, whatever arrived before it. overloaded_error is
+          Anthropic's 529, which the loop retries like any 5xx. }
+        if Acc.FailedType = 'overloaded_error' then Result.StatusCode := 529
+        else Result.StatusCode := 500;
+        Result.Content := 'anthropic stream error: ' + Acc.Failed;
+        Result.FinishReason := 'error';
+        SetLength(Result.ToolCalls, 0);
+        Break;
+      end;
+
+      if (Events = 0) and (Trim(Raw) <> '') then
+      begin
+        { No events: something between us and the API answered with one
+          JSON body. Read it as Chat would, and pass its text on whole. }
+        Plain := Default(TLLMResponse);
+        ParseResponse(Raw, Plain);
+        Acc.Round := Plain;
+        if Plain.Content <> '' then
+        begin
+          if Acc.Content <> '' then
+          begin
+            C := Default(TStreamChunk);
+            C.Kind := 'text';
+            C.Text := sLineBreak;
+            Acc.Content := Acc.Content + sLineBreak;
+            if Assigned(OnChunk) then OnChunk(C);
+          end;
+          Acc.Content := Acc.Content + Plain.Content;
+          if Assigned(OnChunk) then
+          begin
+            C := Default(TStreamChunk);
+            C.Kind := 'text';
+            C.Text := Plain.Content;
+            OnChunk(C);
+          end;
+        end;
+      end;
+
+      { As Chat: text across every round, usage summed, the stop reason,
+        model and tool calls of the last round. }
+      Result.Content := Acc.Content;
+      Result.FinishReason := Acc.Round.FinishReason;
+      Result.Model := Acc.Round.Model;
+      Inc(Result.Usage.InputTokens,        Acc.Round.Usage.InputTokens);
+      Inc(Result.Usage.OutputTokens,       Acc.Round.Usage.OutputTokens);
+      Inc(Result.Usage.CacheReadTokens,    Acc.Round.Usage.CacheReadTokens);
+      Inc(Result.Usage.CacheCreatedTokens, Acc.Round.Usage.CacheCreatedTokens);
+      SetLength(Result.ToolCalls, Length(Acc.Round.ToolCalls));
+      for i := 0 to High(Acc.Round.ToolCalls) do
+        Result.ToolCalls[i] := Acc.Round.ToolCalls[i];
+
+      if Acc.Round.FinishReason <> 'pause_turn' then Break;
+      if Continuations >= PAUSE_TURN_MAX_CONTINUATIONS then
+      begin
+        LogWarn('anthropic pause_turn cap (%d) reached; returning partial answer',
+                [PAUSE_TURN_MAX_CONTINUATIONS]);
+        Break;
+      end;
+      { Resume the server-side loop: the round's content, block for block,
+        as the next assistant turn -- what Chat sends from the JSON body. }
+      if (Events = 0) and (Trim(Raw) <> '') then
+        NextBody := ContinuePausedTurn(Body, Raw)
+      else
+        NextBody := AppendAssistantContent(Body, Acc.ContentJSON);
+      if NextBody = '' then
+      begin
+        LogWarn('anthropic pause_turn: continuation body build failed; returning partial answer');
+        Break;
+      end;
+      Body := NextBody;
+      Inc(Continuations);
     end;
   finally
-    GStreamCB := nil;
+    Acc.Free;
+  end;
+  if Assigned(OnChunk) then
+  begin
+    C := Default(TStreamChunk);
+    C.Kind := 'done';
+    OnChunk(C);
   end;
 end;
 

@@ -35,11 +35,17 @@ editor would. What it pins:
     until the editor has shown the first piece), tool-call arguments put
     together from fragments, a paragraph between rounds; a server that
     refuses the streaming fields gets a plain request instead
+  - Anthropic streams too, against a fake Messages API: text as it is
+    written, a tool call from input_json fragments, a pause_turn continuation
+    that re-sends the server-tool blocks as they came, an overloaded error
+    event, and two sessions streaming at the same moment each getting only
+    their own text
 """
 import http.server
 import json
 import os
 import queue
+import re
 import shutil
 import socket
 import subprocess
@@ -269,6 +275,152 @@ class Model(http.server.BaseHTTPRequestHandler):
         pass
 
 
+# ------------------------------------------------------ the Anthropic model --
+# The same idea against the Messages API: one playbook per prompt, each step
+# one round of content blocks, streamed as Anthropic's SSE events.
+ANTH_PLAYBOOKS = {
+    "anth stream": [
+        {"blocks": [{"type": "text", "text": "Anthropic streams: one two three four."}],
+         "stop": "end_turn", "hold": True},
+    ],
+    "anth tool": [
+        {"blocks": [{"type": "text", "text": "Listing."},
+                    {"type": "tool_use", "name": "list_dir", "input": {"path": "."}}],
+         "stop": "tool_use"},
+        {"blocks": [{"type": "text", "text": "Listed it."}], "stop": "end_turn"},
+    ],
+    "anth pause": [
+        {"blocks": [{"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search",
+                     "input": {"query": "pasclaw"}},
+                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1",
+                     "content": [{"type": "web_search_result", "url": "https://example.com/p",
+                                  "title": "P", "encrypted_content": "e1"}]},
+                    {"type": "text", "text": "Searching."}],
+         "stop": "pause_turn"},
+        {"blocks": [{"type": "text", "text": "Found it."}], "stop": "end_turn"},
+    ],
+    "anth overloaded": [
+        {"blocks": [{"type": "text", "text": "partial words here"}], "error": "Overloaded"},
+    ],
+    "anth pair A": [
+        {"blocks": [{"type": "text", "text": "Alpha one alpha two alpha three"}],
+         "stop": "end_turn", "pair": True},
+    ],
+    "anth pair B": [
+        {"blocks": [{"type": "text", "text": "Beta one beta two beta three"}],
+         "stop": "end_turn", "pair": True},
+    ],
+}
+anth_requests = []
+anth_first_seen = threading.Event()     # the editor showed the held stream's first piece
+anth_log = {"held_live": None}
+anth_pair_gate = threading.Barrier(2, timeout=10)   # the two streams take turns, piece by piece
+
+
+def anth_prompt_index(msgs):
+    """The last user message that carries text (not only tool results)."""
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        if m.get("role") != "user":
+            continue
+        c = m.get("content")
+        if isinstance(c, str) or any(b.get("type") == "text" for b in c or []):
+            return i
+    return 0
+
+
+class AnthModel(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def chunk(self, data):
+        self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
+        self.wfile.flush()
+
+    def ev(self, name, obj):
+        self.chunk(("event: %s\ndata: %s\n\n" % (name, json.dumps(obj))).encode())
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+        anth_requests.append(body)
+        msgs = body.get("messages", [])
+        pi = anth_prompt_index(msgs)
+        prompt = text_of(msgs[pi].get("content")) if msgs else ""
+        if isinstance(msgs[pi].get("content"), list):
+            prompt = " ".join(b.get("text", "") for b in msgs[pi]["content"] if isinstance(b, dict))
+        step_i = sum(1 for m in msgs[pi + 1:] if m.get("role") == "assistant")
+        key = next((k for k in ANTH_PLAYBOOKS if k in prompt), None)
+        step = ANTH_PLAYBOOKS[key][min(step_i, len(ANTH_PLAYBOOKS[key]) - 1)] if key else \
+            {"blocks": [{"type": "text", "text": "no playbook"}], "stop": "end_turn"}
+        blocks = []
+        for n, b in enumerate(step["blocks"]):
+            b = dict(b)
+            if b["type"] in ("tool_use", "server_tool_use") and "id" not in b:
+                b["id"] = "toolu_%s_%d_%d" % (key.split()[1] if key else "x", step_i, n)
+            blocks.append(b)
+        if not body.get("stream"):
+            out = json.dumps({"id": "msg_plain", "type": "message", "role": "assistant",
+                              "model": "claude-fake", "content": blocks,
+                              "stop_reason": step.get("stop", "end_turn"),
+                              "usage": {"input_tokens": 10, "output_tokens": 5}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        self.ev("message_start", {"type": "message_start", "message": {
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-fake",
+            "content": [], "stop_reason": None,
+            "usage": {"input_tokens": 10, "output_tokens": 1}}})
+        for i, b in enumerate(blocks):
+            if b["type"] == "text":
+                self.ev("content_block_start", {"type": "content_block_start", "index": i,
+                                                "content_block": {"type": "text", "text": ""}})
+                for k, piece in enumerate(re.findall(r"\S+\s*", b["text"])):
+                    self.ev("content_block_delta", {"type": "content_block_delta", "index": i,
+                                                    "delta": {"type": "text_delta", "text": piece}})
+                    if step.get("hold") and k == 0:
+                        anth_log["held_live"] = anth_first_seen.wait(10)
+                    if step.get("pair"):
+                        try:
+                            anth_pair_gate.wait()
+                        except threading.BrokenBarrierError:
+                            pass
+                    if step.get("error") and k == 1:
+                        self.ev("error", {"type": "error",
+                                          "error": {"type": "overloaded_error", "message": step["error"]}})
+                        self.chunk(b"")
+                        return
+                self.ev("content_block_stop", {"type": "content_block_stop", "index": i})
+            elif b["type"] in ("tool_use", "server_tool_use"):
+                self.ev("content_block_start", {"type": "content_block_start", "index": i,
+                                                "content_block": {"type": b["type"], "id": b["id"],
+                                                                  "name": b["name"], "input": {}}})
+                args = json.dumps(b["input"])
+                for k in range(0, len(args), 5):
+                    self.ev("content_block_delta", {"type": "content_block_delta", "index": i,
+                                                    "delta": {"type": "input_json_delta",
+                                                              "partial_json": args[k:k + 5]}})
+                self.ev("content_block_stop", {"type": "content_block_stop", "index": i})
+            else:
+                self.ev("content_block_start", {"type": "content_block_start", "index": i,
+                                                "content_block": b})
+                self.ev("content_block_stop", {"type": "content_block_stop", "index": i})
+            self.ev("ping", {"type": "ping"})
+        self.ev("message_delta", {"type": "message_delta",
+                                  "delta": {"stop_reason": step["stop"], "stop_sequence": None},
+                                  "usage": {"output_tokens": 20}})
+        self.ev("message_stop", {"type": "message_stop"})
+        self.chunk(b"")
+
+    def log_message(self, *a):
+        pass
+
+
 # -------------------------------------------------------------- the client --
 class Client:
     """An ACP client: spawns the agent, writes requests, answers the agent's
@@ -298,6 +450,8 @@ class Client:
                 continue
             if msg.get("method") == "session/update" and "Streaming wor" in json.dumps(msg):
                 first_piece_seen.set()   # seen by the editor, as it arrives
+            if msg.get("method") == "session/update" and "Anthropic " in json.dumps(msg):
+                anth_first_seen.set()
             self.q.put(msg)
         self.q.put(None)
 
@@ -334,8 +488,9 @@ class Client:
             elif msg.get("id") == rid:
                 return msg, notes
 
-    def call_all(self, calls, timeout=60):
-        """Send several requests at once; return {index: response}."""
+    def call_all(self, calls, timeout=60, notes=None):
+        """Send several requests at once; return {index: response}. The
+        notifications in between go to `notes` when given."""
         ids = {}
         for i, (method, params) in enumerate(calls):
             self.next_id += 1
@@ -350,6 +505,9 @@ class Client:
             if "method" in msg and "id" in msg:
                 self.send({"jsonrpc": "2.0", "id": msg["id"],
                            "error": {"code": -32601, "message": "not handled"}})
+            elif "method" in msg:
+                if notes is not None:
+                    notes.append(msg)
             elif "method" not in msg and msg.get("id") in ids:
                 out[ids[msg["id"]]] = msg
         return out
@@ -727,6 +885,88 @@ def main():
     log = open(dlog).read() if os.path.exists(dlog) else ""
     check("and the container is stopped when the agent exits",
           "stop --time 2 pasclaw-" + sid3 in log, log[-500:])
+
+    print("-- Anthropic streaming:")
+    asrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), AnthModel)
+    threading.Thread(target=asrv.serve_forever, daemon=True).start()
+    ahome = os.path.join(WORK, "home-anth")
+    os.makedirs(ahome)
+    json.dump({"default_provider": "fakeanth", "default_model": "claude-fake",
+               "providers": [{"name": "fakeanth", "kind": "anthropic",
+                              "api_base": "http://127.0.0.1:%d" % asrv.server_address[1],
+                              "api_key": "sk-ant-fake", "model": "claude-fake"}],
+               "provider_retry_attempts": 0,
+               "auto_router": {"enabled": False}},
+              open(os.path.join(ahome, "config.json"), "w"))
+    aenv = dict(env)
+    aenv["PASCLAW_HOME"] = ahome
+    c = Client(aenv, "anth")
+    c.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+    r, _ = c.call("session/new", {"cwd": project, "mcpServers": []})
+    asid = r.get("result", {}).get("sessionId", "")
+    r, notes = c.call("session/prompt", {"sessionId": asid,
+                                         "prompt": [{"type": "text", "text": "anth stream"}]})
+    chunks = [u["content"]["text"] for u in updates(notes, "agent_message_chunk")]
+    check("the request asks Anthropic to stream", anth_requests and anth_requests[-1].get("stream") is True)
+    check("the editor got Anthropic's first piece while the model was still writing",
+          anth_log["held_live"] is True, anth_log)
+    check("several chunks adding up to the reply",
+          len(chunks) >= 3 and "".join(chunks) == "Anthropic streams: one two three four.", chunks)
+    r, notes = c.call("session/prompt", {"sessionId": asid,
+                                         "prompt": [{"type": "text", "text": "anth tool"}]})
+    lst = [u for u in updates(notes, "tool_call") if u.get("name") == "list_dir"]
+    done = [u for u in updates(notes, "tool_call_update")
+            if lst and u.get("toolCallId") == lst[0].get("toolCallId")]
+    check("a tool call from input_json fragments runs",
+          lst and lst[0].get("rawInput") == {"path": "."} and done and
+          done[-1].get("status") == "completed", (lst, done))
+    check("and its rounds read as two paragraphs",
+          agent_text(notes).replace("\r\n", "\n") == "Listing.\n\nListed it.", agent_text(notes))
+    before = len(anth_requests)
+    r, notes = c.call("session/prompt", {"sessionId": asid,
+                                         "prompt": [{"type": "text", "text": "anth pause"}]})
+    cont = anth_requests[before + 1] if len(anth_requests) > before + 1 else {}
+    last = (cont.get("messages") or [{}])[-1]
+    kinds = [b.get("type") for b in last.get("content") or [] if isinstance(b, dict)]
+    srv_block = next((b for b in last.get("content") or [] if b.get("type") == "server_tool_use"), {})
+    check("pause_turn is continued: the server-tool blocks re-sent as they came",
+          last.get("role") == "assistant" and
+          kinds == ["server_tool_use", "web_search_tool_result", "text"] and
+          srv_block.get("input") == {"query": "pasclaw"} and
+          (last.get("content") or [{}, {}, {}])[1].get("content", [{}])[0].get("encrypted_content") == "e1",
+          (kinds, last))
+    check("and the answer reads on across the rounds",
+          r.get("result", {}).get("stopReason") == "end_turn" and
+          agent_text(notes).replace("\r\n", "\n") == "Searching.\nFound it.", agent_text(notes))
+    r, notes = c.call("session/prompt", {"sessionId": asid,
+                                         "prompt": [{"type": "text", "text": "anth overloaded"}]})
+    check("an overloaded error event mid-stream is the turn's error",
+          "Overloaded" in r.get("error", {}).get("message", ""), r)
+    check("and is not saved as a reply",
+          "Overloaded" not in json.dumps(session_file(ahome, asid).get("messages", [])))
+    ra, _ = c.call("session/new", {"cwd": project, "mcpServers": []})
+    rb, _ = c.call("session/new", {"cwd": project, "mcpServers": []})
+    sa = ra.get("result", {}).get("sessionId", "")
+    sb = rb.get("result", {}).get("sessionId", "")
+    pair_notes = []
+    both = c.call_all([
+        ("session/prompt", {"sessionId": sa, "prompt": [{"type": "text", "text": "anth pair A"}]}),
+        ("session/prompt", {"sessionId": sb, "prompt": [{"type": "text", "text": "anth pair B"}]})],
+        notes=pair_notes)
+    def text_for(sid_):
+        return "".join(n["params"]["update"]["content"]["text"] for n in pair_notes
+                       if n.get("method") == "session/update" and n["params"].get("sessionId") == sid_
+                       and n["params"]["update"].get("sessionUpdate") == "agent_message_chunk")
+    check("two sessions streaming at once each get only their own text",
+          not anth_pair_gate.broken and
+          text_for(sa) == "Alpha one alpha two alpha three" and
+          text_for(sb) == "Beta one beta two beta three", (text_for(sa), text_for(sb), both))
+    check("and save only their own reply",
+          "Beta" not in json.dumps(session_file(ahome, sa).get("messages", [])) and
+          "Alpha" not in json.dumps(session_file(ahome, sb).get("messages", [])))
+    c.close()
+    check("stdout carried only JSON-RPC (Anthropic)", not c.bad_lines, c.bad_lines[:3])
+    asrv.shutdown()
 
     srv.shutdown()
     if fails:
