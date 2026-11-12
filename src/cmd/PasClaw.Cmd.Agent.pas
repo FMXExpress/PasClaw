@@ -2499,6 +2499,7 @@ begin
     { The loop's events are the protocol's events. }
     LoopCfg.OnText       := Turn.Text;
     LoopCfg.OnTextDelta  := Turn.TextDelta;   { as it is written, when the provider streams }
+    LoopCfg.OnThoughtDelta := Turn.ThoughtDelta;   { the model's thinking, likewise }
     LoopCfg.OnToolCall   := Turn.ToolCall;
     LoopCfg.OnToolResult := Turn.ToolResult;
     LoopCfg.OnAsk        := Turn.Ask;
@@ -2604,7 +2605,8 @@ begin
   if not ParseArgs(Argv, A) then
   begin
     PrintLnErr('usage: pasclaw acp [--model M] [--provider P] [--mode build|plan|improve|space]');
-    PrintLnErr('                   [--max-iterations N] [--system S] [--no-mcp] [--profile P]');
+    PrintLnErr('                   [--max-iterations N] [--system S] [--thinking low|medium|high]');
+    PrintLnErr('                   [--no-mcp] [--profile P] [--backend local|docker]');
     Exit(1);
   end;
   { An editor turn does real work; the CLI's default of 8 rounds is a

@@ -81,7 +81,9 @@ type
   end;
 
   TStreamChunk = record
-    Kind:     string;     { "text" | "tool_call" | "usage" | "done" }
+    Kind:     string;     { "text" | "thinking" | "tool_call" | "usage" | "done";
+                            "thinking" is the model's reasoning as it streams --
+                            not part of the reply, never in Content }
     Text:     string;
     ToolCall: TToolCall;
     Usage:    TUsageInfo;

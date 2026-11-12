@@ -75,6 +75,7 @@ type
     FCallSeq:   Integer;
     FPending:   TList;     { TACPCallSlot -- announced calls awaiting a result }
     FTextSent:  Boolean;   { a message chunk already went out this turn }
+    FThoughtSent: Boolean; { a thought chunk already went out this turn }
   public
     Id:   string;
     Cwd:  string;
@@ -126,6 +127,9 @@ type
     { A piece of the reply as the model writes it (TToolLoopConfig.
       OnTextDelta); First marks a round's first piece. }
     procedure TextDelta(const Delta: string; First: Boolean);
+    { The model's thinking as it streams (TToolLoopConfig.OnThoughtDelta),
+      sent as agent_thought_chunk; First marks a round's first piece. }
+    procedure ThoughtDelta(const Delta: string; First: Boolean);
     procedure ToolCall(const Name, ArgsJSON: string);
     procedure ToolResult(const Name, ResultText, Err: string);
     function  Ask(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
@@ -705,6 +709,27 @@ begin
   end;
   FAgent.SessionUpdate(FSession.Id,
     '{"sessionUpdate":"agent_message_chunk","content":' + TextBlock(Chunk) + '}');
+end;
+
+procedure TACPTurn.ThoughtDelta(const Delta: string; First: Boolean);
+var
+  Chunk: string;
+begin
+  if Delta = '' then Exit;
+  Chunk := Delta;
+  { A later round's thinking opens a new paragraph, as its text does. }
+  if First then
+  begin
+    FAgent.FLock.Enter;
+    try
+      if FSession.FThoughtSent then Chunk := sLineBreak + sLineBreak + Chunk;
+      FSession.FThoughtSent := True;
+    finally
+      FAgent.FLock.Leave;
+    end;
+  end;
+  FAgent.SessionUpdate(FSession.Id,
+    '{"sessionUpdate":"agent_thought_chunk","content":' + TextBlock(Chunk) + '}');
 end;
 
 procedure TACPTurn.Notice(const S: string);
@@ -1348,6 +1373,7 @@ begin
       S.FRunning := True;
       S.FCancel := False;
       S.FTextSent := False;
+      S.FThoughtSent := False;
     end;
   finally
     FLock.Leave;

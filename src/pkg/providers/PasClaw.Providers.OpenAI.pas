@@ -509,6 +509,18 @@ begin
           Delta := Choice.ChildObject('delta');
           if Delta <> nil then
           try
+            { Reasoning models on compatible servers stream their reasoning
+              as reasoning_content (DeepSeek, vLLM) or reasoning
+              (OpenRouter): passed on as thinking, not part of the reply. }
+            Text := Delta.GetStr('reasoning_content', '');
+            if Text = '' then Text := Delta.GetStr('reasoning', '');
+            if (Text <> '') and Assigned(OnChunk) then
+            begin
+              C := Default(TStreamChunk);
+              C.Kind := 'thinking';
+              C.Text := Text;
+              OnChunk(C);
+            end;
             Text := Delta.GetStr('content', '');
             if Text <> '' then
             begin

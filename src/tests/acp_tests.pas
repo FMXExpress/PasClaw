@@ -232,6 +232,17 @@ begin
     Turn.ToolCall('shell_exec', '{"command":"c"}');
     Turn.ToolResult('shell_exec', 'c done', '');
   end
+  else if Pos('thoughts', PromptText) > 0 then
+  begin
+    { Thinking streamed beside the reply, a new round's first marked. }
+    Turn.ThoughtDelta('Hmm', True);
+    Turn.ThoughtDelta(' ok', False);
+    Turn.TextDelta('Answer', True);
+    Turn.ToolCall('list_dir', '{"path":"."}');
+    Turn.ToolResult('list_dir', 'a.txt', '');
+    Turn.ThoughtDelta('Again', True);
+    Turn.TextDelta('Done', True);
+  end
   else if Pos('deltas', PromptText) > 0 then
   begin
     { Streamed text: pieces as written, a new round's first marked. }
@@ -687,6 +698,50 @@ begin
              'pieces as they come, one chunk each; a new round opens a paragraph (got ' + Got + ')');
 end;
 
+{ "[kind:text]" for each message/thought chunk between From and To. }
+function ChunksIn(From, To_: Integer): string;
+var
+  i: Integer;
+  O, P, U, C: TJsonObject;
+  Kind: string;
+begin
+  Result := '';
+  for i := From to To_ - 1 do
+    if (Pos('"agent_message_chunk"', Cap.Line(i)) > 0) or
+       (Pos('"agent_thought_chunk"', Cap.Line(i)) > 0) then
+    begin
+      O := TJsonObject.Parse(Cap.Line(i));
+      P := O.ChildObject('params');
+      U := P.ChildObject('update');
+      C := U.ChildObject('content');
+      try
+        Kind := U.GetStr('sessionUpdate', '');
+        if Kind = 'agent_thought_chunk' then Kind := 'thought' else Kind := 'msg';
+        Result := Result + '[' + Kind + ':' +
+                  StringReplace(C.GetStr('text', ''), #13#10, #10, [rfReplaceAll]) + ']';
+      finally
+        C.Free;
+        U.Free;
+        P.Free;
+        O.Free;
+      end;
+    end;
+end;
+
+procedure TestThoughtDeltas;
+var
+  N, iDone: Integer;
+  Got: string;
+begin
+  N := Cap.Count;
+  Send(Prompt('90', 'sess-1', 'thoughts'));
+  iDone := Cap.WaitFor('"id":90,"result"', N);
+  AssertTrue(iDone >= 0, 'the turn answers');
+  Got := ChunksIn(N, iDone);
+  AssertEq(Got, '[thought:Hmm][thought: ok][msg:Answer][thought:' + #10#10 + 'Again][msg:' + #10#10 + 'Done]',
+           'thinking as agent_thought_chunk, apart from the reply, a paragraph per round in each');
+end;
+
 procedure TestNullId;
 var
   N: Integer;
@@ -763,6 +818,8 @@ begin
     WriteLn('  ok: a null id is echoed as null');
     TestTextDeltas;
     WriteLn('  ok: streamed text goes out piece by piece, a paragraph between rounds');
+    TestThoughtDeltas;
+    WriteLn('  ok: thinking goes out as agent_thought_chunk, apart from the reply');
     TestStdoutIsJSON;
     WriteLn('  ok: every line written is JSON-RPC 2.0');
     Agent.Shutdown;

@@ -59,6 +59,12 @@ type
        usual. Retries and fallbacks are not streamed. nil = OnText only,
        once per round, as before. *)
     OnTextDelta:   TToolLoopTextDeltaFn;
+    (* The model's thinking as it streams (Anthropic thinking, a compatible
+       server's reasoning_content), piece by piece, a round's first marked.
+       It is not part of the reply and never reaches OnText or the history.
+       Either this or OnTextDelta makes a round stream; with this alone the
+       round's text still goes to OnText whole. nil = thinking not shown. *)
+    OnThoughtDelta: TToolLoopTextDeltaFn;
     OnToolCall:    procedure(const Name, ArgsJSON: string) of object;
     OnToolResult:  procedure(const Name, ResultText, Err: string) of object;
     (* Cooperative cancellation. Asked at every SAFE BOUNDARY -- before
@@ -488,16 +494,25 @@ type
   { Passes a streamed round's text on to Cfg.OnTextDelta and keeps it, so
     the round's end knows what was already shown. }
   TLoopTextStreamer = class
-    Fn: TToolLoopTextDeltaFn;
-    Text: string;
+    Fn, ThoughtFn: TToolLoopTextDeltaFn;
+    Text: string;            { the text passed to Fn this round }
+    Thought: Boolean;        { thinking passed to ThoughtFn this round }
     procedure OnChunk(const C: TStreamChunk);
   end;
 
 procedure TLoopTextStreamer.OnChunk(const C: TStreamChunk);
 begin
-  if (C.Kind <> 'text') or (C.Text = '') then Exit;
-  Fn(C.Text, Text = '');
-  Text := Text + C.Text;
+  if C.Text = '' then Exit;
+  if (C.Kind = 'text') and Assigned(Fn) then
+  begin
+    Fn(C.Text, Text = '');
+    Text := Text + C.Text;
+  end
+  else if (C.Kind = 'thinking') and Assigned(ThoughtFn) then
+  begin
+    ThoughtFn(C.Text, not Thought);
+    Thought := True;
+  end;
 end;
 
 type
@@ -2311,12 +2326,15 @@ begin
       SetAttrInt(ChatSpan, 'openclaw.turn.iteration', Iter);
       StreamedText := '';
       try
-        if Assigned(Cfg.OnTextDelta) and Cfg.Provider.SupportsStreaming then
+        if (Assigned(Cfg.OnTextDelta) or Assigned(Cfg.OnThoughtDelta)) and
+           Cfg.Provider.SupportsStreaming then
         begin
-          { Streamed: the caller sees the text as it is written. }
+          { Streamed: the caller sees the text (and thinking) as it is
+            written. }
           Streamer := TLoopTextStreamer.Create;
           try
             Streamer.Fn := Cfg.OnTextDelta;
+            Streamer.ThoughtFn := Cfg.OnThoughtDelta;
             Resp := Cfg.Provider.ChatStream(CallHist, Tools, Cfg.Model,
                                             LiveOptions, Streamer.OnChunk);
           finally
@@ -2604,7 +2622,7 @@ begin
       if (StreamedText <> '') and
          (Copy(Resp.Content, 1, Length(StreamedText)) = StreamedText) then
       begin
-        if Length(Resp.Content) > Length(StreamedText) then
+        if (Length(Resp.Content) > Length(StreamedText)) and Assigned(Cfg.OnTextDelta) then
           Cfg.OnTextDelta(Copy(Resp.Content, Length(StreamedText) + 1, MaxInt), False);
       end
       else if Assigned(Cfg.OnText) then

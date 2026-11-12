@@ -719,6 +719,7 @@ type
     FBlocks: TList;
     function Block(Index: Integer): TAnthBlock;
     procedure Emit(const Text: string);
+    procedure EmitThought(const Text: string);
     function InputOf(B: TAnthBlock): string;
   public
     OnChunk: TStreamCallback;
@@ -775,6 +776,19 @@ begin
     C.Text := Text;
     OnChunk(C);
   end;
+end;
+
+{ Thinking as it streams: passed on as a "thinking" chunk, never added to
+  the reply's text (Chat drops it there too). }
+procedure TAnthropicStreamAcc.EmitThought(const Text: string);
+var
+  C: TStreamChunk;
+begin
+  if (Text = '') or not Assigned(OnChunk) then Exit;
+  C := Default(TStreamChunk);
+  C.Kind := 'thinking';
+  C.Text := Text;
+  OnChunk(C);
 end;
 
 { A tool block's input as Chat reports it: the object, re-serialised. }
@@ -904,7 +918,13 @@ begin
         else if DeltaKind = 'input_json_delta' then
           B.PartialJson := B.PartialJson + D.GetStr('partial_json', '')
         else if DeltaKind = 'thinking_delta' then
-          B.Text := B.Text + D.GetStr('thinking', '')     { kept, not shown: Chat drops it }
+        begin
+          { Kept for a continuation, and passed on as thinking -- not as
+            reply text, which Chat leaves it out of. }
+          T := D.GetStr('thinking', '');
+          B.Text := B.Text + T;
+          EmitThought(T);
+        end
         else if DeltaKind = 'signature_delta' then
           B.Signature := B.Signature + D.GetStr('signature', '')
         else if DeltaKind = 'citations_delta' then
