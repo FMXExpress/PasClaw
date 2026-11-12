@@ -88,6 +88,11 @@ function ReadFileText(const Path: string): string;
 { True when B is well-formed UTF-8 (used by ReadFileText to pick a Latin-1
   fallback for non-UTF-8 files; exposed for tests). }
 function BytesAreValidUTF8(const B: TBytes): Boolean;
+{ S cut to at most MaxLen string elements without splitting a character:
+  under FPC (UTF-8 strings) the cut backs off continuation bytes, under
+  Delphi (UTF-16) it backs off a dangling high surrogate. The result stays
+  valid text for a JSON encoder or a strict reader. }
+function Utf8SafeTruncate(const S: string; MaxLen: Integer): string;
 procedure WriteFileText(const Path, Content: string);
 { On Windows, convert '/' to '\' so RTL path parsing (ExtractFilePath,
   ForceDirectories) handles paths the model passes with forward slashes
@@ -544,11 +549,26 @@ begin
   {$ENDIF}
 end;
 
+function UTF8BytesToStr(const B: TBytes): string; forward;
+
+function Utf8SafeTruncate(const S: string; MaxLen: Integer): string;
+var
+  n: Integer;
+begin
+  if Length(S) <= MaxLen then Exit(S);
+  n := MaxLen;
+  if n < 0 then n := 0;
+  {$IFDEF FPC}
+  while (n > 0) and ((Byte(S[n + 1]) and $C0) = $80) do Dec(n);
+  {$ELSE}
+  if (n > 0) and (Ord(S[n]) >= $D800) and (Ord(S[n]) <= $DBFF) then Dec(n);
+  {$ENDIF}
+  Result := Copy(S, 1, n);
+end;
+
 { True when B holds a well-formed UTF-8 byte sequence (rejects overlong forms,
   stray continuation bytes, and > U+10FFFF leads). Used to decide whether a file
   needs the Latin-1 fallback below. }
-function UTF8BytesToStr(const B: TBytes): string; forward;
-
 function BytesAreValidUTF8(const B: TBytes): Boolean;
 var
   i, n, Extra, j: Integer;

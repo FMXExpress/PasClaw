@@ -6756,25 +6756,6 @@ begin
   end;
 end;
 
-(* Did the provider itself refuse, as opposed to the model answering?
-
-   StatusCode is the signal rather than sniffing the text: providers set
-   200 on success, -1 on socket/TLS/DNS failure, and the real code on an
-   HTTP error. 0 means a provider that never sets it, so it is not
-   treated as a failure. On refusal the loop's Content carries the
-   provider's own message, which is the only useful thing to say. *)
-function ProviderRefused(const Loop: TToolLoopResult; out Msg: string): Boolean;
-begin
-  Msg := '';
-  Result := (Loop.LastResp.StatusCode <> 0) and
-            ((Loop.LastResp.StatusCode < 200) or (Loop.LastResp.StatusCode > 299));
-  if not Result then Exit;
-  Msg := Trim(Loop.Content);
-  if Msg = '' then
-    Msg := Format('the provider call failed (status %d)',
-                  [Loop.LastResp.StatusCode]);
-end;
-
 (* "This model cannot ground", said in whichever words the provider
    chose. Gemini answers a grounding request on a model without it with
    400 "Search Grounding is not supported for model ...".

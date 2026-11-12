@@ -100,6 +100,11 @@ function JsonReadBool(const Body, Key: string; Default: Boolean = False): Boolea
 { Escape a string for embedding inside a JSON string literal (without quotes). }
 function JsonEscape(const S: string): string;
 
+{ The JSON literal of Obj's "id" member, for echoing a JSON-RPC id back
+  unchanged: a string id stays a quoted string, an integer id stays a number,
+  and a missing, null or other id is 'null'. }
+function JsonIdLiteral(Obj: TJsonObject): string;
+
 implementation
 
 {$IFDEF FPC}
@@ -1157,6 +1162,35 @@ begin
   Result := FBacking;
 end;
 
+{$ENDIF}
+
+function JsonIdLiteral(Obj: TJsonObject): string;
+{$IFDEF FPC}
+var
+  D: TJSONData;
+begin
+  Result := 'null';
+  if Obj = nil then Exit;
+  D := fpjson.TJSONObject(Obj.FBacking).Find('id');
+  if D = nil then Exit;
+  case D.JSONType of
+    jtString: Result := '"' + JsonEscape(D.AsString) + '"';
+    jtNumber: Result := IntToStr(D.AsInt64);
+  end;
+end;
+{$ELSE}
+var
+  V: System.JSON.TJSONValue;
+begin
+  Result := 'null';
+  if Obj = nil then Exit;
+  V := System.JSON.TJSONObject(Obj.FBacking).GetValue('id');
+  { TJSONNumber descends from TJSONString, so test it first. }
+  if V is System.JSON.TJSONNumber then
+    Result := IntToStr(System.JSON.TJSONNumber(V).AsInt64)
+  else if V is System.JSON.TJSONString then
+    Result := '"' + JsonEscape(V.Value) + '"';
+end;
 {$ENDIF}
 
 function JsonReadStr(const Body, Key: string; const Default: string): string;

@@ -139,6 +139,7 @@ type
     Thinking:      string;
     MaxTokens:     Integer;
     MaxIterations: Integer;
+    MaxIterationsSet: Boolean;   { --max-iterations was given, even at the default }
     NoTools:       Boolean;
     NoMCP:         Boolean;
     NoHashline:    Boolean;
@@ -437,7 +438,7 @@ begin
     if Argv[i] = '--system'   then begin if i = High(Argv) then Exit(False); A.SystemPrompt := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--thinking' then begin if i = High(Argv) then Exit(False); A.Thinking := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--max-tokens'     then begin if i = High(Argv) then Exit(False); A.MaxTokens     := StrToIntDef(Argv[i + 1], A.MaxTokens);     Inc(i, 2); Continue; end;
-    if Argv[i] = '--max-iterations' then begin if i = High(Argv) then Exit(False); A.MaxIterations := StrToIntDef(Argv[i + 1], A.MaxIterations); Inc(i, 2); Continue; end;
+    if Argv[i] = '--max-iterations' then begin if i = High(Argv) then Exit(False); A.MaxIterations := StrToIntDef(Argv[i + 1], A.MaxIterations); A.MaxIterationsSet := True; Inc(i, 2); Continue; end;
     if Argv[i] = '--no-tools'    then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
@@ -1973,9 +1974,13 @@ begin
         via Loop.FinalSystemPrompt. We override here so the next turn
         ships the summary back to the provider; without it
         BuildSystemPrompt rebuilds the original prompt and the
-        compacted summary leaks out of the conversation. }
+        compacted summary leaks out of the conversation. It was built
+        for the mode of an earlier turn, so point it at the current one:
+        a /mode switch otherwise changes the gate but not what the
+        model is told. }
       if SystemPromptOverride <> '' then
-        LoopCfg.Options.SystemPrompt := SystemPromptOverride;
+        LoopCfg.Options.SystemPrompt :=
+          RetargetModeSection(SystemPromptOverride, A.Mode);
       { Working-state snapshot from prior turns goes BEFORE the
         compacted summary (or the freshly-built default system
         prompt) so the model sees structured edit/shell/error
@@ -2194,16 +2199,32 @@ type
     FMCPLock:  TCriticalSection;
     FSpawn:    TSpawnTool;
     FBg:       TBackgroundSpawnCoordinator;
+    { The shell backend's session id is one process-wide value, so a
+      backend that keeps per-session state (docker: one container per
+      session) gets one turn at a time; the local backend ignores the id
+      and sessions run side by side. A session's container lives until
+      the process exits, when the backend stops every one it started --
+      ACP has no "this thread is done", and a reloaded session keeps its
+      id, so it keeps its container too. }
+    FPerSessionShell: Boolean;
+    FTurnLock: TCriticalSection;
+    { --profile or $PASCLAW_PROFILE chose this process's profile on
+      purpose, over whatever a loaded session was created under. }
+    FProfileChosen: Boolean;
     procedure ConnectClientMCP(Servers: TJsonArray);
   public
     constructor Create(Cfg: TConfig; const A: TAgentArgs; Provider: ILLMProvider;
-                       const Model: string);
+                       const Model: string; ShellKind: TShellBackendKind;
+                       ProfileChosen: Boolean);
     destructor Destroy; override;
     function OpenSession(S: TACPSession; McpServers: TJsonArray; Load: Boolean;
                          out History: TMessageArray; out NotFound: Boolean;
                          out Err: string): Boolean; override;
     function RunPrompt(S: TACPSession; const PromptText: string;
                        Turn: TACPTurn): TACPTurnOutcome; override;
+  private
+    function RunPromptLocked(S: TACPSession; St: TACPSessionState;
+                             const PromptText: string; Turn: TACPTurn): TACPTurnOutcome;
   end;
 
   { stdout, one line per message, flushed: the client reads as we write. }
@@ -2224,15 +2245,19 @@ begin
 end;
 
 constructor TACPLoopHost.Create(Cfg: TConfig; const A: TAgentArgs;
-  Provider: ILLMProvider; const Model: string);
+  Provider: ILLMProvider; const Model: string; ShellKind: TShellBackendKind;
+  ProfileChosen: Boolean);
 begin
   inherited Create;
   FCfg := Cfg;
   FArgs := A;
   FProvider := Provider;
   FModel := Model;
+  FPerSessionShell := ShellKind <> sbLocal;
+  FProfileChosen := ProfileChosen;
   FMCPNames := TStringList.Create;
   FMCPLock := TCriticalSection.Create;
+  FTurnLock := TCriticalSection.Create;
   FReg := nil;
   if not A.NoTools then
   begin
@@ -2259,6 +2284,7 @@ begin
   FSpawn.Free;
   FReg.Free;
   FMCPLock.Free;
+  FTurnLock.Free;
   FMCPNames.Free;
   inherited;
 end;
@@ -2275,7 +2301,6 @@ var
   Env: TJsonArray;
   Name, Typ, ArgStr, A: string;
   Add: array of TMCPServer;
-  Saved: array of TMCPServer;
   NewClients: TMCPClientList;
 begin
   if (Servers = nil) or (FReg = nil) or FArgs.NoMCP then Exit;
@@ -2322,18 +2347,8 @@ begin
       FMCPNames.Add(Name);
     end;
     if Length(Add) = 0 then Exit;
-    { ConnectMCPServers reads the list from the config; hand it the new
-      servers alone, then put the configured list back. }
-    SetLength(Saved, Length(FCfg.MCPServers));
-    for i := 0 to High(FCfg.MCPServers) do Saved[i] := FCfg.MCPServers[i];
-    SetLength(FCfg.MCPServers, Length(Add));
-    for i := 0 to High(Add) do FCfg.MCPServers[i] := Add[i];
-    try
-      NewClients := ConnectMCPServers(FCfg, FReg);
-    finally
-      SetLength(FCfg.MCPServers, Length(Saved));
-      for i := 0 to High(Saved) do FCfg.MCPServers[i] := Saved[i];
-    end;
+    { The shared config stays as it is: turns of other sessions read it. }
+    NewClients := ConnectMCPServerList(Add, FCfg, FReg);
     for i := 0 to High(NewClients) do
     begin
       SetLength(FMCP, Length(FMCP) + 1);
@@ -2349,6 +2364,7 @@ function TACPLoopHost.OpenSession(S: TACPSession; McpServers: TJsonArray;
   out Err: string): Boolean;
 var
   St: TACPSessionState;
+  Running: string;
 begin
   Result := False;
   NotFound := False;
@@ -2372,9 +2388,28 @@ begin
       Err := 'no such session: ' + S.Id;
       Exit;
     end;
+    { A session keeps the profile it was created under (a `security`
+      session stays sandboxed), as `pasclaw agent --session` does. This
+      process has one config for every session, so it cannot switch to
+      that profile; it refuses rather than run the session without it. }
+    if (not FProfileChosen) and (St.Session.Meta.Profile <> '') and
+       (St.Session.Meta.Profile <> FCfg.ProfileName) then
+    begin
+      if FCfg.ProfileName = '' then Running := 'no profile'
+      else Running := 'profile "' + FCfg.ProfileName + '"';
+      Err := Format('session %s was created under profile "%s", and this agent ' +
+                    'runs %s -- start it with `pasclaw acp --profile %s` to open it',
+                    [S.Id, St.Session.Meta.Profile, Running, St.Session.Meta.Profile]);
+      St.Free;
+      Exit;
+    end;
     History := Copy(St.Session.Messages);
     St.SysOverride := St.Session.Meta.SystemPromptOverride;
   end;
+  { Where the session works is the editor's project, not PasClaw's
+    workspace (what Save records by default): `pasclaw resume <id>` goes
+    back to it. }
+  St.Session.Meta.Location := S.Cwd;
   ConnectClientMCP(McpServers);
   S.Mode := FArgs.Mode;
   S.Data := St;
@@ -2385,13 +2420,7 @@ function TACPLoopHost.RunPrompt(S: TACPSession; const PromptText: string;
   Turn: TACPTurn): TACPTurnOutcome;
 var
   St: TACPSessionState;
-  A: TAgentArgs;
-  Handlers: TLoopHandlers;
-  LoopCfg: TToolLoopConfig;
-  Loop: TToolLoopResult;
-  Msgs: TMessageArray;
-  WorkingStateBlock, RoutedNm: string;
-  i: Integer;
+  SavedWs: string;
 begin
   Result := Default(TACPTurnOutcome);
   Result.StopReason := 'end_turn';
@@ -2401,11 +2430,46 @@ begin
     Result.Error := 'no provider configured -- run `pasclaw onboard`';
     Exit;
   end;
+  if FPerSessionShell then
+  begin
+    FTurnLock.Enter;
+    SetCurrentSessionId(S.Id);
+  end;
+  { The editor's project is this thread's workspace for the whole turn,
+    not only for tool dispatches (LoopCfg.Workspace): the system prompt is
+    built from it too -- its Workspace section, the project's AGENTS.md and
+    instruction files. Sessions and memory stay in PasClaw's home. }
+  SavedWs := ThreadSandboxWorkspace;
+  SetThreadSandboxWorkspace(S.Cwd);
+  try
+    Result := RunPromptLocked(S, St, PromptText, Turn);
+  finally
+    SetThreadSandboxWorkspace(SavedWs);
+    if FPerSessionShell then
+    begin
+      SetCurrentSessionId('');
+      FTurnLock.Leave;
+    end;
+  end;
+end;
+
+function TACPLoopHost.RunPromptLocked(S: TACPSession; St: TACPSessionState;
+  const PromptText: string; Turn: TACPTurn): TACPTurnOutcome;
+var
+  A: TAgentArgs;
+  Handlers: TLoopHandlers;
+  LoopCfg: TToolLoopConfig;
+  Loop: TToolLoopResult;
+  Msgs: TMessageArray;
+  WorkingStateBlock, RoutedNm, Failed: string;
+  i: Integer;
+begin
+  Result := Default(TACPTurnOutcome);
+  Result.StopReason := 'end_turn';
   A := FArgs;
   A.Mode := S.Mode;
-  { The model should know where it is: the editor's project, which is
-    where its tools now resolve relative paths -- not PasClaw's own
-    workspace, which the rest of the system prompt describes. }
+  { The model should know it is in an editor, and that the project it
+    names is the code the user means. }
   A.SystemPrompt := Trim(FArgs.SystemPrompt + sLineBreak + sLineBreak +
     'You are running inside an editor through the Agent Client Protocol. ' +
     'The user''s project is ' + S.Cwd + ': tools resolve relative paths ' +
@@ -2421,7 +2485,7 @@ begin
     Handlers.MetaRef := @St.Session.Meta;
     LoopCfg := BuildLoopConfig(FCfg, FProvider, FReg, FModel, A, Handlers, PromptText);
     if St.SysOverride <> '' then
-      LoopCfg.Options.SystemPrompt := St.SysOverride;
+      LoopCfg.Options.SystemPrompt := RetargetModeSection(St.SysOverride, S.Mode);
     WorkingStateBlock := FormatWorkingStateBlock(St.Session.Meta);
     if WorkingStateBlock <> '' then
       LoopCfg.Options.SystemPrompt := WorkingStateBlock + sLineBreak +
@@ -2455,7 +2519,18 @@ begin
       SetLength(Msgs, Length(Loop.FinalMessages));
       for i := 0 to High(Loop.FinalMessages) do Msgs[i] := Loop.FinalMessages[i];
     end;
-    if Trim(Loop.Content) <> '' then
+    { A provider that could not answer leaves its error in Content. That
+      is the turn's error, not the model's reply: the editor shows it as
+      one, and the session does not keep it as something the assistant
+      said. Tool work done before the failure stays, as on cancel; a
+      prompt nothing answered does not. }
+    if ProviderRefused(Loop, Failed) then
+    begin
+      Result.Error := Failed;
+      if (Length(Msgs) > 0) and (Msgs[High(Msgs)].Role = mrUser) then
+        SetLength(Msgs, Length(Msgs) - 1);
+    end
+    else if Trim(Loop.Content) <> '' then
     begin
       SetLength(Msgs, Length(Msgs) + 1);
       Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
@@ -2525,8 +2600,8 @@ begin
     Exit(1);
   end;
   { An editor turn does real work; the CLI's default of 8 rounds is a
-    one-shot's budget. An explicit --max-iterations still wins. }
-  if A.MaxIterations = DefaultAgentArgs.MaxIterations then A.MaxIterations := 50;
+    one-shot's budget. An explicit --max-iterations still wins, 8 included. }
+  if not A.MaxIterationsSet then A.MaxIterations := 50;
   Cfg := LoadConfig(A.Profile);
   try
     if A.OrientOverride = ooOn then Cfg.OrientTaskAware := True
@@ -2551,7 +2626,8 @@ begin
     end;
     if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
     LogInfo('acp: ready (model %s)', [Model]);
-    Host := TACPLoopHost.Create(Cfg, A, Provider, Model);
+    Host := TACPLoopHost.Create(Cfg, A, Provider, Model, KindSelected,
+      (A.Profile <> '') or (GetEnvironmentVariable('PASCLAW_PROFILE') <> ''));
     Out_ := TACPStdout.Create;
     Agent := TACPAgent.Create(Host, Out_.WriteLine, FormatVersion);
     Agent.AskTimeoutMs := Cardinal(Cfg.PermissionsAskTimeoutSec) * 1000;

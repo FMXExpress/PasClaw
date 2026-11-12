@@ -172,20 +172,6 @@ begin
   LogDebug('session_search query=%s k=%d hits=%d', [Query, K, Length(Hits)]);
 end;
 
-{ Truncate S to at most MaxBytes WITHOUT splitting a UTF-8 sequence: back the
-  cut off while the first excluded byte is a continuation byte (10xxxxxx), so
-  the result stays valid UTF-8 (a mid-character cut would corrupt the tool
-  output and can be rejected downstream in provider-request JSON). }
-function Utf8SafeTruncate(const S: string; MaxBytes: Integer): string;
-var
-  n: Integer;
-begin
-  if Length(S) <= MaxBytes then Exit(S);
-  n := MaxBytes;
-  while (n > 0) and ((Byte(S[n + 1]) and $C0) = $80) do Dec(n);
-  Result := Copy(S, 1, n);
-end;
-
 function Tool_SessionRead(const ArgsJSON: string; out ErrMsg: string): string;
 const
   DefaultCount = 20;

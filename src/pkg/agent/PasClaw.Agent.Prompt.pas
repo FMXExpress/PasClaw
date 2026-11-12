@@ -129,6 +129,16 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
    Returns '' for pmBuild, so a caller can append unconditionally. *)
 function BuildModeSection(Mode: TPasClawMode): string;
 
+(* Point a system prompt built earlier at Mode.
+
+   A long-running chat keeps its system prompt across turns (it can carry
+   a compaction summary), so a mode switched mid-chat would otherwise leave
+   the old mode's directive in place: the gate changes, the model is not
+   told. This drops every other mode's section, as BuildSystemPrompt
+   emitted it, and puts Mode's section first when it is not already there.
+   pmBuild has no section, so switching to build only removes. *)
+function RetargetModeSection(const Prompt: string; Mode: TPasClawMode): string;
+
 (* Give a caller-supplied system message the mode's directive.
 
    The counterpart to BuildModeSection, for exactly the branch that
@@ -1562,6 +1572,26 @@ begin
   else
     Result := '';
   end;
+end;
+
+function RetargetModeSection(const Prompt: string; Mode: TPasClawMode): string;
+var
+  M: TPasClawMode;
+  Sec: string;
+begin
+  Result := Prompt;
+  for M := Low(TPasClawMode) to High(TPasClawMode) do
+  begin
+    if M = Mode then Continue;
+    Sec := BuildModeSection(M);
+    if Sec = '' then Continue;
+    Result := StringReplace(Result, Sec + SectionSep, '', [rfReplaceAll]);
+    Result := StringReplace(Result, SectionSep + Sec, '', [rfReplaceAll]);
+    Result := StringReplace(Result, Sec, '', [rfReplaceAll]);
+  end;
+  Sec := BuildModeSection(Mode);
+  if (Sec <> '') and (Pos(Sec, Result) = 0) then
+    Result := AppendSection(Sec, Result);
 end;
 
 procedure InjectModeDirective(var Msgs: TMessageArray; Mode: TPasClawMode);

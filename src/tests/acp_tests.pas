@@ -17,6 +17,9 @@ program acp_tests;
       "cancelled", a second prompt on a busy session is refused
     - load: the history is replayed, in order, before the response
     - a host that raises: a JSON-RPC error, not a dead agent
+    - a call the turn never finished: shown failed before the turn answers,
+      and not left to take the next turn's same-named result
+    - a long result cut for display stays valid UTF-8
 
   acp_e2e_test.py drives the real binary over stdio against a fake model;
   this file pins the protocol layer alone, fast.
@@ -216,13 +219,32 @@ begin
     while not Turn.Cancelled and (GetTickCount64 < Deadline) do Sleep(10);
   end
   else if Pos('boom', PromptText) > 0 then
-    raise Exception.Create('the model went away');
+    raise Exception.Create('the model went away')
+  else if Pos('orphan', PromptText) > 0 then
+  begin
+    { Two calls announced, one result: the loop stopped between them. }
+    Turn.ToolCall('shell_exec', '{"command":"a"}');
+    Turn.ToolCall('shell_exec', '{"command":"b"}');
+    Turn.ToolResult('shell_exec', 'a done', '');
+  end
+  else if Pos('next', PromptText) > 0 then
+  begin
+    Turn.ToolCall('shell_exec', '{"command":"c"}');
+    Turn.ToolResult('shell_exec', 'c done', '');
+  end
+  else if Pos('utf8', PromptText) > 0 then
+  begin
+    { A two-byte character straddling the 32 KiB display cut. }
+    Turn.ToolCall('read_file', '{"path":"big.txt"}');
+    Turn.ToolResult('read_file', StringOfChar('a', 32 * 1024 - 1) + #$C3#$A9 + 'tail', '');
+  end;
 end;
 
 var
   Cap: TCapture;
   Host: TFakeHost;
   Agent: TACPAgent;
+  ScratchDir: string;
 
 procedure Send(const L: string);
 begin
@@ -537,6 +559,80 @@ begin
   AssertTrue(Cap.WaitFor('"id":52,"result"', N) >= 0, 'a loaded session takes prompts');
 end;
 
+procedure TestOpenCallsClose;
+var
+  N, iB, iDone, iC: Integer;
+begin
+  N := Cap.Count;
+  Send(Prompt('60', 'sess-1', 'orphan'));
+  iDone := Cap.WaitFor('"id":60,"result"', N);
+  AssertTrue(iDone >= 0, 'the turn answers');
+  { call ids so far: call_1..call_4 (basic), call_5..call_7 (asks), call_8..
+    in later turns -- find b's id from its announcement instead. }
+  iB := Cap.WaitFor('"rawInput":{"command":"b"}', N, 100);
+  AssertTrue(iB >= 0, 'b was announced');
+  iC := Cap.WaitFor('"sessionUpdate":"tool_call_update","toolCallId":"' +
+    Copy(Cap.Line(iB), Pos('"toolCallId":"', Cap.Line(iB)) + 14,
+         Pos('","title"', Cap.Line(iB)) - Pos('"toolCallId":"', Cap.Line(iB)) - 14) + '"', N, 100);
+  AssertTrue((iC >= 0) and (iC < iDone), 'b gets an update before the turn answers');
+  AssertTrue(Pos('"status":"failed"', Cap.Line(iC)) > 0, 'as failed');
+  AssertTrue(Pos('ended before this call finished', Cap.Line(iC)) > 0, 'saying why');
+  { The next turn's result lands on its own call, not on b's. }
+  N := Cap.Count;
+  Send(Prompt('61', 'sess-1', 'next'));
+  AssertTrue(Cap.WaitFor('"id":61,"result"', N) >= 0, 'the next turn answers');
+  iC := Cap.WaitFor('"rawInput":{"command":"c"}', N, 100);
+  AssertTrue(iC >= 0, 'c was announced');
+  iC := Cap.WaitFor('"sessionUpdate":"tool_call_update","toolCallId":"' +
+    Copy(Cap.Line(iC), Pos('"toolCallId":"', Cap.Line(iC)) + 14,
+         Pos('","title"', Cap.Line(iC)) - Pos('"toolCallId":"', Cap.Line(iC)) - 14) + '"', N, 100);
+  AssertTrue((iC >= 0) and (Pos('c done', Cap.Line(iC)) > 0),
+             'c''s result goes to c''s call');
+end;
+
+procedure TestUtf8Cut;
+var
+  N, iUpd: Integer;
+  L: string;
+  B: TBytes;
+begin
+  N := Cap.Count;
+  Send(Prompt('70', 'sess-1', 'utf8'));
+  AssertTrue(Cap.WaitFor('"id":70,"result"', N) >= 0, 'the turn answers');
+  iUpd := Cap.WaitFor('shortened for display', N, 100);
+  AssertTrue(iUpd >= 0, 'the long result is cut for display');
+  L := Cap.Line(iUpd);
+  SetLength(B, Length(L));
+  if Length(L) > 0 then Move(L[1], B[0], Length(L));
+  AssertTrue(BytesAreValidUTF8(B), 'and the cut line is still valid UTF-8');
+  AssertTrue(Utf8SafeTruncate('a' + #$C3#$A9, 2) = 'a', 'the cut backs off a split character');
+  AssertTrue(Utf8SafeTruncate('a' + #$C3#$A9, 3) = 'a' + #$C3#$A9, 'and keeps a whole one');
+end;
+
+procedure TestNullId;
+var
+  N: Integer;
+begin
+  N := Cap.Count;
+  Send('{"jsonrpc":"2.0","id":null,"method":"fs/frobnicate","params":{}}');
+  AssertTrue(Cap.Has('"id":null,"error":{"code":-32601', N), 'a null id is echoed as null');
+end;
+
+procedure RemoveScratch(const Dir: string);
+var
+  SR: TSearchRec;
+begin
+  if FindFirst(IncludeTrailingPathDelimiter(Dir) + '*', faAnyFile, SR) = 0 then
+  begin
+    repeat
+      if (SR.Name <> '.') and (SR.Name <> '..') then
+        DeleteFile(IncludeTrailingPathDelimiter(Dir) + SR.Name);
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+  RemoveDir(Dir);
+end;
+
 procedure TestStdoutIsJSON;
 var
   i: Integer;
@@ -563,6 +659,7 @@ begin
   Host := TFakeHost.Create;
   Host.Dir := IncludeTrailingPathDelimiter(GetTempDir(False)) + 'pasclaw-acp-tests-' +
               IntToStr(GetProcessID);
+  ScratchDir := Host.Dir;
   ForceDirectories(Host.Dir);
   Agent := TACPAgent.Create(Host, Cap.WriteLine, 'test');
   try
@@ -580,13 +677,21 @@ begin
     WriteLn('  ok: set_mode takes only mode ids; a raising host is an error, not a crash');
     TestLoad;
     WriteLn('  ok: load replays the conversation in order before answering');
+    TestOpenCallsClose;
+    WriteLn('  ok: a call left open is shown failed before the answer, and takes no later result');
+    TestUtf8Cut;
+    WriteLn('  ok: a result cut for display stays valid UTF-8');
+    TestNullId;
+    WriteLn('  ok: a null id is echoed as null');
     TestStdoutIsJSON;
     WriteLn('  ok: every line written is JSON-RPC 2.0');
     Agent.Shutdown;
   finally
     Agent.Free;
+    RemoveScratch(Host.Dir);
     Host.Free;
     Cap.Free;
   end;
+  AssertTrue(not DirectoryExists(ScratchDir), 'the scratch project is removed');
   WriteLn('PASS');
 end.
