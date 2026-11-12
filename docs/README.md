@@ -29,6 +29,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 ## Interfaces
 
 - [Gateway and OpenAI-compatible API](./gateway.md) — `/v1/chat/completions`, `/v1/responses`, `/v1/mcp`, embedded web UI, route table.
+- [Editors: the Agent Client Protocol](./acp.md) — `pasclaw acp` for Zed, JetBrains and other ACP clients: tool calls with diffs, permission prompts, plans, modes, saved sessions.
 - [Desktop](./desktop.md) — the desktop client: workspaces, projects/tasks/jobs, the app factory, answer pages, and the system suite.
 - [Workspaces plan](./workspaces-plan.md) — making a workspace a real isolation boundary, and putting virtual desktops inside it.
 - [Auto-router upgrade plan](./autoroute-upgrade-plan.md) — typed reasons, circuits, one cheap tier, and an offline tuning loop, borrowed at scale from experiential.

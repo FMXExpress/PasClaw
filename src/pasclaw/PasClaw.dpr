@@ -60,6 +60,8 @@ begin
   if ParamCount < 1 then Exit;
   Cmd := ParamStr(1);
   if Cmd = '__tool' then Exit(True);
+  { `pasclaw acp`: the editor reads ACP JSON-RPC from our stdout. }
+  if Cmd = 'acp' then Exit(True);
   if Cmd <> 'mcp' then Exit;
   for i := 2 to ParamCount do
   begin

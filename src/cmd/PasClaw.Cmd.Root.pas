@@ -147,7 +147,8 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 41);
+  SetLength(Sub, 42);
+  Sub[41] := 'acp          Run as an Agent Client Protocol agent over stdio (Zed and other editors)';
   Sub[40] := 'permissions  List the allow/deny/ask rules, or test what one tool call would get';
   Sub[36] := 'backup       Zip the workspace + redacted config + restore notes; rotate old backups';
   Sub[37] := 'restore      Put a backup''s workspace back under PASCLAW_HOME';
@@ -204,6 +205,7 @@ begin
   if      Cmd = 'config'   then Result := Cmd_Config_Run(Argv)
   else if Cmd = 'onboard'  then Result := Cmd_Onboard_Run(Argv)
   else if Cmd = 'agent'    then Result := Cmd_Agent_Run(Argv)
+  else if Cmd = 'acp'      then Result := Cmd_ACP_Run(Argv)
   else if Cmd = 'auth'     then Result := Cmd_Auth_Run(Argv)
   else if Cmd = 'gateway'  then Result := Cmd_Gateway_Run(Argv)
   else if Cmd = 'serve'    then Result := Cmd_Serve_Run(Argv)

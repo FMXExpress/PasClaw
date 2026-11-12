@@ -21,6 +21,11 @@ interface
 
 function Cmd_Agent_Run(const Argv: array of string): Integer;
 
+(* `pasclaw acp` -- PasClaw as an Agent Client Protocol agent over stdio,
+   for Zed and any other ACP client. Same tools, permission rules, sessions
+   and modes as `pasclaw agent`; the protocol lives in PasClaw.ACP. *)
+function Cmd_ACP_Run(const Argv: array of string): Integer;
+
 implementation
 
 uses
@@ -89,7 +94,10 @@ uses
   PasClaw.Agent.Steering,
   PasClaw.Checkpoints,
   PasClaw.Agent.Goals,
-  PasClaw.Markdown.Render;
+  PasClaw.Markdown.Render,
+  SyncObjs,
+  PasClaw.JSON,
+  PasClaw.ACP;                     { the Agent Client Protocol, for `pasclaw acp` }
 
 { Every path that creates a persisted session goes through here, so the
   profile stamp cannot be forgotten on one of them. Codex on #551 caught
@@ -2152,6 +2160,416 @@ begin
       SetCurrentSessionId('');
       Session.Free;
     end;
+  end;
+end;
+
+{ ============================================================
+  `pasclaw acp` -- the loop behind the Agent Client Protocol.
+  ============================================================ }
+
+type
+  (* One ACP session's PasClaw side: the persisted session and the
+     compacted system prompt carried from turn to turn, as RunInteractive
+     carries them. *)
+  TACPSessionState = class
+    Session:     TSession;
+    SysOverride: string;
+    destructor Destroy; override;
+  end;
+
+  (* The real TACPHost: PasClaw's tool loop, built once per process the way
+     RunSingleTurn builds it, shared by every session the client opens.
+     What differs per session is passed per turn -- the editor's project
+     directory as the loop's workspace, the session id as the steering /
+     background / cache key, the mode. *)
+  TACPLoopHost = class(TACPHost)
+  private
+    FCfg:      TConfig;
+    FArgs:     TAgentArgs;
+    FProvider: ILLMProvider;
+    FModel:    string;
+    FReg:      TToolRegistry;
+    FMCP:      TMCPClientList;
+    FMCPNames: TStringList;        { servers connected so far, by name }
+    FMCPLock:  TCriticalSection;
+    FSpawn:    TSpawnTool;
+    FBg:       TBackgroundSpawnCoordinator;
+    procedure ConnectClientMCP(Servers: TJsonArray);
+  public
+    constructor Create(Cfg: TConfig; const A: TAgentArgs; Provider: ILLMProvider;
+                       const Model: string);
+    destructor Destroy; override;
+    function OpenSession(S: TACPSession; McpServers: TJsonArray; Load: Boolean;
+                         out History: TMessageArray; out NotFound: Boolean;
+                         out Err: string): Boolean; override;
+    function RunPrompt(S: TACPSession; const PromptText: string;
+                       Turn: TACPTurn): TACPTurnOutcome; override;
+  end;
+
+  { stdout, one line per message, flushed: the client reads as we write. }
+  TACPStdout = class
+    procedure WriteLine(const Line: string);
+  end;
+
+destructor TACPSessionState.Destroy;
+begin
+  Session.Free;
+  inherited;
+end;
+
+procedure TACPStdout.WriteLine(const Line: string);
+begin
+  WriteLn(Output, Line);
+  Flush(Output);
+end;
+
+constructor TACPLoopHost.Create(Cfg: TConfig; const A: TAgentArgs;
+  Provider: ILLMProvider; const Model: string);
+begin
+  inherited Create;
+  FCfg := Cfg;
+  FArgs := A;
+  FProvider := Provider;
+  FModel := Model;
+  FMCPNames := TStringList.Create;
+  FMCPLock := TCriticalSection.Create;
+  FReg := nil;
+  if not A.NoTools then
+  begin
+    FReg := NewBuiltinRegistry((not A.NoHashline) and Cfg.HashlineEnabled,
+                               Cfg.VaultToolsEnabled,
+                               HasConfiguredWebSearchProvider(Cfg),
+                               Cfg.WebFetchEnabled,
+                               (Cfg.ToolOutputCap > 0) or Cfg.CondenseReversible,
+                               Cfg.CronToolEnabled,
+                               Cfg.DatabaseJSON,
+                               Cfg.DesktopToolsEnabled,
+                               Cfg.Worktree.Enabled);
+    RegisterSkillManageTool(FReg, Cfg);
+    RegisterSkillDisclosureTools(FReg, Cfg);
+  end;
+  FMCP := ConnectMCP(Cfg, FReg, A.NoMCP);
+  FSpawn := MaybeRegisterSpawnTool(Cfg, Provider, FReg, Model);
+  FBg := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, FReg, Model);
+end;
+
+destructor TACPLoopHost.Destroy;
+begin
+  FreeMCPClients(FMCP);
+  FSpawn.Free;
+  FReg.Free;
+  FMCPLock.Free;
+  FMCPNames.Free;
+  inherited;
+end;
+
+(* The client's own MCP servers (session/new mcpServers). Stdio only -- the
+   one transport every ACP agent must take, and the only one advertised.
+   Connected into the shared registry once per name: a client typically
+   sends the same servers with every session. *)
+procedure TACPLoopHost.ConnectClientMCP(Servers: TJsonArray);
+var
+  i, j: Integer;
+  O: TJsonObject;
+  Args: TJsonArray;
+  Env: TJsonArray;
+  Name, Typ, ArgStr, A: string;
+  Add: array of TMCPServer;
+  Saved: array of TMCPServer;
+  NewClients: TMCPClientList;
+begin
+  if (Servers = nil) or (FReg = nil) or FArgs.NoMCP then Exit;
+  SetLength(Add, 0);
+  FMCPLock.Enter;
+  try
+    for i := 0 to Servers.Count - 1 do
+    begin
+      O := Servers.ItemObject(i);
+      if O = nil then Continue;
+      Name := O.GetStr('name', '');
+      Typ := O.GetStr('type', '');
+      if (Typ <> '') and (Typ <> 'stdio') then
+      begin
+        LogWarn('acp: mcp server "%s" uses %s, which this agent does not take (stdio only)',
+                [Name, Typ]);
+        Continue;
+      end;
+      if (Name = '') or (O.GetStr('command', '') = '') or
+         (FMCPNames.IndexOf(Name) >= 0) then
+        Continue;
+      { args go through the launcher's quote-aware split, so quote each. }
+      ArgStr := '';
+      Args := O.ChildArray('args');
+      if Args <> nil then
+        for j := 0 to Args.Count - 1 do
+        begin
+          A := Args.ItemStr(j);
+          if Pos('"', A) > 0 then A := '''' + A + '''' else A := '"' + A + '"';
+          if ArgStr <> '' then ArgStr := ArgStr + ' ';
+          ArgStr := ArgStr + A;
+        end;
+      Env := O.ChildArray('env');
+      if (Env <> nil) and (Env.Count > 0) then
+        LogWarn('acp: mcp server "%s": its env is not passed on -- PasClaw''s MCP ' +
+                'launcher starts servers with the agent''s own environment', [Name]);
+      SetLength(Add, Length(Add) + 1);
+      Add[High(Add)] := Default(TMCPServer);
+      Add[High(Add)].Name := Name;
+      Add[High(Add)].Cmd := O.GetStr('command', '');
+      Add[High(Add)].Args := ArgStr;
+      Add[High(Add)].Enabled := True;
+      Add[High(Add)].CodeMode := FCfg.MCPCodeModeDefault;
+      FMCPNames.Add(Name);
+    end;
+    if Length(Add) = 0 then Exit;
+    { ConnectMCPServers reads the list from the config; hand it the new
+      servers alone, then put the configured list back. }
+    SetLength(Saved, Length(FCfg.MCPServers));
+    for i := 0 to High(FCfg.MCPServers) do Saved[i] := FCfg.MCPServers[i];
+    SetLength(FCfg.MCPServers, Length(Add));
+    for i := 0 to High(Add) do FCfg.MCPServers[i] := Add[i];
+    try
+      NewClients := ConnectMCPServers(FCfg, FReg);
+    finally
+      SetLength(FCfg.MCPServers, Length(Saved));
+      for i := 0 to High(Saved) do FCfg.MCPServers[i] := Saved[i];
+    end;
+    for i := 0 to High(NewClients) do
+    begin
+      SetLength(FMCP, Length(FMCP) + 1);
+      FMCP[High(FMCP)] := NewClients[i];
+    end;
+  finally
+    FMCPLock.Leave;
+  end;
+end;
+
+function TACPLoopHost.OpenSession(S: TACPSession; McpServers: TJsonArray;
+  Load: Boolean; out History: TMessageArray; out NotFound: Boolean;
+  out Err: string): Boolean;
+var
+  St: TACPSessionState;
+begin
+  Result := False;
+  NotFound := False;
+  Err := '';
+  SetLength(History, 0);
+  if Load and not IsSafeSessionId(S.Id) then
+  begin
+    NotFound := True;
+    Err := 'no such session: ' + S.Id;
+    Exit;
+  end;
+  if not Load then S.Id := NewSessionId;
+  St := TACPSessionState.Create;
+  St.Session := NewStampedSession(S.Id, FCfg);
+  if Load then
+  begin
+    if not St.Session.MetaExists then
+    begin
+      St.Free;
+      NotFound := True;
+      Err := 'no such session: ' + S.Id;
+      Exit;
+    end;
+    History := Copy(St.Session.Messages);
+    St.SysOverride := St.Session.Meta.SystemPromptOverride;
+  end;
+  ConnectClientMCP(McpServers);
+  S.Mode := FArgs.Mode;
+  S.Data := St;
+  Result := True;
+end;
+
+function TACPLoopHost.RunPrompt(S: TACPSession; const PromptText: string;
+  Turn: TACPTurn): TACPTurnOutcome;
+var
+  St: TACPSessionState;
+  A: TAgentArgs;
+  Handlers: TLoopHandlers;
+  LoopCfg: TToolLoopConfig;
+  Loop: TToolLoopResult;
+  Msgs: TMessageArray;
+  WorkingStateBlock, RoutedNm: string;
+  i: Integer;
+begin
+  Result := Default(TACPTurnOutcome);
+  Result.StopReason := 'end_turn';
+  St := TACPSessionState(S.Data);
+  if FProvider = nil then
+  begin
+    Result.Error := 'no provider configured -- run `pasclaw onboard`';
+    Exit;
+  end;
+  A := FArgs;
+  A.Mode := S.Mode;
+  { The model should know where it is: the editor's project, which is
+    where its tools now resolve relative paths -- not PasClaw's own
+    workspace, which the rest of the system prompt describes. }
+  A.SystemPrompt := Trim(FArgs.SystemPrompt + sLineBreak + sLineBreak +
+    'You are running inside an editor through the Agent Client Protocol. ' +
+    'The user''s project is ' + S.Cwd + ': tools resolve relative paths ' +
+    'there, and that is the code the user means. The editor shows your ' +
+    'tool calls and file edits as you make them.');
+  Msgs := Copy(St.Session.Messages);
+  SetLength(Msgs, Length(Msgs) + 1);
+  Msgs[High(Msgs)] := MakeMessage(mrUser, PromptText);
+
+  Handlers := TLoopHandlers.Create;
+  try
+    Handlers.Quiet := True;
+    Handlers.MetaRef := @St.Session.Meta;
+    LoopCfg := BuildLoopConfig(FCfg, FProvider, FReg, FModel, A, Handlers, PromptText);
+    if St.SysOverride <> '' then
+      LoopCfg.Options.SystemPrompt := St.SysOverride;
+    WorkingStateBlock := FormatWorkingStateBlock(St.Session.Meta);
+    if WorkingStateBlock <> '' then
+      LoopCfg.Options.SystemPrompt := WorkingStateBlock + sLineBreak +
+                                      LoopCfg.Options.SystemPrompt;
+    { The loop's events are the protocol's events. }
+    LoopCfg.OnText       := Turn.Text;
+    LoopCfg.OnToolCall   := Turn.ToolCall;
+    LoopCfg.OnToolResult := Turn.ToolResult;
+    LoopCfg.OnAsk        := Turn.Ask;
+    LoopCfg.ShouldCancel := Turn.Cancelled;
+    LoopCfg.Workspace          := S.Cwd;
+    LoopCfg.SteeringKey        := S.Id;   { also where "allow for this session" is kept }
+    LoopCfg.BackgroundDrainKey := S.Id;
+    LoopCfg.Options.CacheKey   := S.Id;
+    LoopCfg.Identity := MakeIdentity('acp',
+      GetEnvironmentVariable({$IFDEF MSWINDOWS}'USERNAME'{$ELSE}'USER'{$ENDIF}));
+    if LoopCfg.Identity.UserId = '' then LoopCfg.Identity.UserId := 'local';
+    ApplyAutoRoute(LoopCfg, FCfg, Msgs, RoutedNm);
+
+    if not RunToolLoop(LoopCfg, Msgs, Loop) then
+    begin
+      if Turn.Cancelled then Exit;
+      Result.Error := Format('the model call failed (HTTP %d)', [Loop.LastResp.StatusCode]);
+      Exit;
+    end;
+
+    { History as RunInteractive keeps it: the loop's final messages (with
+      any compaction applied) and the closing answer. }
+    if Length(Loop.FinalMessages) > 0 then
+    begin
+      SetLength(Msgs, Length(Loop.FinalMessages));
+      for i := 0 to High(Loop.FinalMessages) do Msgs[i] := Loop.FinalMessages[i];
+    end;
+    if Trim(Loop.Content) <> '' then
+    begin
+      SetLength(Msgs, Length(Msgs) + 1);
+      Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
+    end;
+    St.SysOverride := Loop.FinalSystemPrompt;
+    if (WorkingStateBlock <> '') and
+       (Copy(St.SysOverride, 1, Length(WorkingStateBlock) + Length(sLineBreak)) =
+        WorkingStateBlock + sLineBreak) then
+      St.SysOverride := Copy(St.SysOverride,
+                             Length(WorkingStateBlock) + Length(sLineBreak) + 1, MaxInt);
+    if Length(Loop.FinalMessages) > 0 then
+      UpdateWorkingStateAfterTurn(St.Session.Meta, Loop.FinalMessages);
+    if FCfg.StatsCollectionEnabled then
+      AccumulateTurnStats(St.Session.Meta,
+                          Loop.TotalUsage.InputTokens, Loop.TotalUsage.OutputTokens,
+                          Loop.TotalUsage.CacheReadTokens, Loop.TotalUsage.CacheCreatedTokens,
+                          Loop.ToolCallsDispatched, Loop.TruncatedBytesSaved);
+
+    { What the reply alone would not say. }
+    if Loop.VerifyRounds > 0 then
+      if Loop.Verified then Turn.Notice(Loop.VerifyReport)
+      else Turn.Notice(Loop.VerifyReport + ' -- the answer above is NOT verified');
+    if Loop.Cancelled then
+      Result.StopReason := 'cancelled'
+    else if Loop.HitMaxIterations then
+    begin
+      Turn.Notice(FormatMaxIterNotice(Loop, A.MaxIterations, '--max-iterations N', True));
+      Result.StopReason := 'max_turn_requests';
+    end
+    else if SameText(Loop.LastResp.FinishReason, 'length') or
+            SameText(Loop.LastResp.FinishReason, 'max_tokens') then
+      Result.StopReason := 'max_tokens';
+  finally
+    Handlers.Free;
+    { Persist whatever the turn did -- a cancelled turn's work included. }
+    St.Session.Messages := Msgs;
+    St.Session.Meta.SystemPromptOverride := St.SysOverride;
+    St.Session.Meta.Model := FModel;
+    if FProvider <> nil then St.Session.Meta.Provider := FProvider.GetName;
+    St.Session.AutoTitle;
+    St.Session.Touch;
+    try
+      St.Session.Save;
+    except
+      on E: Exception do LogWarn('acp: could not save session %s: %s', [S.Id, E.Message]);
+    end;
+  end;
+end;
+
+function Cmd_ACP_Run(const Argv: array of string): Integer;
+var
+  A: TAgentArgs;
+  Cfg: TConfig;
+  Provider: ILLMProvider;
+  Model, Err, Line, BackendDesc: string;
+  KindSelected: TShellBackendKind;
+  Host: TACPLoopHost;
+  Agent: TACPAgent;
+  Out_: TACPStdout;
+begin
+  { stdout is the protocol from the first byte: every word for a person
+    goes to stderr. }
+  if not ParseArgs(Argv, A) then
+  begin
+    PrintLnErr('usage: pasclaw acp [--model M] [--provider P] [--mode build|plan|improve|space]');
+    PrintLnErr('                   [--max-iterations N] [--system S] [--no-mcp] [--profile P]');
+    Exit(1);
+  end;
+  { An editor turn does real work; the CLI's default of 8 rounds is a
+    one-shot's budget. An explicit --max-iterations still wins. }
+  if A.MaxIterations = DefaultAgentArgs.MaxIterations then A.MaxIterations := 50;
+  Cfg := LoadConfig(A.Profile);
+  try
+    if A.OrientOverride = ooOn then Cfg.OrientTaskAware := True
+    else if A.OrientOverride = ooOff then Cfg.OrientTaskAware := False;
+    if Cfg.MemoryDistillEnabled then EnableBestFactEmbedder(GetHome);
+    ConfigureSandbox(Cfg.Sandbox, '');
+    try
+      InstallShellBackend(Cfg, A.BackendOverride, KindSelected, BackendDesc);
+    except
+      on E: Exception do
+      begin
+        LogError('acp: %s', [E.Message]);
+        Exit(1);
+      end;
+    end;
+    if not PickProvider(Cfg, A, Provider, Err) then
+    begin
+      { Still speak the protocol -- an editor shows the reason on the
+        first prompt instead of a dead process. }
+      LogError('acp: provider not configured (%s) -- run `pasclaw onboard`', [Err]);
+      Provider := nil;
+    end;
+    if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
+    LogInfo('acp: ready (model %s)', [Model]);
+    Host := TACPLoopHost.Create(Cfg, A, Provider, Model);
+    Out_ := TACPStdout.Create;
+    Agent := TACPAgent.Create(Host, Out_.WriteLine, FormatVersion);
+    Agent.AskTimeoutMs := Cardinal(Cfg.PermissionsAskTimeoutSec) * 1000;
+    try
+      while not Eof(Input) do
+      begin
+        ReadLn(Input, Line);
+        Agent.HandleLine(Line);
+      end;
+      Agent.Shutdown;
+    finally
+      Agent.Free;
+      Out_.Free;
+      Host.Free;
+    end;
+    Result := 0;
+  finally
+    Cfg.Free;
   end;
 end;
 
