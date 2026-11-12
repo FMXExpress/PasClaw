@@ -36,7 +36,7 @@ program worktree_tests;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  SysUtils, Classes, Process,
+  SysUtils, Classes, Process, SyncObjs,
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Providers.Types,
@@ -296,6 +296,197 @@ function TWriterProvider.GetName: string; begin Result := 'fake-writer'; end;
 function TWriterProvider.SupportsThinking: Boolean; begin Result := False; end;
 function TWriterProvider.SupportsNativeSearch: Boolean; begin Result := False; end;
 function TWriterProvider.SupportsStreaming: Boolean; begin Result := False; end;
+
+{ ---- the shell session, carried like the workspace ---- }
+
+type
+  TSidProbe = class(TThread)
+  public
+    Seen, After: string;
+    procedure Execute; override;
+  end;
+
+procedure TSidProbe.Execute;
+begin
+  SetThreadShellSessionId('mine');
+  Seen := GetCurrentSessionId;
+  SetThreadShellSessionId('');
+  After := GetCurrentSessionId;
+end;
+
+var
+  GSeenLock: TCriticalSection;
+  GSeen: TStringList;
+  GSeenOffMain: Integer;
+
+{ Records the shell session and workspace each call ran under, and whether
+  it ran on a worker thread. }
+function SessionProbeTool(const ArgsJSON: string; out ErrMsg: string): string;
+begin
+  ErrMsg := '';
+  GSeenLock.Enter;
+  try
+    GSeen.Add(GetCurrentSessionId + '|' + CurrentWorkspace);
+    if GetCurrentThreadId <> MainThreadID then Inc(GSeenOffMain);
+  finally
+    GSeenLock.Leave;
+  end;
+  Result := 'ok';
+end;
+
+type
+  { First call: two read-only probes in one batch (parallel workers). }
+  TProbeProvider = class(TInterfacedObject, ILLMProvider)
+  public
+    Calls: Integer;
+    function Chat(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+                  const Model: string; const Options: TChatOptions): TLLMResponse;
+    function ChatStream(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+                        const Model: string; const Options: TChatOptions;
+                        OnChunk: TStreamCallback): TLLMResponse;
+    function GetDefaultModel: string;
+    function GetName: string;
+    function SupportsThinking: Boolean;
+    function SupportsNativeSearch: Boolean;
+    function SupportsStreaming: Boolean;
+  end;
+
+function TProbeProvider.Chat(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+                             const Model: string; const Options: TChatOptions): TLLMResponse;
+begin
+  Result := Default(TLLMResponse);
+  Result.StatusCode := 200;
+  Inc(Calls);
+  if Calls = 1 then
+  begin
+    SetLength(Result.ToolCalls, 2);
+    Result.ToolCalls[0].Id := 'p1';
+    Result.ToolCalls[0].Kind := 'function';
+    Result.ToolCalls[0].Func.Name := 'sprobe';
+    Result.ToolCalls[0].Func.Arguments := '{}';
+    Result.ToolCalls[1].Id := 'p2';
+    Result.ToolCalls[1].Kind := 'function';
+    Result.ToolCalls[1].Func.Name := 'sprobe';
+    Result.ToolCalls[1].Func.Arguments := '{"n":2}';
+    Result.FinishReason := 'tool_calls';
+  end
+  else
+  begin
+    Result.Content := 'probed';
+    Result.FinishReason := 'stop';
+  end;
+end;
+
+function TProbeProvider.ChatStream(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+                                   const Model: string; const Options: TChatOptions;
+                                   OnChunk: TStreamCallback): TLLMResponse;
+begin Result := Chat(Messages, Tools, Model, Options); end;
+function TProbeProvider.GetDefaultModel: string; begin Result := 'fake'; end;
+function TProbeProvider.GetName: string; begin Result := 'fake-probe'; end;
+function TProbeProvider.SupportsThinking: Boolean; begin Result := False; end;
+function TProbeProvider.SupportsNativeSearch: Boolean; begin Result := False; end;
+function TProbeProvider.SupportsStreaming: Boolean; begin Result := False; end;
+
+(* `pasclaw acp` runs several sessions in one process, so the shell
+   backend's session id (the docker container) is per thread, like the
+   workspace, and has to reach every thread that works for a session: the
+   loop's parallel workers, and a child the turn spawns. *)
+procedure TestThreadShellSession;
+var
+  T: TSidProbe;
+  Reg, Parent: TToolRegistry;
+  Tool: TTool;
+  Cfg: TToolLoopConfig;
+  Disp: IToolDispatcher;
+  Err, Res, Want: string;
+  Ctx: TSubagentContext;
+  Specs: TSubagentSpecArray;
+  Spawn: TSpawnTool;
+  Prov: ILLMProvider;
+  i: Integer;
+begin
+  GSeenLock := TCriticalSection.Create;
+  GSeen := TStringList.Create;
+  SetCurrentSessionId('global');
+  try
+    T := TSidProbe.Create(True);
+    try
+      T.Start;
+      T.WaitFor;
+      AssertEqStr(T.Seen, 'mine', 'a thread''s session id wins over the process-wide one');
+      AssertEqStr(T.After, 'global', 'cleared, the process-wide one shows again');
+    finally
+      T.Free;
+    end;
+    AssertEqStr(GetCurrentSessionId, 'global', 'other threads never saw it');
+
+    FillChar(Tool, SizeOf(Tool), 0);
+    Tool.Name := 'sprobe'; Tool.Description := 'd'; Tool.Schema := '{"type":"object"}';
+    Tool.Handler := @SessionProbeTool; Tool.Category := tcReadOnly;
+
+    Reg := TToolRegistry.Create;
+    try
+      Reg.Register(Tool);
+      Cfg := Default(TToolLoopConfig);
+      Cfg.Registry := Reg; Cfg.Model := 'fake'; Cfg.MaxIterations := 1;
+      Cfg.ShellSessionId := 'sess-x';
+      Disp := MakeLoopDispatcher(Cfg);
+      Disp.Dispatch('sprobe', '{}', Err);
+      AssertTrue((GSeen.Count = 1) and (Copy(GSeen[0], 1, 7) = 'sess-x|'),
+                 'dispatch brackets Cfg.ShellSessionId');
+      AssertEqStr(GetCurrentSessionId, 'global', 'restored after dispatch');
+    finally
+      Reg.Free;
+    end;
+
+    { A spawned child runs its parallel batch on worker threads: they get
+      the parent's session and workspace, not the process-wide ones. }
+    GSeen.Clear;
+    GSeenOffMain := 0;
+    Prov := TProbeProvider.Create;
+    Parent := TToolRegistry.Create;
+    try
+      Parent.Register(Tool);
+      Ctx := Default(TSubagentContext);
+      Ctx.Provider := Prov;
+      Ctx.ParentRegistry := Parent;
+      Ctx.DefaultModel := 'fake';
+      SetLength(Specs, 1);
+      Specs[0].Name := 'prober';
+      Specs[0].Description := 'probes';
+      Specs[0].SystemPrompt := 'You probe.';
+      SetLength(Specs[0].Tools, 1);
+      Specs[0].Tools[0] := 'sprobe';
+      Specs[0].MaxIter := 3;
+      Spawn := TSpawnTool.Create(Ctx, Specs);
+      try
+        SetThreadShellSessionId('parent-sess');
+        SetThreadSandboxWorkspace(JoinPath(Root, 'elsewhere'));
+        try
+          Res := Spawn.Run('{"agent":"prober","prompt":"probe twice"}', Err);
+        finally
+          SetThreadSandboxWorkspace('');
+          SetThreadShellSessionId('');
+        end;
+        AssertEqStr(Err, '', 'spawn ok');
+        AssertTrue(GSeen.Count = 2, 'the child ran both probes');
+        AssertTrue(GSeenOffMain > 0, 'on worker threads (else this proves nothing)');
+        Want := 'parent-sess|' + JoinPath(Root, 'elsewhere');
+        for i := 0 to GSeen.Count - 1 do
+          AssertEqStr(GSeen[i], Want, 'a child worker runs in the parent''s session and workspace');
+      finally
+        Spawn.Free;
+      end;
+    finally
+      Parent.Free;
+    end;
+  finally
+    SetCurrentSessionId('');
+    GSeen.Free;
+    GSeenLock.Free;
+  end;
+  WriteLn('  ok: the shell session is per thread and reaches workers and spawned children');
+end;
 
 procedure TestSpawnWorktree;
 var
@@ -615,6 +806,7 @@ begin
     TestRoundTrip;
     TestTools;
     TestThreadOverride;
+    TestThreadShellSession;
     TestSpawnWorktree;
     TestWorktreeFlagIsHonouredBySpawn;
     TestRejectedSpawnTouchesNoRepo;

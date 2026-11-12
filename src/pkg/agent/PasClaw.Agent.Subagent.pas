@@ -170,6 +170,8 @@ uses
   PasClaw.MCP.Disclosure,   { TMCPDisclosure / per-registry tool_search for subagents }
   PasClaw.Tools.ExecuteCode,{ RegisterExecuteCodeTool -- rebind per child registry }
   PasClaw.Tools.Worktree,   { EnsureWorktree -- spawn(worktree:"<branch>") }
+  PasClaw.Tools.Sandbox,    { ThreadSandboxWorkspace -- the parent's, for the child }
+  PasClaw.Shell.Backend,    { GetCurrentSessionId -- the parent's shell session }
   PasClaw.Tools.ToolLoop;
 
 function RegisterSpawnTool(Reg: TToolRegistry;
@@ -606,7 +608,13 @@ begin
     ChildCfg.OnText        := nil;
     ChildCfg.OnToolCall    := nil;
     ChildCfg.OnToolResult  := nil;
-    ChildCfg.Workspace     := WorkDir;   { '' = the parent's workspace }
+    { The child runs on this thread, but its parallel read-only workers do
+      not: give them what the parent's dispatch has -- the worktree, else
+      the parent's thread workspace ('' when it has none = the
+      process-wide one), and its shell session. }
+    if WorkDir <> '' then ChildCfg.Workspace := WorkDir
+    else ChildCfg.Workspace := ThreadSandboxWorkspace;
+    ChildCfg.ShellSessionId := GetCurrentSessionId;
     if WorkDir <> '' then
       ChildCfg.Options.SystemPrompt := ChildCfg.Options.SystemPrompt + sLineBreak + sLineBreak +
         'You are working in the git worktree ' + WorkDir + ' (branch ' + Worktree + '). ' +

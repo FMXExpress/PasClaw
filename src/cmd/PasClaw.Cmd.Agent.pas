@@ -2199,23 +2199,13 @@ type
     FMCPLock:  TCriticalSection;
     FSpawn:    TSpawnTool;
     FBg:       TBackgroundSpawnCoordinator;
-    { The shell backend's session id is one process-wide value, so a
-      backend that keeps per-session state (docker: one container per
-      session) gets one turn at a time; the local backend ignores the id
-      and sessions run side by side. A session's container lives until
-      the process exits, when the backend stops every one it started --
-      ACP has no "this thread is done", and a reloaded session keeps its
-      id, so it keeps its container too. }
-    FPerSessionShell: Boolean;
-    FTurnLock: TCriticalSection;
     { --profile or $PASCLAW_PROFILE chose this process's profile on
       purpose, over whatever a loaded session was created under. }
     FProfileChosen: Boolean;
     procedure ConnectClientMCP(Servers: TJsonArray);
   public
     constructor Create(Cfg: TConfig; const A: TAgentArgs; Provider: ILLMProvider;
-                       const Model: string; ShellKind: TShellBackendKind;
-                       ProfileChosen: Boolean);
+                       const Model: string; ProfileChosen: Boolean);
     destructor Destroy; override;
     function OpenSession(S: TACPSession; McpServers: TJsonArray; Load: Boolean;
                          out History: TMessageArray; out NotFound: Boolean;
@@ -2223,7 +2213,7 @@ type
     function RunPrompt(S: TACPSession; const PromptText: string;
                        Turn: TACPTurn): TACPTurnOutcome; override;
   private
-    function RunPromptLocked(S: TACPSession; St: TACPSessionState;
+    function RunTurn(S: TACPSession; St: TACPSessionState;
                              const PromptText: string; Turn: TACPTurn): TACPTurnOutcome;
   end;
 
@@ -2245,19 +2235,16 @@ begin
 end;
 
 constructor TACPLoopHost.Create(Cfg: TConfig; const A: TAgentArgs;
-  Provider: ILLMProvider; const Model: string; ShellKind: TShellBackendKind;
-  ProfileChosen: Boolean);
+  Provider: ILLMProvider; const Model: string; ProfileChosen: Boolean);
 begin
   inherited Create;
   FCfg := Cfg;
   FArgs := A;
   FProvider := Provider;
   FModel := Model;
-  FPerSessionShell := ShellKind <> sbLocal;
   FProfileChosen := ProfileChosen;
   FMCPNames := TStringList.Create;
   FMCPLock := TCriticalSection.Create;
-  FTurnLock := TCriticalSection.Create;
   FReg := nil;
   if not A.NoTools then
   begin
@@ -2284,7 +2271,6 @@ begin
   FSpawn.Free;
   FReg.Free;
   FMCPLock.Free;
-  FTurnLock.Free;
   FMCPNames.Free;
   inherited;
 end;
@@ -2420,7 +2406,7 @@ function TACPLoopHost.RunPrompt(S: TACPSession; const PromptText: string;
   Turn: TACPTurn): TACPTurnOutcome;
 var
   St: TACPSessionState;
-  SavedWs: string;
+  SavedWs, SavedSid: string;
 begin
   Result := Default(TACPTurnOutcome);
   Result.StopReason := 'end_turn';
@@ -2430,30 +2416,33 @@ begin
     Result.Error := 'no provider configured -- run `pasclaw onboard`';
     Exit;
   end;
-  if FPerSessionShell then
-  begin
-    FTurnLock.Enter;
-    SetCurrentSessionId(S.Id);
-  end;
   { The editor's project is this thread's workspace for the whole turn,
     not only for tool dispatches (LoopCfg.Workspace): the system prompt is
     built from it too -- its Workspace section, the project's AGENTS.md and
-    instruction files. Sessions and memory stay in PasClaw's home. }
+    instruction files. Sessions and memory stay in PasClaw's home.
+
+    The session is this thread's shell session the same way (the docker
+    backend's container), and LoopCfg.ShellSessionId carries it to the
+    loop's parallel workers and to any background job the turn starts,
+    which captures it and keeps it after the turn ends. Per thread, not
+    process-wide: sessions run their turns side by side, and a job never
+    reads an id another session's turn set or this turn's end cleared.
+    A session's container lives until the process exits, when the backend
+    stops every one it started -- ACP has no "this thread is done", and a
+    reloaded session keeps its id, so it keeps its container too. }
   SavedWs := ThreadSandboxWorkspace;
+  SavedSid := ThreadShellSessionId;
   SetThreadSandboxWorkspace(S.Cwd);
+  SetThreadShellSessionId(S.Id);
   try
-    Result := RunPromptLocked(S, St, PromptText, Turn);
+    Result := RunTurn(S, St, PromptText, Turn);
   finally
+    SetThreadShellSessionId(SavedSid);
     SetThreadSandboxWorkspace(SavedWs);
-    if FPerSessionShell then
-    begin
-      SetCurrentSessionId('');
-      FTurnLock.Leave;
-    end;
   end;
 end;
 
-function TACPLoopHost.RunPromptLocked(S: TACPSession; St: TACPSessionState;
+function TACPLoopHost.RunTurn(S: TACPSession; St: TACPSessionState;
   const PromptText: string; Turn: TACPTurn): TACPTurnOutcome;
 var
   A: TAgentArgs;
@@ -2497,6 +2486,7 @@ begin
     LoopCfg.OnAsk        := Turn.Ask;
     LoopCfg.ShouldCancel := Turn.Cancelled;
     LoopCfg.Workspace          := S.Cwd;
+    LoopCfg.ShellSessionId     := S.Id;
     LoopCfg.SteeringKey        := S.Id;   { also where "allow for this session" is kept }
     LoopCfg.BackgroundDrainKey := S.Id;
     LoopCfg.Options.CacheKey   := S.Id;
@@ -2626,7 +2616,7 @@ begin
     end;
     if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
     LogInfo('acp: ready (model %s)', [Model]);
-    Host := TACPLoopHost.Create(Cfg, A, Provider, Model, KindSelected,
+    Host := TACPLoopHost.Create(Cfg, A, Provider, Model,
       (A.Profile <> '') or (GetEnvironmentVariable('PASCLAW_PROFILE') <> ''));
     Out_ := TACPStdout.Create;
     Agent := TACPAgent.Create(Host, Out_.WriteLine, FormatVersion);

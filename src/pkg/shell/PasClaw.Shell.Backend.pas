@@ -170,6 +170,16 @@ procedure CloseShellSession(const SessionId: string);
 procedure SetCurrentSessionId(const SessionId: string);
 function  GetCurrentSessionId: string;
 
+{ The session id for THIS THREAD, over the process-wide one above: a
+  process that runs several sessions at once (`pasclaw acp`) and the
+  background jobs they start each need their own, held past the turn
+  that set it. GetCurrentSessionId returns it when set. The tool loop
+  sets it around each dispatch from TToolLoopConfig.ShellSessionId, so
+  parallel workers see it too; a background job sets it on its own
+  thread from the id captured when it was spawned. '' clears. }
+procedure SetThreadShellSessionId(const SessionId: string);
+function  ThreadShellSessionId: string;
+
 implementation
 
 uses
@@ -180,6 +190,9 @@ uses
 var
   GActive:           IShellBackend = nil;
   GCurrentSessionId: string = '';
+
+threadvar
+  GThreadSessionId: string;
 
 procedure SetActiveShellBackend(Backend: IShellBackend);
 begin
@@ -305,7 +318,20 @@ end;
 
 function GetCurrentSessionId: string;
 begin
-  Result := GCurrentSessionId;
+  if GThreadSessionId <> '' then
+    Result := GThreadSessionId
+  else
+    Result := GCurrentSessionId;
+end;
+
+procedure SetThreadShellSessionId(const SessionId: string);
+begin
+  GThreadSessionId := SessionId;
+end;
+
+function ThreadShellSessionId: string;
+begin
+  Result := GThreadSessionId;
 end;
 
 end.

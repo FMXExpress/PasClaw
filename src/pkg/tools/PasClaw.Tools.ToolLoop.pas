@@ -214,6 +214,12 @@ type
        and restores the previous value after, so relative paths, the
        write boundary and the shell cwd all point here. '' = inherit. *)
     Workspace:      string;
+    (* The shell backend session this loop's commands run in, when it is
+       not the process-wide one: a session of `pasclaw acp`, which runs
+       several at once, or a background job working for one. Set as the
+       thread's shell session id around every dispatch, as Workspace is.
+       The docker backend keys its container on it. '' = inherit. *)
+    ShellSessionId: string;
     { Bounded same-provider retry on a transient HTTP status. 0 disables.
       Populated from TConfig; see the field comments there for why this
       excludes status <= 0. }
@@ -458,6 +464,7 @@ uses
   PasClaw.Agent.Verify,     { held-out scenarios after the final answer }
   PasClaw.Tools.Sandbox,    { SetThreadSandboxWorkspace -- Cfg.Workspace per dispatch;
                               CurrentWorkspace -- the scenarios' cwd }
+  PasClaw.Shell.Backend,    { SetThreadShellSessionId -- Cfg.ShellSessionId per dispatch }
   PasClaw.Utils,            { NowStampWithZone -- the per-turn clock }
   PasClaw.Otel;             (* agent.turn / chat / execute_tool spans.
                                All helpers are no-ops when OTel is
@@ -897,7 +904,7 @@ var
   HasUnsup: Boolean;
   PlanTool: TTool;
   SavedCfg: PToolLoopConfig;
-  SavedWs: string;
+  SavedWs, SavedSid: string;
   SavedGate: Boolean;
 begin
   { Publish this run's config to the dispatching thread (loop thread for
@@ -912,6 +919,8 @@ begin
   SetDispatchGatePassed(False);
   SavedWs := ThreadSandboxWorkspace;
   if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(Cfg.Workspace);
+  SavedSid := ThreadShellSessionId;
+  if Cfg.ShellSessionId <> '' then SetThreadShellSessionId(Cfg.ShellSessionId);
   try
   D.Err        := '';
   D.ResultText := '';
@@ -1022,6 +1031,7 @@ begin
   finally
     SetDispatchGatePassed(SavedGate);
     if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(SavedWs);
+    if Cfg.ShellSessionId <> '' then SetThreadShellSessionId(SavedSid);
     GDispatchingCfg := SavedCfg;
     SetActiveConfig(nil);
   end;

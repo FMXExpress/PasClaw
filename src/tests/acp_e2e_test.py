@@ -27,6 +27,8 @@ editor would. What it pins:
   - an explicit --max-iterations is kept, even at the CLI default
   - with the docker backend, shell commands run in the session's container
     and the container is stopped when the agent exits (a fake docker CLI)
+  - a background subagent a turn started keeps that session's container and
+    the editor's project after the turn has answered
 """
 import http.server
 import json
@@ -92,9 +94,32 @@ PLAYBOOKS = {
         ("tool", "shell_exec", {"command": "echo from-docker > docker.txt"}),
         ("text", "Ran it."),
     ],
+    "docker background": [
+        ("tool", "spawn_background", {"agent": "general-purpose",
+                                      "prompt": "bg child: write child.txt"}),
+        ("text", "Started it."),
+    ],
+    # The background child: its first round waits until the turn that
+    # spawned it has answered, so its shell command runs after that turn.
+    # Two sessions' turns held until both are in flight, then each runs a
+    # shell command: side by side, each must land in its own container.
+    "docker pair A": [
+        ("pair", "shell_exec", {"command": "echo A > pair-a.txt"}),
+        ("text", "A done"),
+    ],
+    "docker pair B": [
+        ("pair", "shell_exec", {"command": "echo B > pair-b.txt"}),
+        ("text", "B done"),
+    ],
+    "bg child": [
+        ("after_parent", "shell_exec", {"command": "echo child > child.txt"}),
+        ("text", "child done"),
+    ],
 }
 requests_seen = []
 slow_arrived = threading.Event()   # set when the slow round's request is in
+parent_done = threading.Event()    # set once the spawning turn has answered
+pair_barrier = threading.Barrier(2, timeout=20)
 
 
 def system_of(body):
@@ -138,7 +163,14 @@ class Model(http.server.BaseHTTPRequestHandler):
         if step[0] == "slow":
             slow_arrived.set()
             time.sleep(1.5)
-        if step[0] in ("tool", "slow"):
+        if step[0] == "after_parent":
+            parent_done.wait(30)
+        if step[0] == "pair":
+            try:
+                pair_barrier.wait()
+            except threading.BrokenBarrierError:
+                pass
+        if step[0] in ("tool", "slow", "after_parent", "pair"):
             message = {"role": "assistant", "content": None,
                        "tool_calls": [{"id": "call_%s_%d" % (key.split()[0], done),
                                        "type": "function",
@@ -225,6 +257,26 @@ class Client:
                 notes.append(msg)
             elif msg.get("id") == rid:
                 return msg, notes
+
+    def call_all(self, calls, timeout=60):
+        """Send several requests at once; return {index: response}."""
+        ids = {}
+        for i, (method, params) in enumerate(calls):
+            self.next_id += 1
+            ids[self.next_id] = i
+            self.send({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params})
+        out = {}
+        deadline = time.time() + timeout
+        while len(out) < len(ids):
+            msg = self.q.get(timeout=max(0.1, deadline - time.time()))
+            if msg is None:
+                raise RuntimeError("agent exited")
+            if "method" in msg and "id" in msg:
+                self.send({"jsonrpc": "2.0", "id": msg["id"],
+                           "error": {"code": -32601, "message": "not handled"}})
+            elif "method" not in msg and msg.get("id") in ids:
+                out[ids[msg["id"]]] = msg
+        return out
 
     def close(self):
         try:
@@ -500,7 +552,18 @@ def main():
         f.write(FAKE_DOCKER)
     os.chmod(os.path.join(fakebin, "docker"), 0o755)
     dlog = os.path.join(WORK, "docker.log")
+    # A home without the shell ask rule: a background subagent has no one
+    # to answer an ask, so the rule would refuse its command.
+    dhome = os.path.join(WORK, "home-docker")
+    os.makedirs(dhome)
+    json.dump({"default_provider": "fake", "default_model": "fake-model",
+               "providers": [{"name": "fake", "kind": "openai",
+                              "api_base": "http://127.0.0.1:%d" % port,
+                              "api_key": "sk-fake", "model": "fake-model"}],
+               "auto_router": {"enabled": False}},
+              open(os.path.join(dhome, "config.json"), "w"))
     denv = dict(env)
+    denv["PASCLAW_HOME"] = dhome
     denv["PATH"] = fakebin + os.pathsep + env.get("PATH", "")
     denv["FAKE_DOCKER_LOG"] = dlog
     c = Client(denv, "e", ["--backend", "docker"])
@@ -519,6 +582,39 @@ def main():
     log = open(dlog).read() if os.path.exists(dlog) else ""
     check("a reloaded session keeps its container",
           "modes" in r.get("result", {}) and "stop" not in log, log[-300:])
+    ra, _ = c.call("session/new", {"cwd": project, "mcpServers": []})
+    rb, _ = c.call("session/new", {"cwd": project, "mcpServers": []})
+    sa = ra.get("result", {}).get("sessionId", "")
+    sb = rb.get("result", {}).get("sessionId", "")
+    both = c.call_all([
+        ("session/prompt", {"sessionId": sa, "prompt": [{"type": "text", "text": "docker pair A"}]}),
+        ("session/prompt", {"sessionId": sb, "prompt": [{"type": "text", "text": "docker pair B"}]})])
+    log = open(dlog).read() if os.path.exists(dlog) else ""
+    ea = [l for l in log.splitlines() if l.startswith("exec") and "echo A" in l]
+    eb = [l for l in log.splitlines() if l.startswith("exec") and "echo B" in l]
+    check("two sessions' turns at once each run in their own container",
+          not pair_barrier.broken and
+          all(m.get("result", {}).get("stopReason") == "end_turn" for m in both.values()) and
+          ea and eb and ("pasclaw-" + sa) in ea[0] and ("pasclaw-" + sb) in eb[0],
+          (both, ea, eb))
+    r, _ = c.call("session/new", {"cwd": project, "mcpServers": []})
+    sid4 = r.get("result", {}).get("sessionId", "")
+    r, notes = c.call("session/prompt", {"sessionId": sid4,
+                                         "prompt": [{"type": "text", "text": "docker background"}]})
+    check("a turn starts a background subagent and answers",
+          r.get("result", {}).get("stopReason") == "end_turn" and
+          any(u.get("name") == "spawn_background" for u in updates(notes, "tool_call")), r)
+    parent_done.set()
+    child = os.path.join(project, "child.txt")
+    deadline = time.time() + 30
+    while time.time() < deadline and not os.path.exists(child):
+        time.sleep(0.2)
+    log = open(dlog).read() if os.path.exists(dlog) else ""
+    child_exec = [l for l in log.splitlines() if l.startswith("exec") and "echo child" in l]
+    check("after the turn, the subagent's command ran in that session's container, in the project",
+          os.path.exists(child) and child_exec and ("pasclaw-" + sid4) in child_exec[0],
+          (child_exec, os.path.exists(os.path.join(dhome, "workspace", "child.txt")),
+           open(c.stderr_path).read()[-600:]))
     c.close()
     log = open(dlog).read() if os.path.exists(dlog) else ""
     check("and the container is stopped when the agent exits",
