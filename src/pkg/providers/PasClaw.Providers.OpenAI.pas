@@ -92,11 +92,19 @@ function BuildOAIRequest(const Messages: array of TMessage;
                          const ServerTools: TOpenAIServerTools): string;
 procedure ParseOAIResponse(const Body: string; var Resp: TLLMResponse);
 
+(* A whole Chat Completions SSE stream, as text, read the way ChatStream
+   reads it as it arrives: text pieces to OnChunk, the rest put together
+   into one response. Failed is the message of an error the server sent
+   inside the stream, else ''. Pure, for tests. *)
+function ParseOAIStream(const SSE: string; OnChunk: TStreamCallback;
+                        out Failed: string): TLLMResponse;
+
 implementation
 
 uses
   PasClaw.JSON,
-  PasClaw.Logger;
+  PasClaw.Logger,
+  PasClaw.Providers.Stream;
 
 function NoOpenAIServerTools: TOpenAIServerTools;
 begin
@@ -160,7 +168,7 @@ function TOpenAIProvider.GetDefaultModel: string;     begin Result := FDefaultMo
 function TOpenAIProvider.GetName: string;             begin Result := FDisplayName;  end;
 function TOpenAIProvider.SupportsThinking: Boolean;   begin Result := False; end;
 function TOpenAIProvider.SupportsNativeSearch: Boolean; begin Result := False; end;
-function TOpenAIProvider.SupportsStreaming: Boolean;  begin Result := False; end;
+function TOpenAIProvider.SupportsStreaming: Boolean;  begin Result := True; end;
 
 function BuildOAIRequest(const Messages: array of TMessage;
                          const Tools:    array of TToolDefinition;
@@ -443,19 +451,290 @@ begin
   end;
 end;
 
+type
+  (* One streamed Chat Completions response, put back together. Chunks
+     carry choices[0].delta: content pieces (passed on as they come), and
+     tool_calls pieces keyed by index -- the id and name once, the
+     arguments in fragments. finish_reason arrives on the last choice
+     chunk; usage on a final chunk with no choices (stream_options.
+     include_usage). The result has the same shape Chat returns. *)
+  TOAIStreamAcc = class
+    OnChunk: TStreamCallback;
+    Resp: TLLMResponse;
+    Done: Boolean;
+    Failed: string;          { an error object sent inside the stream }
+    procedure OnEvent(const Event, Data: string);
+  end;
+
+procedure TOAIStreamAcc.OnEvent(const Event, Data: string);
+var
+  Obj, Choice, Delta, TCObj, FObj, Usage, Details, Err: TJsonObject;
+  Choices, TCArr: TJsonArray;
+  i, Idx: Integer;
+  Text: string;
+  C: TStreamChunk;
+begin
+  if Trim(Data) = '' then Exit;
+  if Trim(Data) = '[DONE]' then
+  begin
+    Done := True;
+    Exit;
+  end;
+  try
+    Obj := TJsonObject.Parse(Data);
+  except
+    Exit;   { a line we cannot read is skipped, not fatal }
+  end;
+  if Obj = nil then Exit;
+  try
+    Err := Obj.ChildObject('error');
+    if Err <> nil then
+    try
+      Failed := Err.GetStr('message', Data);
+      Exit;
+    finally
+      Err.Free;
+    end;
+    if Obj.GetStr('model', '') <> '' then Resp.Model := Obj.GetStr('model', '');
+    Choices := Obj.ChildArray('choices');
+    if Choices <> nil then
+    try
+      if Choices.Count > 0 then
+      begin
+        Choice := Choices.ItemObject(0);
+        if Choice <> nil then
+        try
+          if Choice.GetStr('finish_reason', '') <> '' then
+            Resp.FinishReason := Choice.GetStr('finish_reason', '');
+          Delta := Choice.ChildObject('delta');
+          if Delta <> nil then
+          try
+            Text := Delta.GetStr('content', '');
+            if Text <> '' then
+            begin
+              Resp.Content := Resp.Content + Text;
+              if Assigned(OnChunk) then
+              begin
+                C := Default(TStreamChunk);
+                C.Kind := 'text';
+                C.Text := Text;
+                OnChunk(C);
+              end;
+            end;
+            TCArr := Delta.ChildArray('tool_calls');
+            if TCArr <> nil then
+            try
+              for i := 0 to TCArr.Count - 1 do
+              begin
+                TCObj := TCArr.ItemObject(i);
+                if TCObj = nil then Continue;
+                try
+                  Idx := Integer(TCObj.GetInt('index', i));
+                  if Idx < 0 then Idx := 0;
+                  if Idx > 255 then Continue;   { not a real call index }
+                  while Length(Resp.ToolCalls) <= Idx do
+                  begin
+                    SetLength(Resp.ToolCalls, Length(Resp.ToolCalls) + 1);
+                    Resp.ToolCalls[High(Resp.ToolCalls)] := Default(TToolCall);
+                    Resp.ToolCalls[High(Resp.ToolCalls)].Kind := 'function';
+                  end;
+                  if TCObj.GetStr('id', '') <> '' then
+                    Resp.ToolCalls[Idx].Id := TCObj.GetStr('id', '');
+                  if TCObj.GetStr('type', '') <> '' then
+                    Resp.ToolCalls[Idx].Kind := TCObj.GetStr('type', '');
+                  FObj := TCObj.ChildObject('function');
+                  if FObj <> nil then
+                  try
+                    { The name comes once, or in pieces; a server that
+                      repeats the whole name on every chunk must not
+                      double it. }
+                    Text := FObj.GetStr('name', '');
+                    if (Text <> '') and (Text <> Resp.ToolCalls[Idx].Func.Name) then
+                      Resp.ToolCalls[Idx].Func.Name := Resp.ToolCalls[Idx].Func.Name + Text;
+                    Resp.ToolCalls[Idx].Func.Arguments :=
+                      Resp.ToolCalls[Idx].Func.Arguments + FObj.GetStr('arguments', '');
+                  finally
+                    FObj.Free;
+                  end;
+                finally
+                  TCObj.Free;
+                end;
+              end;
+            finally
+              TCArr.Free;
+            end;
+          finally
+            Delta.Free;
+          end;
+        finally
+          Choice.Free;
+        end;
+      end;
+    finally
+      Choices.Free;
+    end;
+    Usage := Obj.ChildObject('usage');
+    if Usage <> nil then
+    try
+      Resp.Usage.InputTokens  := Usage.GetInt('prompt_tokens',     0);
+      Resp.Usage.OutputTokens := Usage.GetInt('completion_tokens', 0);
+      Details := Usage.ChildObject('prompt_tokens_details');
+      if Details <> nil then
+      try
+        Resp.Usage.CacheReadTokens := Details.GetInt('cached_tokens', 0);
+      finally
+        Details.Free;
+      end;
+    finally
+      Usage.Free;
+    end;
+  finally
+    Obj.Free;
+  end;
+end;
+
+function ParseOAIStream(const SSE: string; OnChunk: TStreamCallback;
+                        out Failed: string): TLLMResponse;
+var
+  Acc: TOAIStreamAcc;
+  P: TSSEParseStream;
+  B: TBytes;
+  i: Integer;
+begin
+  Acc := TOAIStreamAcc.Create;
+  P := TSSEParseStream.Create(Acc.OnEvent);
+  try
+    Acc.OnChunk := OnChunk;
+    Acc.Resp := Default(TLLMResponse);
+    {$IFDEF FPC}
+    SetLength(B, Length(SSE));
+    if Length(SSE) > 0 then Move(SSE[1], B[0], Length(SSE));
+    {$ELSE}
+    B := TEncoding.UTF8.GetBytes(SSE);
+    {$ENDIF}
+    if Length(B) > 0 then P.Write(B[0], Length(B));
+    P.Finish;
+    Result := Acc.Resp;
+    Failed := Acc.Failed;
+    for i := 0 to High(Result.ToolCalls) do
+      if Trim(Result.ToolCalls[i].Func.Arguments) = '' then
+        Result.ToolCalls[i].Func.Arguments := '{}';
+  finally
+    P.Free;
+    Acc.Free;
+  end;
+end;
+
 function TOpenAIProvider.ChatStream(const Messages: array of TMessage;
                                     const Tools:    array of TToolDefinition;
                                     const Model:    string;
                                     const Options:  TChatOptions;
                                     OnChunk: TStreamCallback): TLLMResponse;
 var
+  Body, URL, UseModel, ErrMsg, Raw: string;
+  Root, SO: TJsonObject;
+  Acc: TOAIStreamAcc;
+  Status, Events, i: Integer;
   C: TStreamChunk;
 begin
-  Result := Chat(Messages, Tools, Model, Options);
-  if Assigned(OnChunk) then
-  begin
-    C.Kind := 'text'; C.Text := Result.Content; OnChunk(C);
-    C.Kind := 'done'; C.Text := '';             OnChunk(C);
+  if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
+  URL := FAPIBase + FChatPath;
+  if Options.DisableServerTools then
+    Body := BuildOAIRequest(Messages, Tools, UseModel, Options, NoOpenAIServerTools)
+  else
+    Body := BuildOAIRequest(Messages, Tools, UseModel, Options, FServerTools);
+  { The same request Chat sends, streamed, with the token counts on the
+    last chunk so a streamed turn reports usage as a plain one does. }
+  Root := TJsonObject.Parse(Body);
+  try
+    Root.PutBool('stream', True);
+    SO := TJsonObject.Create;
+    SO.PutBool('include_usage', True);
+    Root.PutObject('stream_options', SO);
+    Body := Root.ToJSON;
+  finally
+    Root.Free;
+  end;
+
+  Acc := TOAIStreamAcc.Create;
+  try
+    Acc.OnChunk := OnChunk;
+    Acc.Resp := Default(TLLMResponse);
+    LogDebug('%s POST %s stream (model=%s, body=%d bytes)',
+             [FDisplayName, URL, UseModel, Length(Body)]);
+    { Same 600 s ceiling as Chat: it bounds each read, and a stream that
+      is producing tokens never waits that long between them. }
+    PostSSE(URL, Body, BuildAuthHeaders, 600, Acc.OnEvent, Status, ErrMsg, Raw, Events);
+    Result := Acc.Resp;
+    Result.StatusCode := Status;
+    if (Status < 200) or (Status >= 300) then
+    begin
+      if ((Status = 400) or (Status = 422)) and
+         (Pos('stream', LowerCase(ErrMsg + ' ' + Raw)) > 0) then
+      begin
+        { A server that does not take the streaming fields (stream_options
+          is newer than stream) refuses the request, naming them. Nothing
+          was shown yet: ask again the plain way and hand the reply on
+          whole. Any other 400 (a context overflow, a bad argument) is the
+          answer as it is. }
+        LogDebug('%s refused the streamed request (%d) -- asking without streaming',
+                 [FDisplayName, Status]);
+        Result := Chat(Messages, Tools, Model, Options);
+        if (Result.StatusCode >= 200) and (Result.StatusCode < 300) and
+           Assigned(OnChunk) and (Result.Content <> '') then
+        begin
+          C := Default(TStreamChunk);
+          C.Kind := 'text';
+          C.Text := Result.Content;
+          OnChunk(C);
+        end;
+      end
+      else
+      begin
+        if ErrMsg <> '' then
+          Result.Content := Format('%s error %d: %s', [FDisplayName, Status, ErrMsg])
+        else if Raw <> '' then
+          Result.Content := Format('%s error %d: %s', [FDisplayName, Status, Raw])
+        else
+          Result.Content := Format('%s error: status=%d', [FDisplayName, Status]);
+        Result.FinishReason := 'error';
+        SetLength(Result.ToolCalls, 0);
+      end;
+    end
+    else if Acc.Failed <> '' then
+    begin
+      { The server reported an error inside the stream: the turn failed,
+        whatever arrived before it. }
+      Result.StatusCode := 502;
+      Result.Content := Format('%s stream error: %s', [FDisplayName, Acc.Failed]);
+      Result.FinishReason := 'error';
+      SetLength(Result.ToolCalls, 0);
+    end
+    else if (Events = 0) and (Trim(Raw) <> '') then
+    begin
+      { No events at all: the server ignored `stream` and answered with one
+        ordinary JSON body. Read it as Chat would. }
+      ParseOAIResponse(Raw, Result);
+      if Assigned(OnChunk) and (Result.Content <> '') then
+      begin
+        C := Default(TStreamChunk);
+        C.Kind := 'text';
+        C.Text := Result.Content;
+        OnChunk(C);
+      end;
+    end
+    else
+      for i := 0 to High(Result.ToolCalls) do
+        if Trim(Result.ToolCalls[i].Func.Arguments) = '' then
+          Result.ToolCalls[i].Func.Arguments := '{}';   { as Chat reads a bare call }
+    if Assigned(OnChunk) then
+    begin
+      C := Default(TStreamChunk);
+      C.Kind := 'done';
+      OnChunk(C);
+    end;
+  finally
+    Acc.Free;
   end;
 end;
 

@@ -123,6 +123,9 @@ type
   public
     constructor Create(Agent: TACPAgent; Session: TACPSession);
     procedure Text(const S: string);
+    { A piece of the reply as the model writes it (TToolLoopConfig.
+      OnTextDelta); First marks a round's first piece. }
+    procedure TextDelta(const Delta: string; First: Boolean);
     procedure ToolCall(const Name, ArgsJSON: string);
     procedure ToolResult(const Name, ResultText, Err: string);
     function  Ask(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
@@ -671,6 +674,28 @@ begin
     FSession.FTextSent := True;
   finally
     FAgent.FLock.Leave;
+  end;
+  FAgent.SessionUpdate(FSession.Id,
+    '{"sessionUpdate":"agent_message_chunk","content":' + TextBlock(Chunk) + '}');
+end;
+
+procedure TACPTurn.TextDelta(const Delta: string; First: Boolean);
+var
+  Chunk: string;
+begin
+  if Delta = '' then Exit;
+  Chunk := Delta;
+  { A round's first piece opens a paragraph after earlier text, as a
+    whole round does in Text. }
+  if First then
+  begin
+    FAgent.FLock.Enter;
+    try
+      if FSession.FTextSent then Chunk := sLineBreak + sLineBreak + Chunk;
+      FSession.FTextSent := True;
+    finally
+      FAgent.FLock.Leave;
+    end;
   end;
   FAgent.SessionUpdate(FSession.Id,
     '{"sessionUpdate":"agent_message_chunk","content":' + TextBlock(Chunk) + '}');

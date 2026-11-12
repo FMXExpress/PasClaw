@@ -232,6 +232,15 @@ begin
     Turn.ToolCall('shell_exec', '{"command":"c"}');
     Turn.ToolResult('shell_exec', 'c done', '');
   end
+  else if Pos('deltas', PromptText) > 0 then
+  begin
+    { Streamed text: pieces as written, a new round's first marked. }
+    Turn.TextDelta('Hel', True);
+    Turn.TextDelta('lo', False);
+    Turn.ToolCall('list_dir', '{"path":"."}');
+    Turn.ToolResult('list_dir', 'a.txt', '');
+    Turn.TextDelta('Next', True);
+  end
   else if Pos('utf8', PromptText) > 0 then
   begin
     { A two-byte character straddling the 32 KiB display cut. }
@@ -626,6 +635,58 @@ begin
   AssertTrue(Utf8SafeTruncate('a' + #$C3#$A9, 3) = 'a' + #$C3#$A9, 'and keeps a whole one');
 end;
 
+procedure TestTextDeltas;
+var
+  N, iDone, i: Integer;
+  Got: string;
+  O, U, C: TJsonObject;
+begin
+  N := Cap.Count;
+  Send('{"jsonrpc":"2.0","id":10,"method":"session/new","params":{"cwd":"' +
+       ExcludeTrailingPathDelimiter(Host.Dir) + '","mcpServers":[]}}');
+  iDone := Cap.WaitFor('"id":10,"result"', N);
+  O := TJsonObject.Parse(Cap.Line(iDone));
+  try
+    C := O.ChildObject('result');
+    try
+      Got := C.GetStr('sessionId', '');
+    finally
+      C.Free;
+    end;
+  finally
+    O.Free;
+  end;
+  N := Cap.Count;
+  Send(Prompt('80', Got, 'deltas'));
+  iDone := Cap.WaitFor('"id":80,"result"', N);
+  AssertTrue(iDone >= 0, 'the turn answers');
+  Got := '';
+  for i := N to iDone - 1 do
+    if Pos('"agent_message_chunk"', Cap.Line(i)) > 0 then
+    begin
+      O := TJsonObject.Parse(Cap.Line(i));
+      try
+        U := O.ChildObject('params');
+        try
+          C := U.ChildObject('update');
+          try
+            U.Free;
+            U := C.ChildObject('content');
+            Got := Got + '[' + U.GetStr('text', '') + ']';
+          finally
+            C.Free;
+          end;
+        finally
+          U.Free;
+        end;
+      finally
+        O.Free;
+      end;
+    end;
+  AssertTrue((Got = '[Hel][lo][' + #10#10 + 'Next]') or (Got = '[Hel][lo][' + #13#10#13#10 + 'Next]'),
+             'pieces as they come, one chunk each; a new round opens a paragraph (got ' + Got + ')');
+end;
+
 procedure TestNullId;
 var
   N: Integer;
@@ -700,6 +761,8 @@ begin
     WriteLn('  ok: a result cut for display stays valid UTF-8');
     TestNullId;
     WriteLn('  ok: a null id is echoed as null');
+    TestTextDeltas;
+    WriteLn('  ok: streamed text goes out piece by piece, a paragraph between rounds');
     TestStdoutIsJSON;
     WriteLn('  ok: every line written is JSON-RPC 2.0');
     Agent.Shutdown;

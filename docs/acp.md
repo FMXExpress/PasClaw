@@ -44,7 +44,7 @@ Any other ACP client works the same way: the command is `pasclaw`, the argument 
 
 | PasClaw | ACP |
 |---|---|
-| the model's text, one message per model round | `agent_message_chunk` |
+| the model's text, as it is written | `agent_message_chunk`, piece by piece (see *Streaming*) |
 | a tool call | `tool_call`: a kind (read, edit, execute, search, fetch, …), a title such as `Read src/a.pas` or the command itself, the file it names as a location, and the raw arguments |
 | its result | `tool_call_update`: completed or failed, with the output |
 | a file an edit tool rewrote (`write_file`, `edit_file`, `append_file`) | a diff in that update, before and after |
@@ -53,6 +53,8 @@ Any other ACP client works the same way: the command is `pasclaw`, the argument 
 | a held-out verification report, or the iteration limit | a closing message, and `stopReason` `max_turn_requests` for the limit |
 | a provider that cannot answer (a bad key, a rate limit, no connection) | the prompt's JSON-RPC error, with the provider's message |
 | modes | session modes `build`, `plan`, `improve`, `space`, switched with `session/set_mode` from the next turn |
+
+**Streaming.** With an OpenAI-compatible provider (OpenAI, OpenRouter, Groq, DeepSeek, Mistral, Ollama, LM Studio, vLLM and the rest of the catalog's `openai` kind), the reply streams: each piece of text reaches the editor as the model writes it. A server that refuses the streaming fields is asked again without them, and its reply arrives whole. Anthropic, Gemini and the relay provider send each model round's text whole. A retry or a fallback after a failed call is not streamed either.
 
 **Prompts.** Text is passed as written. A file the user attaches as a link becomes a reference (`@name (uri)`). Embedded file contents become a `<context uri="…">` block. Images and audio are not accepted yet: the agent advertises text only, and anything else is named in the prompt as left out.
 
@@ -88,7 +90,7 @@ A session keeps the profile it was created under, as it does for `pasclaw agent 
 - Images and audio in prompts.
 - HTTP and SSE MCP servers from the editor, and per-server environment variables.
 - The editor's file system and terminals (`fs/*`, `terminal/*`). PasClaw reads files from disk and runs commands itself, so unsaved editor buffers are not seen.
-- Token-by-token streaming. Text arrives once per model round.
+- Token-by-token text from Anthropic, Gemini and the relay provider. Their text arrives once per model round.
 - Authentication methods. Provider keys come from PasClaw's own configuration.
 
 ## Logs and tests

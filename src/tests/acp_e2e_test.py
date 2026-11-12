@@ -30,6 +30,11 @@ editor would. What it pins:
   - a background subagent a turn started keeps that session's container and
     the editor's project after the turn has answered
   - the session's container mounts the editor's project
+  - the reply streams: the provider asks for SSE, the model's text reaches
+    the editor while the model is still writing (the fake holds its stream
+    until the editor has shown the first piece), tool-call arguments put
+    together from fragments, a paragraph between rounds; a server that
+    refuses the streaming fields gets a plain request instead
 """
 import http.server
 import json
@@ -95,6 +100,16 @@ PLAYBOOKS = {
         ("tool", "shell_exec", {"command": "echo from-docker > docker.txt"}),
         ("text", "Ran it."),
     ],
+    "stream check": [
+        ("text", "Streaming works: alpha beta gamma delta."),
+    ],
+    "stream two rounds": [
+        ("tooltext", "list_dir", {"path": "."}, "Looking first."),
+        ("text", "Done looking."),
+    ],
+    "stream refused": [
+        ("text", "Answered without streaming."),
+    ],
     "docker background": [
         ("tool", "spawn_background", {"agent": "general-purpose",
                                       "prompt": "bg child: write child.txt"}),
@@ -121,6 +136,8 @@ requests_seen = []
 slow_arrived = threading.Event()   # set when the slow round's request is in
 parent_done = threading.Event()    # set once the spawning turn has answered
 pair_barrier = threading.Barrier(2, timeout=20)
+first_piece_seen = threading.Event()   # the editor showed the held stream's first piece
+stream_log = {"held_live": None, "stream_requests": 0, "plain_requests": 0}
 
 
 def system_of(body):
@@ -141,6 +158,58 @@ def text_of(content):
 
 
 class Model(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"   # chunked transfer for the streamed replies
+
+    def send_json(self, status, obj):
+        out = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def chunk(self, data):
+        self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
+        self.wfile.flush()
+
+    def sse(self, obj):
+        self.chunk(("data: " + json.dumps(obj) + "\n\n").encode())
+
+    def stream_reply(self, message, finish, hold_first=False):
+        """Send message as an OpenAI chat.completion.chunk stream."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        base = {"id": "fake-%d" % len(requests_seen), "object": "chat.completion.chunk",
+                "model": "fake-model"}
+        def delta(d, fin=None):
+            self.sse(dict(base, choices=[{"index": 0, "delta": d, "finish_reason": fin}]))
+        delta({"role": "assistant"})
+        text = message.get("content") or ""
+        if text:
+            n = max(1, len(text) // 3)
+            pieces = [text[i:i + n] for i in range(0, len(text), n)]
+            for k, piece in enumerate(pieces):
+                delta({"content": piece})
+                if k == 0 and hold_first:
+                    # Hold the rest until the editor has shown this piece:
+                    # it only can if PasClaw passes text on as it arrives.
+                    stream_log["held_live"] = first_piece_seen.wait(10)
+        for i, tc in enumerate(message.get("tool_calls") or []):
+            delta({"tool_calls": [{"index": i, "id": tc["id"], "type": "function",
+                                   "function": {"name": tc["function"]["name"], "arguments": ""}}]})
+            args = tc["function"]["arguments"]
+            half = len(args) // 2
+            for frag in (args[:half], args[half:]):
+                delta({"tool_calls": [{"index": i, "function": {"arguments": frag}}]})
+        delta({}, finish)
+        self.sse(dict(base, choices=[], usage={"prompt_tokens": 10, "completion_tokens": 5,
+                                                "total_tokens": 15}))
+        self.chunk(b"data: [DONE]\n\n")
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
         requests_seen.append(body)
@@ -153,13 +222,18 @@ class Model(http.server.BaseHTTPRequestHandler):
             step = ("text", "no playbook for this prompt")
         else:
             step = PLAYBOOKS[key][min(done, len(PLAYBOOKS[key]) - 1)]
+        streamed = bool(body.get("stream")) and \
+            body.get("stream_options", {}).get("include_usage") is True
+        if key == "stream refused" and "stream_options" in body:
+            self.send_json(400, {"error": {"message": "Unrecognized request argument supplied: "
+                                                      "stream_options", "type": "invalid_request_error"}})
+            return
+        if streamed:
+            stream_log["stream_requests"] += 1
+        else:
+            stream_log["plain_requests"] += 1
         if step[0] == "fail":
-            out = json.dumps({"error": {"message": step[1], "type": "invalid_request_error"}}).encode()
-            self.send_response(401)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(out)))
-            self.end_headers()
-            self.wfile.write(out)
+            self.send_json(401, {"error": {"message": step[1], "type": "invalid_request_error"}})
             return
         if step[0] == "slow":
             slow_arrived.set()
@@ -171,8 +245,9 @@ class Model(http.server.BaseHTTPRequestHandler):
                 pair_barrier.wait()
             except threading.BrokenBarrierError:
                 pass
-        if step[0] in ("tool", "slow", "after_parent", "pair"):
-            message = {"role": "assistant", "content": None,
+        if step[0] in ("tool", "slow", "after_parent", "pair", "tooltext"):
+            message = {"role": "assistant",
+                       "content": step[3] if step[0] == "tooltext" else None,
                        "tool_calls": [{"id": "call_%s_%d" % (key.split()[0], done),
                                        "type": "function",
                                        "function": {"name": step[1],
@@ -181,16 +256,14 @@ class Model(http.server.BaseHTTPRequestHandler):
         else:
             message = {"role": "assistant", "content": step[1]}
             finish = "stop"
-        out = json.dumps({"id": "fake-%d" % len(requests_seen), "object": "chat.completion",
-                          "model": "fake-model",
-                          "choices": [{"index": 0, "message": message, "finish_reason": finish}],
-                          "usage": {"prompt_tokens": 10, "completion_tokens": 5,
-                                    "total_tokens": 15}}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(out)))
-        self.end_headers()
-        self.wfile.write(out)
+        if streamed:
+            self.stream_reply(message, finish, hold_first=(key == "stream check"))
+            return
+        self.send_json(200, {"id": "fake-%d" % len(requests_seen), "object": "chat.completion",
+                             "model": "fake-model",
+                             "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+                             "usage": {"prompt_tokens": 10, "completion_tokens": 5,
+                                       "total_tokens": 15}})
 
     def log_message(self, *a):
         pass
@@ -223,6 +296,8 @@ class Client:
             except Exception:
                 self.bad_lines.append(line)
                 continue
+            if msg.get("method") == "session/update" and "Streaming wor" in json.dumps(msg):
+                first_piece_seen.set()   # seen by the editor, as it arrives
             self.q.put(msg)
         self.q.put(None)
 
@@ -430,6 +505,35 @@ def main():
     first = requests_for("build hello")
     check("the system prompt carries the project's AGENTS.md",
           first and "RULES-OF-THE-EDITOR-PROJECT-7Q" in system_of(first[0]))
+
+    print("-- streaming:")
+    check("the provider asks the model to stream (stream + stream_options.include_usage)",
+          stream_log["stream_requests"] > 0 and stream_log["plain_requests"] == 0, stream_log)
+    r, notes = c.call("session/prompt", {"sessionId": sid,
+                                         "prompt": [{"type": "text", "text": "stream check"}]})
+    chunks = [u["content"]["text"] for u in updates(notes, "agent_message_chunk")]
+    check("the editor got the model's first piece while the model was still writing",
+          stream_log["held_live"] is True, stream_log)
+    check("one round arrives as several chunks that add up to the reply",
+          len(chunks) >= 3 and "".join(chunks) == "Streaming works: alpha beta gamma delta.", chunks)
+    r, notes = c.call("session/prompt", {"sessionId": sid,
+                                         "prompt": [{"type": "text", "text": "stream two rounds"}]})
+    lst = [u for u in updates(notes, "tool_call") if u.get("name") == "list_dir"]
+    done = [u for u in updates(notes, "tool_call_update")
+            if lst and u.get("toolCallId") == lst[0].get("toolCallId")]
+    check("a streamed tool call's arguments are put together from fragments",
+          lst and lst[0].get("rawInput") == {"path": "."} and done and
+          done[-1].get("status") == "completed", (lst, done))
+    check("two streamed rounds read as two paragraphs",
+          agent_text(notes).replace("\r\n", "\n") == "Looking first.\n\nDone looking.",
+          agent_text(notes))
+    before = dict(stream_log)
+    r, notes = c.call("session/prompt", {"sessionId": sid,
+                                         "prompt": [{"type": "text", "text": "stream refused"}]})
+    check("a server that refuses the streaming fields is asked again without them",
+          r.get("result", {}).get("stopReason") == "end_turn" and
+          agent_text(notes) == "Answered without streaming." and
+          stream_log["plain_requests"] == before["plain_requests"] + 1, (r, agent_text(notes), stream_log))
 
     print("-- the editor's MCP tools:")
     r, notes = c.call("session/prompt", {"sessionId": sid,

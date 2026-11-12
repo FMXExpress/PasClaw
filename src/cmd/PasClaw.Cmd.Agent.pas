@@ -2490,6 +2490,7 @@ begin
                                       LoopCfg.Options.SystemPrompt;
     { The loop's events are the protocol's events. }
     LoopCfg.OnText       := Turn.Text;
+    LoopCfg.OnTextDelta  := Turn.TextDelta;   { as it is written, when the provider streams }
     LoopCfg.OnToolCall   := Turn.ToolCall;
     LoopCfg.OnToolResult := Turn.ToolResult;
     LoopCfg.OnAsk        := Turn.Ask;
