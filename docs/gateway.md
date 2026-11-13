@@ -45,7 +45,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/memory` | GET | Files in `workspace/memory/` with sizes. |
 | `/v1/memory/<name>` | GET | Contents of one memory file (rejects path-traversal). |
 | `/v1/config` | GET | Full config with `providers[].api_key` masked to `•••`. |
-| `/v1/fs?path=…` | GET | Directory listing (entries + sizes + dir flag); defaults to `$PASCLAW_HOME`. |
+| `/v1/fs?path=…` | GET | Directory listing (entries + sizes + dir flag); defaults to `$PASCLAW_HOME/workspace`. A relative `path` here and on the routes below means the agent's workspace, as it does for the file tools, so the chat's Files menu gets the file `write_file("out.txt")` wrote; the listing reports its `path`, `workspace_root` and `cwd_root` absolute. |
 | `/v1/fs/read?path=…` | GET | File contents capped at 256 KB; `truncated` flag on response. |
 | `/v1/logs` | GET | SSE tail of the gateway log buffer (1000-entry ring); recent buffer dumps first, then live. |
 | `/v1/models` | GET | OpenAI-compatible model list containing the configured default model. |
@@ -64,7 +64,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 
 | Tab | Purpose |
 |---|---|
-| **Chat** | SSE-streamed conversation. Tool activity surfaced inline. LocalStorage session history. The **◔** toolbar button shows how much context the conversation uses; click it (or type `/context`) for the breakdown. |
+| **Chat** | SSE-streamed conversation. Tool activity surfaced inline. Chats are saved on the gateway (`workspace/sessions/`, the store the CLI and TUI use). You can open another chat, or start a new one, while a turn runs: the turn keeps going and is saved into the chat it was asked in, which the list marks with a dot until it finishes. The context button in the toolbar shows how much context the conversation uses; click it (or type `/context`) for the breakdown. **Files** lists the files the agent wrote in this chat and downloads them. |
 | **Memory** | Browse and read `workspace/memory/*.md`. |
 | **Files** | Browse `$PASCLAW_HOME`. Read individual files up to 256 KB. |
 | **MCP** | List configured MCP servers and their tool counts. |
