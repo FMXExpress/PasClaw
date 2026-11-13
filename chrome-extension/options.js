@@ -3,13 +3,18 @@
 import {
   getSettings, saveSettings, normalizeGatewayUrl, ensureHostPermission, gwFetch, describeFailure,
 } from "./lib/config.js";
+import { icons } from "./lib/icons.js";
 
 const $ = (id) => document.getElementById(id);
 const result = $("result");
 
+/* show(title, detail?, ok?) -- ok undefined means "in progress". */
 function show(msg, ok) {
-  result.textContent = msg;
+  const [title, ...rest] = String(msg).split("\n");
   result.className = ok === undefined ? "" : ok ? "ok" : "bad";
+  result.innerHTML = (ok === undefined ? "" : ok ? icons.check : icons.alert) + "<div><span class=\"r-title\"></span><span class=\"r-body\"></span></div>";
+  result.querySelector(".r-title").textContent = title;
+  result.querySelector(".r-body").textContent = rest.join("\n");
 }
 
 function formValues() {
@@ -43,31 +48,34 @@ $("form").addEventListener("submit", async (e) => {
   if (!(await grantFor(v.gatewayUrl))) return;
   const s = await saveSettings(v);
   $("gatewayUrl").value = s.gatewayUrl;
-  show("Saved.", true);
+  show("Settings saved", true);
 });
 
 $("test").addEventListener("click", async () => {
   const v = formValues();
   if (!(await grantFor(v.gatewayUrl))) return;
   await saveSettings(v);           // the Origin rule follows the saved URL
-  show("Testing " + v.gatewayUrl + " …");
+  $("test").disabled = true;
+  show("Testing " + v.gatewayUrl + "…");
   try {
     const h = await gwFetch("/v1/health", { timeoutMs: 5000 }, v);
-    if (!h.ok) return show("Health check failed: " + (await describeFailure(h)), false);
+    if (!h.ok) return show("Health check failed\n" + (await describeFailure(h)), false);
     const health = await h.json().catch(() => ({}));
     /* /v1/health is exempt from the token; /v1/status is not, so it also
        proves the token and the Origin handling. */
     const st = await gwFetch("/v1/status", { timeoutMs: 5000 }, v);
-    if (!st.ok) return show("Gateway is up, but /v1/status failed: " + (await describeFailure(st)), false);
+    if (!st.ok) return show("The gateway is up, but it refused the request\n" + (await describeFailure(st)), false);
     const status = await st.json().catch(() => ({}));
-    const lines = ["Connected and saved."];
+    const lines = ["Connected — settings saved"];
     if (health.version) lines.push("PasClaw " + health.version);
     const prov = status.provider || status.default_provider;
     const model = status.model || status.default_model;
     if (prov || model) lines.push(`Default: ${[prov, model].filter(Boolean).join(" / ")}`);
     show(lines.join("\n"), true);
   } catch (err) {
-    show(`Could not reach ${v.gatewayUrl}. Is \`pasclaw gateway\` running there?`, false);
+    show(`Can't reach ${v.gatewayUrl}\nCheck that pasclaw gateway is running there and the URL is right.`, false);
+  } finally {
+    $("test").disabled = false;
   }
 });
 

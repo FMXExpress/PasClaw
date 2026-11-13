@@ -7,6 +7,7 @@ import {
   extractPageInTab, newSessionId, normalizeGatewayUrl,
 } from "./lib/config.js";
 import { renderMarkdown } from "./lib/markdown.js";
+import { icons } from "./lib/icons.js";
 
 const $ = (sel) => document.querySelector(sel);
 const CHAT_KEY = "chat";
@@ -41,52 +42,81 @@ async function newChat() {
 
 const log = $("#log");
 
-function bubble(turn, index) {
-  const el = document.createElement("div");
-  el.className = "msg " + turn.role;
-  if (turn.role === "a") {
-    el.classList.add("md");
-    el.innerHTML = renderMarkdown(turn.text);
-    wireCopy(el);
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    actions.append(actionButton("Copy", () => navigator.clipboard.writeText(turn.text)));
-    el.append(actions);
-  } else if (turn.role === "e") {
-    el.textContent = turn.text;
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    actions.append(actionButton("Retry", () => retryFrom(index)));
-    el.append(actions);
-  } else {
-    el.textContent = turn.text;
-    if (turn.ctx) {
-      const c = document.createElement("div");
-      c.className = "ctx";
-      c.title = turn.ctx.url;
-      c.textContent = (turn.ctx.selection ? "✂ Selection from " : "📄 ") + (turn.ctx.title || turn.ctx.url);
-      el.append(document.createElement("br"), c);
-    }
-  }
-  return el;
+function el(tag, cls, html) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (html !== undefined) n.innerHTML = html;
+  return n;
 }
 
-function actionButton(label, fn) {
-  const b = document.createElement("button");
+function whoLine() {
+  return el("div", "who", '<img src="icons/icon32.png" alt="">PasClaw');
+}
+
+function bubble(turn, index) {
+  const box = el("div", "msg " + turn.role);
+  if (turn.role === "a") {
+    box.append(whoLine());
+    const body = el("div", "body md", renderMarkdown(turn.text));
+    wireCopy(body);
+    box.append(body);
+    const actions = el("div", "actions");
+    actions.append(actionButton(icons.copy, "Copy", async (b) => {
+      await navigator.clipboard.writeText(turn.text);
+      flashCopied(b);
+    }));
+    box.append(actions);
+  } else if (turn.role === "e") {
+    box.append(el("span", "", icons.alert));
+    const t = el("div", "e-text");
+    t.textContent = turn.text;
+    box.append(t);
+    box.append(actionButton(icons.retry, "Retry", () => retryFrom(index)));
+  } else {
+    box.textContent = turn.text;
+    if (turn.ctx) {
+      const c = el("div", "ctx", turn.ctx.selection ? icons.selection : icons.page);
+      c.title = turn.ctx.url;
+      const label = el("span");
+      label.textContent = (turn.ctx.selection ? "Selection · " : "") + (turn.ctx.title || turn.ctx.url);
+      c.append(label);
+      box.append(c);
+    }
+  }
+  return box;
+}
+
+function actionButton(icon, label, fn) {
+  const b = el("button", "act", icon + `<span>${label}</span>`);
   b.type = "button";
-  b.textContent = label;
-  b.addEventListener("click", fn);
+  b.addEventListener("click", () => fn(b));
   return b;
 }
 
+function flashCopied(b) {
+  const prev = b.innerHTML;
+  b.innerHTML = icons.check + "<span>Copied</span>";
+  setTimeout(() => (b.innerHTML = prev), 1400);
+}
+
 function wireCopy(root) {
-  root.querySelectorAll("pre > button.copy").forEach((b) => {
-    b.addEventListener("click", () => {
-      navigator.clipboard.writeText(b.parentElement.querySelector("code").textContent);
-      b.textContent = "copied";
-      setTimeout(() => (b.textContent = "copy"), 1200);
+  root.querySelectorAll(".code button.copy").forEach((b) => {
+    b.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(b.closest(".code").querySelector("code").textContent);
+      const prev = b.textContent;
+      b.textContent = "Copied";
+      setTimeout(() => (b.textContent = prev), 1400);
     });
   });
+}
+
+let toastTimer = 0;
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), 2200);
 }
 
 function renderAll() {
@@ -128,21 +158,29 @@ async function readPage() {
   }
 }
 
+function showCtx(text, url, { selection = false, muted = false } = {}) {
+  $("#ctx-row").hidden = false;
+  $("#ctx-chip").hidden = !text;
+  $("#ctx-chip").classList.toggle("muted", muted);
+  $("#ctx-icon").innerHTML = selection ? icons.selection : icons.page;
+  $("#page-info").textContent = text;
+  $("#ctx-chip").title = url || "";
+}
+
 async function refreshPageInfo() {
-  const info = $("#page-info");
   const grant = $("#btn-grant");
   grant.hidden = true;
+  $("#btn-page").setAttribute("aria-pressed", String(attachPage || !!pendingPage));
   if (pendingPage) {
-    info.textContent = (pendingPage.selection ? "✂ " : "") + (pendingPage.title || pendingPage.url);
-    info.title = pendingPage.url;
+    showCtx((pendingPage.selection ? "Selection · " : "") + (pendingPage.title || pendingPage.url), pendingPage.url,
+      { selection: !!pendingPage.selection });
     return;
   }
-  if (!attachPage) { info.textContent = ""; return; }
+  if (!attachPage) { $("#ctx-row").hidden = true; return; }
   const tab = await activeTab().catch(() => null);
-  if (!tab) { info.textContent = ""; return; }
-  info.textContent = tab.title || tab.url || "";
-  info.title = tab.url || "";
-  if (!canScript(tab.url)) { info.textContent = "This page cannot be read by extensions."; return; }
+  if (!tab) { $("#ctx-row").hidden = true; return; }
+  if (!canScript(tab.url)) { showCtx("Chrome doesn't let extensions read this page", tab.url, { muted: true }); return; }
+  showCtx(tab.title || tab.url || "", tab.url);
   const origin = new URL(tab.url).origin + "/*";
   const ok = tab.url.startsWith("file:") || (await chrome.permissions.contains({ origins: [origin] }));
   /* Without a grant, reading still works when activeTab was granted by the
@@ -153,13 +191,21 @@ async function refreshPageInfo() {
   }
 }
 
+$("#btn-ctx-clear").innerHTML = icons.close;
+$("#page-btn-icon").innerHTML = icons.page;
+$("#btn-ctx-clear").addEventListener("click", () => {
+  pendingPage = null;
+  attachPage = false;
+  refreshPageInfo();
+});
+
 $("#btn-page").addEventListener("click", async () => {
-  if (pendingPage) { pendingPage = null; }
+  if (pendingPage) { pendingPage = null; attachPage = false; }
   else attachPage = !attachPage;
-  $("#btn-page").setAttribute("aria-pressed", String(attachPage));
   await refreshPageInfo();
 });
 
+$("#btn-grant").innerHTML = icons.lock + "<span>Allow access to this site</span>";
 $("#btn-grant").addEventListener("click", async () => {
   const origin = $("#btn-grant").dataset.origin;
   /* permissions.request must run inside the click -- no await before it. */
@@ -191,8 +237,11 @@ function contextBlock(page) {
 
 function setStreaming(on) {
   const b = $("#btn-send");
-  b.textContent = on ? "Stop" : "Send";
+  b.innerHTML = on ? icons.stop : icons.send;
   b.classList.toggle("stop", on);
+  b.title = on ? "Stop" : "Send (Enter)";
+  b.setAttribute("aria-label", on ? "Stop" : "Send");
+  updateSendState();
 }
 
 async function submit() {
@@ -211,8 +260,8 @@ async function submit() {
     }
   }
   pendingPage = null;
-  $("#btn-page").setAttribute("aria-pressed", String(attachPage));
   $("#input").value = "";
+  autoGrow();
   const ctx = page ? { title: page.title, url: page.url, selection: !!page.selection } : null;
   const content = page ? text + "\n" + contextBlock(page) : text;
   pushTurn({ role: "u", text, ctx, content });
@@ -242,10 +291,11 @@ function requestMessages() {
 }
 
 async function stream() {
-  const el = document.createElement("div");
-  el.className = "msg a md";
-  el.innerHTML = '<span class="typing"><span></span><span></span><span></span></span>';
-  log.append(el);
+  const box = el("div", "msg a streaming");
+  box.append(whoLine());
+  const out = el("div", "body md", '<span class="thinking"><span class="dots"><i></i><i></i><i></i></span>Working…</span>');
+  box.append(out);
+  log.append(box);
   scrollDown(true);
   setStreaming(true);
   abort = new AbortController();
@@ -257,9 +307,9 @@ async function stream() {
     raf = 0;
     if (!text) return;
     const open = new Set();
-    el.querySelectorAll("details.tool").forEach((d, i) => d.open && open.add(i));
-    el.innerHTML = renderMarkdown(text);
-    el.querySelectorAll("details.tool").forEach((d, i) => open.has(i) && (d.open = true));
+    out.querySelectorAll("details.tool").forEach((d, i) => d.open && open.add(i));
+    out.innerHTML = renderMarkdown(text);
+    out.querySelectorAll("details.tool").forEach((d, i) => open.has(i) && (d.open = true));
     scrollDown(false);
   };
 
@@ -282,7 +332,7 @@ async function stream() {
       signal: abort.signal,
     }, settings);
     if (!r.ok) { error = await describeFailure(r); return; }
-    setStatus(true);
+    if ($("#status").classList.contains("down")) refreshStatus();
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -308,17 +358,17 @@ async function stream() {
     }
   } catch (e) {
     if (e && e.name !== "AbortError") {
-      error = "Could not reach the gateway at " + normalizeGatewayUrl(settings.gatewayUrl) + ". Is `pasclaw gateway` running?";
+      error = "Can't reach the gateway at " + normalizeGatewayUrl(settings.gatewayUrl) + ". Check that pasclaw gateway is running, or change the URL in Settings.";
       setStatus(false, "offline");
     }
   } finally {
     if (raf) cancelAnimationFrame(raf);
     abort = null;
     setStreaming(false);
-    el.remove();
+    box.remove();
     if (text) pushTurn({ role: "a", text });
     if (error) pushTurn({ role: "e", text: error });
-    if (!text && !error) pushTurn({ role: "e", text: "(stopped — no reply)" });
+    if (!text && !error) pushTurn({ role: "e", text: "Stopped before PasClaw replied." });
     $("#input").focus();
   }
 }
@@ -334,6 +384,28 @@ async function retryFrom(index) {
   if (last && last.role === "u") await stream();
 }
 
+function autoGrow() {
+  const t = $("#input");
+  t.style.height = "auto";
+  t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.38) + "px";
+  updateSendState();
+}
+
+function updateSendState() {
+  $("#btn-send").disabled = !abort && !$("#input").value.trim();
+}
+
+$("#input").addEventListener("input", autoGrow);
+
+document.querySelectorAll(".suggestion").forEach((b) => {
+  b.addEventListener("click", async () => {
+    if (b.dataset.page) { attachPage = true; await refreshPageInfo(); }
+    $("#input").value = b.dataset.prompt;
+    autoGrow();
+    submit();
+  });
+});
+
 $("#composer").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
 $("#input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
@@ -347,8 +419,8 @@ async function takeStaged() {
   await chrome.storage.session.remove("staged");
   showTab("chat");
   pendingPage = staged.page;
-  $("#btn-page").setAttribute("aria-pressed", "true");
   $("#input").value = staged.draft || "";
+  autoGrow();
   $("#input").focus();
   $("#input").setSelectionRange($("#input").value.length, $("#input").value.length);
   await refreshPageInfo();
@@ -368,15 +440,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 function setStatus(ok, label) {
   const s = $("#status");
+  s.classList.remove("checking");
   s.classList.toggle("ok", ok);
   s.classList.toggle("down", !ok);
-  $("#status-text").textContent = label || (ok ? "online" : "offline");
-  s.title = ok ? "Gateway " + normalizeGatewayUrl(settings.gatewayUrl) : label || "offline";
+  $("#status-text").textContent = ok ? (label || "Online") : "Offline";
+  s.title = (ok ? "Connected to " : "Can't reach ") + normalizeGatewayUrl(settings.gatewayUrl) +
+    (ok && label ? ` (PasClaw ${label})` : !ok && label ? ` — ${label}` : "") + ". Click to check again.";
 }
 
 async function refreshStatus() {
   const h = await checkHealth(settings);
-  if (h.ok) setStatus(true, (h.body && h.body.version) ? String(h.body.version).replace(/^v?/, "v") : "online");
+  if (h.ok) setStatus(true, (h.body && h.body.version) ? String(h.body.version).replace(/^v?/, "v") : "");
   else setStatus(false, h.error);
   if (h.ok) loadModels();
   return h.ok;
@@ -390,7 +464,7 @@ async function loadModels() {
     const j = await r.json();
     const ids = (j.data || []).map((m) => m.id).filter(Boolean);
     const keep = settings.model;
-    sel.innerHTML = '<option value="">Gateway default</option>';
+    sel.innerHTML = '<option value="">Default model</option>';
     for (const id of ids) sel.add(new Option(id, id));
     if (keep && !ids.includes(keep)) sel.add(new Option(keep, keep));
     sel.value = keep || "";
@@ -426,6 +500,11 @@ $("#tab-web").addEventListener("click", () => showTab("web"));
 $("#btn-reload").addEventListener("click", () => loadWebUi(true));
 $("#btn-open-tab").addEventListener("click", () => chrome.tabs.create({ url: normalizeGatewayUrl(settings.gatewayUrl) + "/" }));
 $("#btn-new").addEventListener("click", newChat);
+$("#status").addEventListener("click", async () => {
+  $("#status").classList.add("checking");
+  const ok = await refreshStatus();
+  toast(ok ? "Gateway is online" : "Gateway is unreachable");
+});
 $("#btn-settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 
 onSettingsChanged((s) => {
@@ -438,7 +517,9 @@ onSettingsChanged((s) => {
 /* ---------------------------------------------------------------- boot */
 
 $("#mode").value = settings.mode || "build";
+setStreaming(false);
 renderAll();
+$("#status").classList.add("checking");
 refreshStatus();
 setInterval(() => { if (!abort) refreshStatus(); }, 30000);
 takeStaged();

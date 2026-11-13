@@ -42,6 +42,7 @@ sidepanel.html/js  chat + Web UI tabs
 options.html/js    settings + connection test
 lib/config.js      settings, gateway fetch, Origin rule, page extractor
 lib/markdown.js    escaping Markdown + tool-transcript renderer
+lib/icons.js       inline SVG icon set
 ui.css             shared styles (dark/light, colours from the gateway web UI)
 icons/             16/32/48/128 px
 ```

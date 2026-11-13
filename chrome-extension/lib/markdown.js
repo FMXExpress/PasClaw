@@ -42,6 +42,8 @@ function table(lines) {
     rows.map((r) => "<tr>" + r.map((c) => `<td>${inline(c)}</td>`).join("") + "</tr>").join("") + "</tbody></table>";
 }
 
+const TOOL_ICON = '<span class="t-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L4 16.8V20h3.2l5.3-5.3a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/></svg></span>';
+const CHEVRON = '<svg class="t-chev" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
 const TOOL_CALL = /^⏺\s?(.*)$/;
 const TOOL_RESULT = /^\s*⎿\s?(.*)$/;
 
@@ -70,8 +72,8 @@ export function renderMarkdown(text) {
       const body = [];
       i++;
       while (i < lines.length && !lines[i].trim().startsWith(fence[1])) body.push(lines[i++]);
-      const lang = fence[2] ? ` data-lang="${esc(fence[2])}"` : "";
-      out.push(`<pre${lang}><button class="copy" type="button">copy</button><code>${esc(body.join("\n"))}</code></pre>`);
+      out.push(`<div class="code"><div class="code-head"><span>${esc(fence[2] || "text")}</span>` +
+        `<button class="act copy" type="button">Copy</button></div><pre><code>${esc(body.join("\n"))}</code></pre></div>`);
       continue;
     }
 
@@ -84,8 +86,13 @@ export function renderMarkdown(text) {
         /* continuation lines of a multi-line result are indented */
         while (i + 1 < lines.length && /^\s{3,}\S/.test(lines[i + 1]) && !TOOL_RESULT.test(lines[i + 1])) results.push(lines[++i].trim());
       }
-      const first = results[0] ? ` <span class="res">— ${esc(results[0].slice(0, 80))}</span>` : "";
-      out.push(`<details class="tool"><summary>⏺ ${esc(call[1])}${first}</summary>` +
+      const m = call[1].match(/^([\w.:\/-]+)\s*\(([\s\S]*)\)\s*$/);
+      const name = m ? m[1] : call[1];
+      const args = m ? m[2] : "";
+      out.push(`<details class="tool"><summary>${TOOL_ICON}<span class="t-name">${esc(name)}</span>` +
+        `<span class="t-args">${esc(args)}</span>` +
+        (results[0] ? `<span class="t-res">${esc(results[0].slice(0, 80))}</span>` : "") +
+        `${CHEVRON}</summary>` +
         (results.length ? `<pre>${esc(results.join("\n"))}</pre>` : "") + "</details>");
       continue;
     }
