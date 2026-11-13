@@ -48,4 +48,26 @@ echo "  ok: after the sweep the edit is built"
 sh "$here/sweep-stale-units.sh" "$dir/lib" "$dir/src"
 [ -f "$dir/lib/u.ppu" ] || { echo "FAIL: an unchanged unit was deleted"; exit 1; }
 echo "  ok: an unchanged unit is kept"
+
+# An edit made WHILE a sweep runs -- after find has looked at that source,
+# before the sweep is over -- must still be swept by the next run. A find
+# shim runs the real find, then edits the source, so the race happens on
+# every run rather than now and then. A marker stamped after the scan would
+# be newer than that edit, and the stale unit would be kept for good.
+mkdir -p "$dir/shim"
+real_find=$(command -v find)
+cat > "$dir/shim/find" <<SHIM
+#!/bin/sh
+"$real_find" "\$@"
+rc=\$?
+sleep 0.05
+touch "$dir/src/u.pas"
+exit \$rc
+SHIM
+chmod +x "$dir/shim/find"
+PATH="$dir/shim:$PATH" sh "$here/sweep-stale-units.sh" "$dir/lib" "$dir/src"
+[ -f "$dir/lib/u.ppu" ] || { echo "FAIL: the unit went before its source was edited"; exit 1; }
+sh "$here/sweep-stale-units.sh" "$dir/lib" "$dir/src"
+[ ! -f "$dir/lib/u.ppu" ] || { echo "FAIL: a source edited during a sweep was never swept: its unit is still there"; exit 1; }
+echo "  ok: a source edited during a sweep is swept by the next one"
 echo PASS

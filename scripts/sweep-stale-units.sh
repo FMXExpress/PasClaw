@@ -13,9 +13,17 @@
 # compile catches what FPC's check misses.
 #
 # The Makefile runs this once per invocation, before any recipe: every
-# source changed after the previous run started is newer than the marker,
-# its unit goes, and the marker moves to now. Deleting a unit FPC would have
-# rebuilt anyway costs nothing; keeping one it would not have is the bug.
+# source changed after the previous run's scan began is newer than the
+# marker, and its unit goes. Deleting a unit FPC would have rebuilt anyway
+# costs nothing; keeping one it would not have is the bug.
+#
+# The next marker is stamped BEFORE the scan and published after it. A
+# source edited while find is walking -- after it has looked at that file --
+# is then newer than the new marker and the next run sweeps it; stamped
+# after the scan, the marker would be newer than that edit for good, and the
+# stale unit kept forever (Codex, PR #636). It has this process's id in its
+# name so two makes at once never publish each other's half-done marker; the
+# later publish may move the marker back, which only sweeps more.
 # Include files are not mapped to their units (src has one, vendored).
 
 out=$1
@@ -23,6 +31,8 @@ shift
 [ -n "$out" ] || exit 0
 mkdir -p "$out" 2>/dev/null || exit 0
 mark="$out/.sweep-mark"
+next="$out/.sweep-mark.$$"
+touch "$next" 2>/dev/null || exit 0
 
 if [ -f "$mark" ]; then
   find "$@" -type f \( -name '*.pas' -o -name '*.pp' \) -newer "$mark" 2>/dev/null |
@@ -35,4 +45,4 @@ if [ -f "$mark" ]; then
     done
   done
 fi
-touch "$mark"
+mv -f "$next" "$mark"
