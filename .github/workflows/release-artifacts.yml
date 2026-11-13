@@ -22,6 +22,9 @@ name: Release artifacts
 #         PasClaw-<ver>-x86-setup.exe
 #         pasclaw-<ver>-linux-x86_64.tar.gz
 #      (Re-run manually via "Run workflow" and pass the tag if needed.)
+#   4. Nothing here writes the Release's description. Put the notes in
+#      docs/releases/<tag>.md through a PR, then run the "Release notes"
+#      workflow (release-notes.yml) with the tag.
 
 on:
   release:
