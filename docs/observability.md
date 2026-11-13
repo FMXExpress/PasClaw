@@ -127,7 +127,17 @@ Per turn, accumulated into the session JSON's `meta.stats` block:
 
 The token counters are what the provider reported, nothing else: a turn the provider refused, or a reply that carried no usage, adds no tokens (it still counts as a turn), and the cache counters move only when the provider sent cache figures.
 
-Earlier builds could add leftover memory to these counters on a failed turn, or on any reply without cache figures — totals in the billions, or negative. Totals already saved are not corrected. To start clean, delete the gateway buckets, `$PASCLAW_HOME/workspace/sessions/_gateway_*.json`: they hold counters only, no conversation. A CLI or TUI session keeps its own counters in the `meta.stats` block of its session file.
+Earlier builds could add leftover memory to these counters on a failed turn, or on any reply without cache figures — totals in the billions, or negative. Totals already saved are not corrected.
+
+### Resetting the totals
+
+**Reset totals** on the web UI's Stats tab, or `POST /v1/stats/reset`, sets every saved counter back to zero:
+
+```bash
+curl -X POST http://127.0.0.1:8088/v1/stats/reset
+```
+
+Conversations are kept — only the `meta.stats` block of each session file is emptied, and the gateway buckets (`_gateway_*.json`, counters only) are deleted. A conversation with a turn running on the gateway is skipped and reported; reset again once it is idle. A session open in a running TUI writes the counters it holds in memory back with its next save, so close it first if its numbers are the wrong ones. The reset cannot be undone.
 
 ### Gateway endpoint buckets
 
@@ -135,7 +145,7 @@ The gateway's own stateless API endpoints (`/v1/chat`, `/v1/chat/completions`, `
 
 ### Web UI Stats tab
 
-`pasclaw gateway` serves a Stats tab that auto-refreshes every 10s and renders the cards + rollup tables. When `stats_collection_enabled: false` the panel shows a hint pointing at the config flag rather than a wall of zeros.
+`pasclaw gateway` serves a Stats tab that auto-refreshes every 10s and renders the cards + rollup tables. When `stats_collection_enabled: false` the panel shows a hint pointing at the config flag rather than a wall of zeros. **Reset totals** asks first, then sets every counter back to zero (see [Resetting the totals](#resetting-the-totals)).
 
 ## TUI `/stats` overlay
 
