@@ -21,6 +21,11 @@ program gateway_stats_buckets_tests;
   The actual concurrency helper (TCriticalSection) and the http
   wiring belong to the gateway unit and are exercised in
   integration; this test pins the per-session contract.
+
+  Also the cached /v1/stats answer (StatsCacheGet / Put / Drop): an
+  answer put together before the cache was dropped -- a request already
+  reading the sessions when POST /v1/stats/reset ran -- is not stored
+  after it, and one started after the drop is.
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -292,7 +297,41 @@ begin
              'raw user string never appears in the session id');
 end;
 
+procedure TestStaleStatsAnswerIsNotCached;
+var
+  Body: string;
+  Before, After, Now_: Int64;
 begin
+  StatsCacheDrop;
+  AssertFalse(StatsCacheGet(Body, Before), 'nothing is cached after a drop');
+
+  { A request starts adding the totals up; a reset lands; the request
+    finishes and tries to store what it has. }
+  StatsCacheDrop;
+  AssertFalse(StatsCachePut(Before, '{"input_tokens":1631552496}'),
+              'an answer from before the drop is refused');
+  AssertFalse(StatsCacheGet(Body, After), 'and it is not served afterwards');
+  AssertEqStr(Body, '', 'no body comes back with a miss');
+  AssertTrue(After <> Before, 'a drop changes the generation');
+
+  { One started after the drop is kept, and served. }
+  AssertTrue(StatsCachePut(After, '{"input_tokens":0}'),
+             'an answer from after the drop is stored');
+  AssertTrue(StatsCacheGet(Body, Now_), 'and served while fresh');
+  AssertEqStr(Body, '{"input_tokens":0}', 'the stored body is what comes back');
+  AssertEqInt(Now_, After, 'storing does not change the generation');
+
+  { Two requests under the same generation: the later store wins, as
+    before -- both are from after the last drop. }
+  AssertTrue(StatsCachePut(After, '{"input_tokens":18}'), 'a second store under the same generation');
+  AssertTrue(StatsCacheGet(Body, Now_) and (Body = '{"input_tokens":18}'), 'replaces the first');
+
+  StatsCacheDrop;
+  AssertFalse(StatsCacheGet(Body, Now_), 'a drop empties the cache');
+end;
+
+begin
+  TestStaleStatsAnswerIsNotCached;
   TestLeadingUnderscoreIdIsSafe;
   TestBucketAccumulatesAcrossCalls;
   TestDistinctBucketsDontInterfere;
