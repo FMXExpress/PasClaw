@@ -8,7 +8,12 @@ Two steps, because the gateway has to be running between them:
     python3 docs/screenshots/capture.py shoot docs/screenshots --home /tmp/pasclaw-shots
 
 `init` writes the fixture config and a MEMORY.md. `shoot` seeds the running
-gateway with projects and one finished conversation, then captures.
+gateway with projects, one workflow and one finished conversation, then
+captures.
+
+Every shot names its colour scheme. The web UI follows the OS theme until a
+theme is chosen, and Playwright's default is light, so a shot that does not
+say would come out light on one machine and dark on another.
 
 The seeding is the point. An empty gateway photographs a blank chat pane and
 "No projects yet." -- the first version of these screenshots did exactly
@@ -74,13 +79,36 @@ What I did *not* check: whether docs/release.md still exists, or whether \
 steps 1 and 4 have their own ordering constraints — the note only covers the \
 3-before-2 case."""
 
-SHOTS = [
-    ("web-ui-chat",   "/",         None,     []),
-    ("web-ui-memory", "/",         "MEMORY", ["MEMORY.md"]),
-    ("web-desktop",   "/desktop",  None,     []),
-]
+# A two-node workflow, so the Workflow tab shows an editor with a graph in it
+# rather than an empty canvas. Saved, never run: running it would need the
+# checklist file, and the picture is of the editor.
+WORKFLOW = {
+    "id": "release-digest",
+    "name": "release_digest",
+    "description": "Read the release checklist and keep its ordering rule as a fact.",
+    "inputs": [{"name": "path", "type": "string", "required": True}],
+    "nodes": [
+        {"id": "read", "tool": "read_file", "args": {"path": "{{inputs.path}}"}},
+        {"id": "remember", "tool": "memory_write",
+         "args": {"text": "{{nodes.read.content}}", "kind": "fact"}},
+    ],
+    "edges": [{"from": "read", "to": "remember"}],
+}
 
 W, H = 1600, 1000
+
+# name, page path, colour scheme, nav tab to open, things to click after it,
+# an action ("context": open the context panel), viewport, device scale.
+SHOTS = [
+    dict(name="web-ui-chat"),
+    dict(name="web-ui-chat-light", scheme="light"),
+    dict(name="web-ui-context", action="context"),
+    dict(name="web-ui-memory", tab="Memory", clicks=["MEMORY.md"]),
+    dict(name="web-ui-workflow", tab="Workflow", clicks=["release_digest"]),
+    dict(name="web-ui-settings", tab="Settings"),
+    dict(name="web-ui-phone", viewport=(390, 844), scale=2),
+    dict(name="web-desktop", path="/desktop"),
+]
 
 
 # --------------------------------------------------------------------------
@@ -128,6 +156,20 @@ def seed_projects(base):
             continue
         post(base + "/v1/projects", {"title": title, "description": desc})
     print("projects: %d" % len(json.loads(get(base + "/v1/projects"))["projects"]))
+
+
+def seed_workflow(base):
+    try:
+        have = {w.get("id") for w in json.loads(get(base + "/v1/workflows")).get("workflows", [])}
+    except urllib.error.HTTPError as exc:
+        raise SystemExit("workflows unavailable (%s) -- is workflows_enabled off?" % exc)
+    if WORKFLOW["id"] not in have:
+        try:
+            post(base + "/v1/workflows", WORKFLOW)
+        except urllib.error.HTTPError as exc:
+            raise SystemExit("saving the fixture workflow failed: %s %s"
+                             % (exc, exc.read().decode("utf-8", "replace")))
+    print("workflow: %s" % WORKFLOW["name"])
 
 
 def relay_worker(base, stop, answered):
@@ -262,26 +304,34 @@ def cmd_shoot(args):
 
     if not args.no_seed:
         seed_projects(base)
+        seed_workflow(base)
         seed_conversation(base)
 
     failures = []
     with sync_playwright() as p:
         browser = launch(p)
-        for name, path, click, then in SHOTS:
-            page = browser.new_page(viewport={"width": W, "height": H},
-                                    device_scale_factor=1)
+        for shot in SHOTS:
+            name = shot["name"]
+            w, h = shot.get("viewport", (W, H))
+            page = browser.new_page(viewport={"width": w, "height": h},
+                                    device_scale_factor=shot.get("scale", 1),
+                                    color_scheme=shot.get("scheme", "dark"))
             errs = []
             page.on("pageerror", lambda e: errs.append(str(e)))
             page.on("console",
                     lambda m: errs.append(m.text) if m.type == "error" else None)
-            page.goto(base + path, wait_until="networkidle", timeout=30000)
+            page.goto(base + shot.get("path", "/"), wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(2500)
-            if click:
-                page.locator("nav button", has_text=click).first.click()
+            if shot.get("tab"):
+                page.locator("nav button", has_text=shot["tab"]).first.click()
                 page.wait_for_timeout(1800)
-            for label in then:
+            for label in shot.get("clicks", []):
                 page.get_by_text(label).first.click()
                 page.wait_for_timeout(1500)
+            if shot.get("action") == "context":
+                page.click("#ctx-toggle")
+                page.wait_for_selector("#ctx-legend li", timeout=15000)
+                page.wait_for_timeout(800)
             dest = os.path.join(out, name + ".png")
             page.screenshot(path=dest)
             size = os.path.getsize(dest)

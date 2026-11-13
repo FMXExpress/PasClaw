@@ -31,6 +31,20 @@ pasclaw agent                  # start chatting
 
 See [Build](#build) for Delphi / cross-compile / Windows-on-ARM.
 
+## Screenshots
+
+The web UI that `pasclaw serve` / `pasclaw gateway` serves on the same port as the API. It follows the OS theme until you pick one.
+
+![The web UI's chat tab, dark theme](docs/screenshots/web-ui-chat.png)
+
+| Light theme | Context breakdown |
+|---|---|
+| ![The chat tab in the light theme](docs/screenshots/web-ui-chat-light.png) | ![The context panel open above the chat](docs/screenshots/web-ui-context.png) |
+| **Workflow editor** | **Phone width** |
+| ![A two-node workflow in the editor](docs/screenshots/web-ui-workflow.png) | ![The chat tab at phone width](docs/screenshots/web-ui-phone.png) |
+
+More, and how they are made, in [docs/screenshots](docs/screenshots/README.md). The content is fixture data written by the capture script, not a real session.
+
 ## Features
 
 **LLM providers** — ~26-entry catalog covering Anthropic Messages, OpenAI Chat Completions, Google Gemini `generateContent`, plus OpenAI-protocol-compatible providers (Groq, DeepSeek, Mistral, Cerebras, OpenRouter, Zhipu, Qwen, Moonshot, MiniMax, NVIDIA NIM, Novita, MiMo, VolcEngine, xAI/Grok, Perplexity, Ollama, LM Studio, vLLM, LiteLLM) and three Cloudflare AI Gateway fronts (`cloudflare`, `cloudflare-anthropic`, `cloudflare-gemini`). The full list lives in `src/pkg/providers/PasClaw.Providers.Catalog.pas`; adding a provider is a one-record append. Streaming SSE on all three protocol families; native search grounding on Gemini; citation collation on Perplexity. Code-driven `SetProvider('anthropic', $ANTHROPIC_API_KEY)` for embedders so no `~/.pasclaw/config.json` is required.
