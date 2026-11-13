@@ -1045,6 +1045,7 @@ procedure PersistGatewaySession(const Cfg: TConfig;
 var
   S: TSession;
   i: Integer;
+  Refusal: string;
 begin
   if Trim(SessionId) = '' then Exit;
   if not IsSafeSessionId(SessionId) then Exit;
@@ -1069,8 +1070,17 @@ begin
          anything `pasclaw learn` reads. (Codex P1 on #556.)
 
          Guarded on non-empty so a turn that genuinely produced no text -- an
-         aborted stream, a hard provider failure -- does not gain a blank
-         assistant turn that never existed. *)
+         aborted stream -- does not gain a blank assistant turn that never
+         existed.
+
+         And not when the provider refused. A hard provider failure is NOT
+         empty: RunToolLoop hands the provider's error text back as the
+         content ("anthropic error: status=-1 msg=Connection Closed
+         Gracefully."). Saved as the assistant's reply, it went back to the
+         model as something the assistant had said on every later turn of a
+         session_context conversation, and a reload showed it as an answer.
+         The turn's history (the question, any tools that ran) is still
+         saved; only the error is not dressed up as a reply. *)
       (* Record the loop history BEFORE the reply is appended, and the
          reply separately AFTER -- because on a compacting turn they
          need different handling. TCompactFlush fired mid-loop with the
@@ -1084,7 +1094,7 @@ begin
          exactly the array the flush saw, and the reply is appended on
          its own, on every path. *)
       LogSessionTurn(S.Meta, S.Messages);
-      if Trim(Loop.Content) <> '' then
+      if (Trim(Loop.Content) <> '') and not ProviderRefused(Loop, Refusal) then
       begin
         SetLength(S.Messages, Length(S.Messages) + 1);
         S.Messages[High(S.Messages)] := MakeMessage(mrAssistant, Loop.Content);
@@ -8269,6 +8279,8 @@ var
   FB: TLLMProviderArray;
   FBModels: TStringArray;
   SnapModel: string;
+  Refusal: string;
+  RefusalObj: TJsonObject;
   function SanitizeStreamError(const S: string): string;
   begin
     Result := StringReplace(S, #13, ' ', [rfReplaceAll]);
@@ -8618,6 +8630,19 @@ begin
                              GatewayBucketId(GW_BUCKET_V1_CHAT_COMPLETIONS, LoopCfg.Provider.GetName, ReqModel),
                              '(gateway: /v1/chat/completions ' + ReqModel + ')',
                              LoopCfg.Provider.GetName, ReqModel, Loop);
+      (* The provider refused: an error, not an answer. Streamed as the
+         reply's content it was indistinguishable from one -- finish_reason
+         "stop", the error text as the assistant's words -- so a client
+         that keeps its own history (the web UI) sent it back to the model
+         as something the assistant had said. The OpenAI error frame is what
+         streaming clients already recognise as a failed request. *)
+      if ProviderRefused(Loop, Refusal) then
+      begin
+        if FDebugIO then LogDebug('chat/completions -> SSE error (provider refused): %s', [Refusal]);
+        Streamer.WriteError(SanitizeStreamError(Refusal));
+        StreamClosed := Streamer.Closed;
+        Exit;
+      end;
       if Loop.LastResp.FinishReason <> '' then
         FinishReason := Loop.LastResp.FinishReason
       else
@@ -8699,6 +8724,26 @@ begin
                            GatewayBucketId(GW_BUCKET_V1_CHAT_COMPLETIONS, LoopCfg.Provider.GetName, ReqModel),
                            '(gateway: /v1/chat/completions ' + ReqModel + ')',
                            LoopCfg.Provider.GetName, ReqModel, Loop);
+
+    { The provider refused: 502 with the provider's message, as the
+      streaming branch sends an error frame, rather than a 200 whose
+      "answer" is the error text. }
+    if ProviderRefused(Loop, Refusal) then
+    begin
+      if FDebugIO then LogDebug('chat/completions -> 502 (provider refused): %s', [Refusal]);
+      ReplyObj := TJsonObject.Create;
+      try
+        RefusalObj := TJsonObject.Create;
+        RefusalObj.PutStr('message', Refusal);
+        RefusalObj.PutStr('type', 'provider_error');
+        RefusalObj.PutInt('upstream_status', Loop.LastResp.StatusCode);
+        ReplyObj.PutObject('error', RefusalObj);
+        WriteJSON(AResp, 502, ReplyObj.ToJSON);
+      finally
+        ReplyObj.Free;
+      end;
+      Exit;
+    end;
 
     if Loop.LastResp.FinishReason <> '' then
       FinishReason := Loop.LastResp.FinishReason

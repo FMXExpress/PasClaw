@@ -1461,7 +1461,7 @@ refreshMeta();   /* initial paint; failure (throw OR bad response) arms the prob
    mid-turn. */
 let sessions = [];           // metadata list from the server
 let activeSessionId = null;  // server id, or null for an unsaved new chat
-let activeTurns = [];        // [{role:'u'|'a', text, tools?}] for the open chat
+let activeTurns = [];        // [{role:'u'|'a'|'e', text, tools?}] for the open chat ('e' = a failed turn: shown, never sent or saved)
 let sessionFilter = "";      // sidebar search (matches title)
 
 async function refreshSessions() {
@@ -1786,6 +1786,7 @@ function attachActions(row, role, index) {
   bar.appendChild(mk("copy", e => copyText(row._raw, e.currentTarget)));
   if (role === "u") bar.appendChild(mk("edit", () => editTurn(index)));
   if (role === "a") bar.appendChild(mk("regenerate", () => regenerateAt(index)));
+  if (role === "e") bar.appendChild(mk("retry", () => retryAt(index)));
   /* Inside the bubble so the action row never changes the bubble's
      footprint -- user and assistant bubbles stay the same width. */
   (row.querySelector(".bub") || row).appendChild(bar);
@@ -1799,6 +1800,17 @@ function regenerateAt(index) {
   activeTurns = activeTurns.slice(0, index);
   renderActive();
   streamAssistant();   // persists on completion
+}
+
+/* Retry a failed turn: drop the error and whatever partial reply came
+   before it, back to the user's message, and ask again. */
+function retryAt(index) {
+  if (streaming) return;
+  let k = index;
+  while (k > 0 && activeTurns[k - 1].role !== "u") k--;
+  activeTurns = activeTurns.slice(0, k);
+  renderActive();
+  streamAssistant();
 }
 
 /* Pull a user turn back into the composer for editing; truncate the
@@ -1858,6 +1870,10 @@ async function streamAssistant() {
   setStreaming(true);
   currentAbort = new AbortController();
   let assistantText = "";
+  /* Why the turn failed, when it did. Kept apart from assistantText: an
+     error is not something the assistant said, and recorded as its reply
+     it would go back to the model on every later turn. */
+  let streamError = "";
   const streamToolDetails = [];   // full call/result detail from the SSE comment side-channel
 
   /* Live render: draw the streaming turn with the SAME expandable tool
@@ -1901,9 +1917,9 @@ async function streamAssistant() {
       signal: currentAbort.signal
     });
     if (!r.ok) {
-      bub.textContent = `(http ${r.status})`;
-      bub.parentElement.className = "row e";
-      bub.parentElement.querySelector(".role").textContent = "error";
+      let detail = "";
+      try { const j = await r.json(); detail = (j && j.error && j.error.message) || ""; } catch {}
+      streamError = `(http ${r.status})` + (detail ? " " + detail : "");
       return;
     }
     const reader = r.body.getReader();
@@ -1931,6 +1947,12 @@ async function streamAssistant() {
         if (data === "[DONE]") break;
         try {
           const j = JSON.parse(data);
+          /* The gateway's error frame (OpenAI shape): the provider refused,
+             or the loop failed. Not content. */
+          if (j.error) {
+            streamError = (j.error.message || "the request failed") + "";
+            continue;
+          }
           const delta = (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || "";
           if (delta) {
             assistantText += delta;
@@ -1942,10 +1964,7 @@ async function streamAssistant() {
   } catch (err) {
     /* User-initiated Stop arrives as AbortError -- keep whatever streamed
        so far rather than surfacing it as an error. */
-    if (err && err.name !== "AbortError") {
-      bub.textContent = String(err);
-      bub.parentElement.className = "row e";
-    }
+    if (err && err.name !== "AbortError") streamError = String(err);
   } finally {
     setStreaming(false);
     currentAbort = null;
@@ -1954,8 +1973,15 @@ async function streamAssistant() {
          copy/regenerate actions at the right index. Tool detail (full
          args/result) rides along so the cards expand to the real thing;
          it's live-only -- a reloaded turn falls back to the streamed
-         summary lines embedded in the content. */
+         summary lines embedded in the content. When the turn failed part
+         way, this is the tool activity that really happened before it. */
       recordTurn("a", assistantText, pairToolDetails(streamToolDetails));
+    }
+    /* A failure is its own "e" turn: shown, with a retry, but never sent
+       to the model (chatRequestBody keeps user/assistant turns only) and
+       never saved (persistActive likewise). */
+    if (streamError) recordTurn("e", streamError);
+    if (assistantText || streamError) {
       renderActive();
     } else if (bub.querySelector(".typing")) {
       /* Stream closed with no content and wasn't an error -- clear the dots. */
