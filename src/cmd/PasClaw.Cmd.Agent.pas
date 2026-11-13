@@ -173,12 +173,13 @@ type
       disk = load history + system-prompt override from
       workspace/sessions/<id>.json. Non-empty AND missing on disk =
       create that session id with empty history (so a script can
-      pre-seed an id like "daily-2026-06-01"). RunSingleTurn (one-shot
-      -m) USED TO ignore this; as of PR #292 P1, when --session <id>
-      is supplied alongside -m the one-shot turn is persisted to that
-      id so scripted callers (notably `pasclaw profile bench`) can
-      read back per-turn stats. Callers that don't pass --session keep
-      the original "single turns aren't persisted" behaviour. }
+      pre-seed an id like "daily-2026-06-01"). Alongside -m it makes
+      RunSingleTurn one turn ON that session: the stored history is
+      sent, and the prompt, tool history and reply are added to it --
+      which is also what lets scripted callers (notably `pasclaw
+      profile bench`, PR #292 P1) read back per-turn stats. Callers
+      that don't pass --session keep the original "single turns
+      aren't persisted" behaviour. }
     Session:       string;
     { --scenarios <dir> -- held-out checks run after the final answer
       (PasClaw.Agent.Verify); overrides config verification.scenarios. }
@@ -812,6 +813,25 @@ begin
     Result := U.InputTokens;
 end;
 
+{ Prompt without the working-state block a turn put in front of it.
+
+  The block (FormatWorkingStateBlock) is added for one turn. When
+  compaction did not fire, the loop hands the prompt back with the block
+  still on it, and keeping that as the session's prompt would add another
+  copy on every later turn. When compaction did fire the summariser may
+  have rewritten the whole prompt: the comparison then fails and the
+  text is kept as it is. Codex P2 on PR #180. }
+function StripWorkingStatePrefix(const Prompt, Block: string): string;
+var
+  Lead: string;
+begin
+  Result := Prompt;
+  if Block = '' then Exit;
+  Lead := Block + sLineBreak;
+  if (Length(Prompt) > Length(Lead)) and (Copy(Prompt, 1, Length(Lead)) = Lead) then
+    Result := Copy(Prompt, Length(Lead) + 1, MaxInt);
+end;
+
 function MaybeRender(const Cfg: TConfig; const S: string): string; inline;
 { Wraps the LLM's output in PasClaw.Markdown.Render when the
   operator hasn't turned it off (Cfg.RenderMarkdown, default True).
@@ -849,6 +869,8 @@ var
   PersistedSession: TSession;       { non-nil only when A.Session is set (PR #292 P1) }
   i: Integer;
   RoutedNm: string;
+  SysOverride, WorkingStateBlock, Refusal: string;
+  LoopRan: Boolean;
 begin
   { Default to True; only flip to False on a known failure path.
     Any code path that hits Exit before producing a real assistant
@@ -931,6 +953,9 @@ begin
      stats_collection_enabled was on. Honouring --session here doesn't
      change pre-existing behaviour for callers that don't pass it. *)
   PersistedSession := nil;
+  SysOverride := '';
+  WorkingStateBlock := '';
+  LoopRan := False;
   if A.Session <> '' then
   begin
     PersistedSession := NewStampedSession(A.Session, Cfg);
@@ -942,10 +967,47 @@ begin
                         '-' + IntToHex(Random(1 shl 24), 6);
   SetCurrentSessionId(OneShotSessionId);
   try
-    SetLength(Msgs, 1);
-    Msgs[0] := MakeMessage(mrUser, Prompt);
+    (* A turn on a stored conversation starts from what it holds.
+
+       -m with --session sent the model the new prompt alone and then
+       saved that turn's history over the session. So the conversation so
+       far was not shown to the model, and was not kept either: one
+       question replaced the whole transcript, the interactive turns of a
+       session someone later passed here included. Now the turn runs the
+       way RunInteractive resumes one: the stored messages come first, the
+       stored prompt (a compaction summary lives there) is the prompt, and
+       the turn works where the session works. *)
+    if (PersistedSession <> nil) and PersistedSession.MetaExists then
+    begin
+      SetLength(Msgs, Length(PersistedSession.Messages) + 1);
+      for i := 0 to High(PersistedSession.Messages) do
+        Msgs[i] := PersistedSession.Messages[i];
+      SysOverride := PersistedSession.Meta.SystemPromptOverride;
+      if (PersistedSession.Meta.Location <> '') and
+         DirectoryExists(PersistedSession.Meta.Location) and
+         (ExcludeTrailingPathDelimiter(ExpandFileName(PersistedSession.Meta.Location)) <> CurrentWorkspace) then
+      begin
+        ConfigureSandbox(Cfg.Sandbox, PersistedSession.Meta.Location);
+        if not A.Quiet then
+          PrintLn(Ansi.Dim + '(workspace: ' + PersistedSession.Meta.Location + ')' + Ansi.Reset);
+      end;
+    end
+    else
+      SetLength(Msgs, 1);
+    Msgs[High(Msgs)] := MakeMessage(mrUser, Prompt);
 
     LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, Prompt);
+    if PersistedSession <> nil then
+    begin
+      { As RunInteractive: the session's own prompt, pointed at this run's
+        mode, with the working-state snapshot in front of it for the turn. }
+      if SysOverride <> '' then
+        LoopCfg.Options.SystemPrompt := RetargetModeSection(SysOverride, A.Mode);
+      WorkingStateBlock := FormatWorkingStateBlock(PersistedSession.Meta);
+      if WorkingStateBlock <> '' then
+        LoopCfg.Options.SystemPrompt :=
+          WorkingStateBlock + sLineBreak + LoopCfg.Options.SystemPrompt;
+    end;
     { Auto-router (opt-in) on the one-shot path too -- shared helper, no-op
       unless Cfg.AutoRouter.Enabled. }
     ApplyAutoRoute(LoopCfg, Cfg, Msgs, RoutedNm);
@@ -953,7 +1015,8 @@ begin
     if not A.Quiet then
       PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset +
               ' (' + Provider.GetName + '/' + Model + '):');
-    if RunToolLoop(LoopCfg, Msgs, Loop) then
+    LoopRan := RunToolLoop(LoopCfg, Msgs, Loop);
+    if LoopRan then
     begin
       { In quiet mode skip MaybeRender -- the markdown renderer adds
         ANSI styling that defeats the "machine-readable plain text"
@@ -1000,16 +1063,46 @@ begin
        (Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0) then
       PrintLn(Ansi.Dim + FormatTokenLine(Loop.TotalUsage, Loop.Iterations) + Ansi.Reset);
 
-    (* Persist the one-shot session when the operator asked. Includes
-       user prompt + final assistant content + tool history, plus
-       AccumulateTurnStats when stats_collection_enabled so the bench
+    (* Persist the one-shot session when the operator asked: the
+       conversation so far, this prompt, the tool history and the answer,
+       plus AccumulateTurnStats when stats_collection_enabled so the bench
        harness (and any other reader) sees real token / turn / tool-
-       call counters. *)
+       call counters.
+
+       FinalMessages is the history the loop fed the provider and stops
+       one message short: the answer is in Loop.Content and nowhere in the
+       array. Saving the array alone kept the question and dropped the
+       reply. It is appended here -- unless the provider refused, when
+       Content is the provider's error text and not something the
+       assistant said (ProviderRefused), or there is no text at all.
+
+       A loop that left no history (it never ran) leaves the stored
+       conversation as it was, not replaced by nothing. *)
     if PersistedSession <> nil then
     begin
-      SetLength(PersistedSession.Messages, Length(Loop.FinalMessages));
-      for i := 0 to High(Loop.FinalMessages) do
-        PersistedSession.Messages[i] := Loop.FinalMessages[i];
+      if Length(Loop.FinalMessages) > 0 then
+      begin
+        SetLength(PersistedSession.Messages, Length(Loop.FinalMessages));
+        for i := 0 to High(Loop.FinalMessages) do
+          PersistedSession.Messages[i] := Loop.FinalMessages[i];
+      end;
+      if LoopRan then
+      begin
+        if (Trim(Loop.Content) <> '') and not ProviderRefused(Loop, Refusal) then
+        begin
+          SetLength(PersistedSession.Messages, Length(PersistedSession.Messages) + 1);
+          PersistedSession.Messages[High(PersistedSession.Messages)] :=
+            MakeMessage(mrAssistant, Loop.Content);
+        end;
+        { The prompt the next turn starts from -- after a compaction the
+          summary of what was dropped is in it and nowhere else -- without
+          this turn's working-state prefix, and the snapshot brought up to
+          date from what the turn did. }
+        PersistedSession.Meta.SystemPromptOverride :=
+          StripWorkingStatePrefix(Loop.FinalSystemPrompt, WorkingStateBlock);
+        if Length(Loop.FinalMessages) > 0 then
+          UpdateWorkingStateAfterTurn(PersistedSession.Meta, Loop.FinalMessages);
+      end;
       PersistedSession.Meta.Model    := Model;
       if Provider <> nil then
         PersistedSession.Meta.Provider := Provider.GetName;
@@ -2115,26 +2208,10 @@ begin
           SetLength(Msgs, Length(Msgs) + 1);
           Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
         end;
-        SystemPromptOverride := Loop.FinalSystemPrompt;
-        { Strip the per-turn working-state prefix we prepended in
-          BuildLoopConfig -- if compaction didn't fire, the prefix
-          comes back verbatim and persisting it would re-prepend
-          on every subsequent turn, accumulating stale snapshots.
-          When compaction DID fire, the summariser may have
-          rewritten the whole prompt; in that case the prefix
-          comparison fails and we keep the compacted text as-is.
-          Codex P2 on PR #180. }
-        if WorkingStateBlock <> '' then
-        begin
-          if (Length(SystemPromptOverride) >
-              Length(WorkingStateBlock) + Length(sLineBreak))
-             and (Copy(SystemPromptOverride, 1,
-                       Length(WorkingStateBlock) + Length(sLineBreak)) =
-                  WorkingStateBlock + sLineBreak) then
-            SystemPromptOverride := Copy(SystemPromptOverride,
-              Length(WorkingStateBlock) + Length(sLineBreak) + 1,
-              MaxInt);
-        end;
+        { Without the per-turn working-state prefix prepended above:
+          persisting it would re-prepend it on every later turn. }
+        SystemPromptOverride := StripWorkingStatePrefix(Loop.FinalSystemPrompt,
+                                                        WorkingStateBlock);
 
         { Refresh the working-state snapshot from this turn's final
           history (fs_write/fs_edit paths, shell commands, tool
