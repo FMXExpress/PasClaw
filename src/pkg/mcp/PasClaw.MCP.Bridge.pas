@@ -413,6 +413,9 @@ procedure RegisterToolViaDispatch(Reg: TToolRegistry;
 var
   Entry: TTool;
 begin
+  { Zeroed first: a stack record keeps whatever was there in every field
+    not set below (Hidden, Category, ...), and the registry reads them. }
+  Entry := Default(TTool);
   Entry.Name        := NamespacedToolName(Server, Tool.Name);
   Entry.Description := '[mcp:' + Server + '] ' + Tool.Description;
   Entry.Schema      := Tool.Schema;

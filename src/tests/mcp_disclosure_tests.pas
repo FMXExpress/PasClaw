@@ -145,6 +145,43 @@ begin
   WriteLn('  ok: plain Register clears IsDeferred (legacy stack-garbage safety)');
 end;
 
+procedure TestDeferredRegisterClearsHidden;
+{ The MCP bridge builds its TTool on the stack and registers it through
+  RegisterDeferred, which -- unlike every other Register* -- left Hidden
+  as it found it. Hidden is the back-compat-alias flag: ToProviderDefs
+  skips the tool for good, revealed or not. So whatever the stack held
+  decided whether an MCP tool reached the model at all: with disclosure
+  off it was simply absent, and with disclosure on tool_search listed
+  it, revealed it, and the schema still never went out. Found by the
+  context breakdown's e2e test, where a stub server's one tool was in
+  neither the provider list nor the deferred list. }
+var
+  Reg: TToolRegistry;
+  T: TTool;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    FillChar(T, SizeOf(T), 0);
+    T.Name := 'stub__echo_text';
+    T.Description := 'MCP tool with a garbage Hidden flag';
+    T.Schema := '{}';
+    T.Handler := NoopHandler;
+    T.Hidden := True;   { simulates the bridge's uninitialised record }
+    Reg.RegisterDeferred(T, False);
+    AssertEqI(CountResults(Reg), 1,
+              'RegisterDeferred(False): the tool is offered despite garbage Hidden');
+    T.Name := 'stub__other';
+    Reg.RegisterDeferred(T, True);
+    AssertEqI(Length(Reg.DeferredNames), 1, 'RegisterDeferred(True): listed as deferred');
+    Reg.Reveal('stub__other');
+    AssertEqI(CountResults(Reg), 2,
+              'RegisterDeferred(True) + reveal: the schema goes out despite garbage Hidden');
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: RegisterDeferred clears Hidden (MCP tools are never aliases)');
+end;
+
 procedure TestRevealAddsToProviderDefs;
 var
   Reg: TToolRegistry;
@@ -604,6 +641,7 @@ end;
 begin
   TestRegistryFiltersDeferred;
   TestLegacyRegisterClearsIsDeferred;
+  TestDeferredRegisterClearsHidden;
   TestRevealAddsToProviderDefs;
   TestRevealUnknownIsNoop;
   TestToolSearchSelectQuery;

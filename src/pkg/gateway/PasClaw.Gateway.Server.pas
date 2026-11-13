@@ -5,6 +5,7 @@
     GET  /v1/health                -> health + version
     GET  /v1/status                -> provider, model, tools, mcp_servers, ...
     GET  /v1/tools                 -> registered tool descriptors
+    POST /v1/context               -> what a chat turn's context is made of
     POST /v1/chat                  -> body has "message", reply has "content"
     POST /v1/chat/completions      -> OpenAI Chat Completions-compatible
                                       (request: {model, messages, ...},
@@ -54,6 +55,8 @@ uses
   PasClaw.Agent.Hooks,     { TPasClawHook -- disconnect-abort hook for streaming }
   PasClaw.Agent.Steering,  { PushSteering/PendingSteeringCount -- /v1/steer + SteeringKey }
   PasClaw.Agent.AutoRouter.Apply,  { ApplyAutoRoute -- per-turn cheap routing }
+  PasClaw.Agent.Mode,      { TPasClawMode -- ComposeChatSystem }
+  PasClaw.Agent.Prompt,    { TPromptSectionArray -- ComposeChatSystem }
   PasClaw.Session.Store,
   PasClaw.Session.Port,
   PasClaw.Gateway.RelayQueue, { TRelayQueue -- FRelayQueue field type }
@@ -194,6 +197,8 @@ type
     procedure HandleVersion(AResp: TIdHTTPResponseInfo);
     procedure HandleStatus(AResp: TIdHTTPResponseInfo);
     procedure HandleTools(AResp: TIdHTTPResponseInfo);
+    procedure HandleContext(ARequest: TIdHTTPRequestInfo;
+                            AResp: TIdHTTPResponseInfo);
     procedure HandleMCPList(AResp: TIdHTTPResponseInfo);
     (* Run ONE agent turn with a caller-supplied system prompt, outside any
        HTTP request. This is what the desktop's injected callbacks use: page
@@ -629,6 +634,26 @@ function IsRestrictedFsPath(const Path: string): Boolean;
    tests. *)
 function SessionFromUserField(const UserVal: string): string;
 
+{ messages[] of an OpenAI-shaped chat request as PasClaw messages: the
+  role and the content string (multimodal parts are not read). False when
+  the array is missing or empty. Shared by /v1/chat/completions and
+  /v1/context so both read a request the same way. }
+function ChatRequestMessages(Req: TJsonObject; out Msgs: TMessageArray): Boolean;
+
+(* The system side of a /v1/chat/completions turn, shared with
+   /v1/context so the breakdown is of the prompt the turn really sends.
+
+   No system message in Msgs: PasClaw's prompt is composed -- Sections,
+   joined into SystemPrompt, with WorkState after it -- and the result is
+   True. A system message present: it is the caller's prompt and stands
+   alone, only the mode directive goes into it, and the result is False
+   with Sections empty and SystemPrompt ''. *)
+function ComposeChatSystem(Cfg: TConfig; const UserSys, WorkState: string;
+                           ToolsEnabled: Boolean; Mode: TPasClawMode;
+                           var Msgs: TMessageArray;
+                           out Sections: TPromptSectionArray;
+                           out SystemPrompt: string): Boolean;
+
 (* Resolve a /v1/responses request's tool_choice into the
    TChatOptions.ToolChoice convention: '' when absent/unrecognised (the
    provider default applies), 'auto'/'none'/'required', or a tool NAME to
@@ -698,8 +723,7 @@ uses
   PasClaw.Stream.Reliability,
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prune,
-  PasClaw.Agent.Prompt,
-  PasClaw.Agent.Mode,
+  PasClaw.Agent.ContextUsage,  { BuildContextUsage -- /v1/context }
   PasClaw.Identity,
   PasClaw.Vault.Client,     { SearchVault / GetVaultEntry -- /v1/vault browse }
   PasClaw.Gateway.ToolView,
@@ -1021,6 +1045,7 @@ procedure PersistGatewaySession(const Cfg: TConfig;
 var
   S: TSession;
   i: Integer;
+  Refusal: string;
 begin
   if Trim(SessionId) = '' then Exit;
   if not IsSafeSessionId(SessionId) then Exit;
@@ -1045,8 +1070,17 @@ begin
          anything `pasclaw learn` reads. (Codex P1 on #556.)
 
          Guarded on non-empty so a turn that genuinely produced no text -- an
-         aborted stream, a hard provider failure -- does not gain a blank
-         assistant turn that never existed. *)
+         aborted stream -- does not gain a blank assistant turn that never
+         existed.
+
+         And not when the provider refused. A hard provider failure is NOT
+         empty: RunToolLoop hands the provider's error text back as the
+         content ("anthropic error: status=-1 msg=Connection Closed
+         Gracefully."). Saved as the assistant's reply, it went back to the
+         model as something the assistant had said on every later turn of a
+         session_context conversation, and a reload showed it as an answer.
+         The turn's history (the question, any tools that ran) is still
+         saved; only the error is not dressed up as a reply. *)
       (* Record the loop history BEFORE the reply is appended, and the
          reply separately AFTER -- because on a compacting turn they
          need different handling. TCompactFlush fired mid-loop with the
@@ -1060,7 +1094,7 @@ begin
          exactly the array the flush saw, and the reply is appended on
          its own, on every path. *)
       LogSessionTurn(S.Meta, S.Messages);
-      if Trim(Loop.Content) <> '' then
+      if (Trim(Loop.Content) <> '') and not ProviderRefused(Loop, Refusal) then
       begin
         SetLength(S.Messages, Length(S.Messages) + 1);
         S.Messages[High(S.Messages)] := MakeMessage(mrAssistant, Loop.Content);
@@ -1180,6 +1214,59 @@ begin
   Result := 'user-';
   for i := 0 to 7 do
     Result := Result + LowerCase(IntToHex(Digest[i], 2));
+end;
+
+function ChatRequestMessages(Req: TJsonObject; out Msgs: TMessageArray): Boolean;
+var
+  MsgArr: TJsonArray;
+  MsgObj: TJsonObject;
+  i: Integer;
+begin
+  Result := False;
+  SetLength(Msgs, 0);
+  MsgArr := Req.ChildArray('messages');
+  if MsgArr = nil then Exit;
+  try
+    if MsgArr.Count = 0 then Exit;
+    SetLength(Msgs, MsgArr.Count);
+    for i := 0 to MsgArr.Count - 1 do
+    begin
+      MsgObj := MsgArr.ItemObject(i);
+      if MsgObj = nil then Continue;
+      try
+        Msgs[i] := MakeMessage(MsgRoleFromString(MsgObj.GetStr('role', 'user')),
+                                MsgObj.GetStr('content', ''));
+      finally
+        MsgObj.Free;
+      end;
+    end;
+    Result := True;
+  finally
+    MsgArr.Free;
+  end;
+end;
+
+function ComposeChatSystem(Cfg: TConfig; const UserSys, WorkState: string;
+                           ToolsEnabled: Boolean; Mode: TPasClawMode;
+                           var Msgs: TMessageArray;
+                           out Sections: TPromptSectionArray;
+                           out SystemPrompt: string): Boolean;
+begin
+  SetLength(Sections, 0);
+  SystemPrompt := '';
+  Result := not HasSystemMessage(Msgs);
+  if not Result then
+  begin
+    InjectModeDirective(Msgs, Mode);
+    Exit;
+  end;
+  Sections := BuildSystemPromptSections(Cfg, UserSys, ToolsEnabled, '', Mode);
+  SystemPrompt := JoinPromptSections(Sections);
+  { What a compaction took out of the transcript. Only session-context
+    turns have one: everyone else still ships their own history, where
+    this would be a second telling of what the messages already say. }
+  if WorkState <> '' then
+    SystemPrompt := TrimRight(SystemPrompt) + sLineBreak + sLineBreak + WorkState;
 end;
 
 function CheckpointSessionId(const ReqSession: string): string;
@@ -2018,6 +2105,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/version') then HandleVersion(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/status')  then HandleStatus(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/tools')   then HandleTools(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/context') then HandleContext(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/chat')    then HandleChat(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/steer')   then HandleSteer(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/permissions') then HandlePermissionsList(AResponse)
@@ -2131,7 +2219,7 @@ begin
     end
     else if Doc = '/v1' then
       WriteJSON(AResponse, 200,
-        '{"name":"pasclaw","routes":["/v1/health","/v1/version","/v1/status","/v1/tools","/v1/chat","/v1/chat/completions","/v1/responses","/v1/models","/v1/embeddings"]}')
+        '{"name":"pasclaw","routes":["/v1/health","/v1/version","/v1/status","/v1/tools","/v1/context","/v1/chat","/v1/chat/completions","/v1/responses","/v1/models","/v1/embeddings"]}')
     else if not DispatchWebhook(AContext, ARequest, AResponse) then
       WriteJSON(AResponse, 404, '{"error":"not found","path":"' + Doc + '"}');
   except
@@ -2261,6 +2349,121 @@ begin
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleContext(ARequest: TIdHTTPRequestInfo;
+                                       AResp: TIdHTTPResponseInfo);
+(* POST /v1/context -- what the next /v1/chat/completions turn would put
+   in front of the model, by part: PasClaw's system prompt section by
+   section (or the caller's own system message), the tool schemas split
+   built-in / MCP, and the messages by role. The web UI's Context panel
+   draws it.
+
+   Takes the chat route's own body -- model, mode, messages, system,
+   no_tools, session_context, with X-PasClaw-Session -- and assembles it
+   with the chat route's own helpers (ChatRequestMessages,
+   MergeSessionContext, ComposeChatSystem, the registry's ToProviderDefs),
+   so the breakdown is of the request the turn sends, not a description
+   of it. Nothing runs: no provider call, no lock, no write. messages may
+   be empty (a new chat is all system prompt and tools).
+
+   Numbers are estimates (chars/4, PasClaw.Agent.ContextUsage). *)
+var
+  Body, ReqSession: string;
+  Req, Report: TJsonObject;
+  Msgs, NewMsgs: TMessageArray;
+  Stored: TSession;
+  Input: TContextUsageInput;
+  SysPrompt: string;
+  Mode: TPasClawMode;
+  ReqWindow: Int64;
+  i: Integer;
+begin
+  Body := ReadRequestBody(ARequest);
+  if Trim(Body) = '' then Body := '{}';
+  Req := TJsonObject.Parse(Body);
+  if Req = nil then
+  begin
+    WriteJSON(AResp, 400,
+      '{"error":{"message":"invalid JSON","type":"invalid_request_error"}}');
+    Exit;
+  end;
+  try
+    Input := Default(TContextUsageInput);
+    if not ChatRequestMessages(Req, Msgs) then SetLength(Msgs, 0);
+
+    ReqSession := ReqSessionId(ARequest);
+    if ReqSession = '' then
+      ReqSession := SessionFromUserField(Req.GetStr('user', ''));
+    if (ReqSession <> '') and Req.GetBool('session_context', False) then
+    begin
+      NewMsgs := Copy(Msgs, 0, Length(Msgs));
+      Stored := TSession.Create(ReqSession);
+      try
+        Msgs := MergeSessionContext(Stored.Messages, NewMsgs);
+        Input.FromSession := Length(Msgs) - Length(NewMsgs);
+        Input.WorkState := FormatWorkingStateBlock(Stored.Meta);
+      finally
+        Stored.Free;
+      end;
+    end;
+
+    Mode := ParseModeFromBody(Body);
+    Input.ToolsEnabled := (FRegistry <> nil) and not Req.GetBool('no_tools', False);
+    { The caller's own system message: no PasClaw prompt, so no working
+      state appended to it either. }
+    if not ComposeChatSystem(FCfg, Req.GetStr('system', ''), Input.WorkState,
+                             Input.ToolsEnabled, Mode, Msgs, Input.Sections,
+                             SysPrompt) then
+      Input.WorkState := '';
+    { The chat route repairs orphaned tool calls before the loop; a stored
+      session can hold one. }
+    if FCfg.StreamReliability.ToolCallRepairEnabled then
+      RepairOrphanedToolCalls(Msgs);
+    { The trigger's own measure, on the history the loop holds; the model
+      gets that history with the turn clock on the last user message. }
+    Input.CompactCounted := CompactMeasure(Msgs, SysPrompt);
+    Input.Messages := HistWithTurnClock(Msgs, NowStampWithZone);
+    if Input.ToolsEnabled then
+    begin
+      Input.Tools := FRegistry.ToProviderDefs;
+      Input.Deferred := FRegistry.DeferredNames;
+    end;
+    SetLength(Input.MCPServers, Length(FCfg.MCPServers));
+    for i := 0 to High(FCfg.MCPServers) do
+      Input.MCPServers[i] := FCfg.MCPServers[i].Name;
+
+    Input.Model := Req.GetStr('model', FCfg.DefaultModel);
+    Input.Mode  := ModeName(Mode);
+    { The window: what the request says (the panel lets a person set the
+      model's window when the config does not), else the config's. }
+    ReqWindow := Req.GetInt('context_window', 0);
+    if ReqWindow > 0 then
+    begin
+      if ReqWindow > MaxInt then ReqWindow := MaxInt;
+      Input.ContextWindow := Integer(ReqWindow);
+      Input.WindowSource := 'request';
+    end
+    else if FCfg.ContextWindow > 0 then
+    begin
+      Input.ContextWindow := FCfg.ContextWindow;
+      Input.WindowSource := 'config';
+    end;
+    Input.CompactEnabled   := FCfg.Compaction.Enabled;
+    Input.CompactThreshold := FCfg.Compaction.ThresholdTokens;
+    Input.WithText         := Req.GetBool('text', False);
+
+    Report := BuildContextUsage(Input);
+    try
+      Report.PutBool('session_context',
+        (ReqSession <> '') and Req.GetBool('session_context', False));
+      WriteJSON(AResp, 200, Report.ToJSON);
+    finally
+      Report.Free;
+    end;
+  finally
+    Req.Free;
   end;
 end;
 
@@ -8054,15 +8257,15 @@ procedure TGatewayServer.HandleChatCompletions(AContext: TIdContext;
 var
   Body, ReqModel, FinishReason, CompId, ReqSession: string;
   Bytes: TBytes;
-  Req, MsgObj: TJsonObject;
-  MsgArr: TJsonArray;
+  Req: TJsonObject;
   Msgs, NewMsgs: TMessageArray;
   Stored: TSession;
   SessionCtx: Boolean;
   SessionTitle, WorkState: string;
   Kept: Integer;
   TurnLock: TCriticalSection;
-  i: Integer;
+  PromptSections: TPromptSectionArray;
+  ComposedSystem: string;
   WantsStream: Boolean;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
@@ -8076,6 +8279,8 @@ var
   FB: TLLMProviderArray;
   FBModels: TStringArray;
   SnapModel: string;
+  Refusal: string;
+  RefusalObj: TJsonObject;
   function SanitizeStreamError(const S: string): string;
   begin
     Result := StringReplace(S, #13, ' ', [rfReplaceAll]);
@@ -8163,30 +8368,12 @@ begin
     { Walk messages[] -> TMessageArray. We accept the OpenAI shape but
       pass the raw content string through; multimodal/image parts get
       flattened by treating content as plain text only. }
-    MsgArr := Req.ChildArray('messages');
-    if (MsgArr = nil) or (MsgArr.Count = 0) then
+    if not ChatRequestMessages(Req, Msgs) then
     begin
       if FDebugIO then LogDebug('chat/completions -> 400 (no messages[])');
       WriteJSON(AResp, 400,
         '{"error":{"message":"missing or empty messages[]","type":"invalid_request_error"}}');
-      if MsgArr <> nil then MsgArr.Free;
       Exit;
-    end;
-    try
-      SetLength(Msgs, MsgArr.Count);
-      for i := 0 to MsgArr.Count - 1 do
-      begin
-        MsgObj := MsgArr.ItemObject(i);
-        if MsgObj = nil then Continue;
-        try
-          Msgs[i] := MakeMessage(MsgRoleFromString(MsgObj.GetStr('role', 'user')),
-                                  MsgObj.GetStr('content', ''));
-        finally
-          MsgObj.Free;
-        end;
-      end;
-    finally
-      MsgArr.Free;
     end;
 
     (* Session-native turns: the server owns the conversation.
@@ -8320,22 +8507,10 @@ begin
        skill catalog and tool-use rules all still get composed in around
        it. The field was silently ignored before this -- no code path
        read it -- so nothing that worked stops working. *)
-    if not HasSystemMessage(Msgs) then
-    begin
-      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg,
-                                      Req.GetStr('system', ''),
-                                      LoopCfg.Registry <> nil, '', LoopCfg.Mode);
-      { What a compaction took out of the transcript (see above). Only
-        for session-context turns: everyone else still ships their own
-        history, where this would be a second telling of what the
-        messages already say. }
-      if WorkState <> '' then
-        LoopCfg.Options.SystemPrompt :=
-          TrimRight(LoopCfg.Options.SystemPrompt) + sLineBreak + sLineBreak +
-          WorkState;
-    end
-    else
-      InjectModeDirective(Msgs, LoopCfg.Mode);
+    if ComposeChatSystem(FCfg, Req.GetStr('system', ''), WorkState,
+                         LoopCfg.Registry <> nil, LoopCfg.Mode, Msgs,
+                         PromptSections, ComposedSystem) then
+      LoopCfg.Options.SystemPrompt := ComposedSystem;
     { Temperature: forward only when the client explicitly sent the field
       (Req.Has), so an absent field keeps the provider/library default
       rather than pinning 0. An explicit 0 IS honoured -- it's a valid
@@ -8455,6 +8630,19 @@ begin
                              GatewayBucketId(GW_BUCKET_V1_CHAT_COMPLETIONS, LoopCfg.Provider.GetName, ReqModel),
                              '(gateway: /v1/chat/completions ' + ReqModel + ')',
                              LoopCfg.Provider.GetName, ReqModel, Loop);
+      (* The provider refused: an error, not an answer. Streamed as the
+         reply's content it was indistinguishable from one -- finish_reason
+         "stop", the error text as the assistant's words -- so a client
+         that keeps its own history (the web UI) sent it back to the model
+         as something the assistant had said. The OpenAI error frame is what
+         streaming clients already recognise as a failed request. *)
+      if ProviderRefused(Loop, Refusal) then
+      begin
+        if FDebugIO then LogDebug('chat/completions -> SSE error (provider refused): %s', [Refusal]);
+        Streamer.WriteError(SanitizeStreamError(Refusal));
+        StreamClosed := Streamer.Closed;
+        Exit;
+      end;
       if Loop.LastResp.FinishReason <> '' then
         FinishReason := Loop.LastResp.FinishReason
       else
@@ -8536,6 +8724,26 @@ begin
                            GatewayBucketId(GW_BUCKET_V1_CHAT_COMPLETIONS, LoopCfg.Provider.GetName, ReqModel),
                            '(gateway: /v1/chat/completions ' + ReqModel + ')',
                            LoopCfg.Provider.GetName, ReqModel, Loop);
+
+    { The provider refused: 502 with the provider's message, as the
+      streaming branch sends an error frame, rather than a 200 whose
+      "answer" is the error text. }
+    if ProviderRefused(Loop, Refusal) then
+    begin
+      if FDebugIO then LogDebug('chat/completions -> 502 (provider refused): %s', [Refusal]);
+      ReplyObj := TJsonObject.Create;
+      try
+        RefusalObj := TJsonObject.Create;
+        RefusalObj.PutStr('message', Refusal);
+        RefusalObj.PutStr('type', 'provider_error');
+        RefusalObj.PutInt('upstream_status', Loop.LastResp.StatusCode);
+        ReplyObj.PutObject('error', RefusalObj);
+        WriteJSON(AResp, 502, ReplyObj.ToJSON);
+      finally
+        ReplyObj.Free;
+      end;
+      Exit;
+    end;
 
     if Loop.LastResp.FinishReason <> '' then
       FinishReason := Loop.LastResp.FinishReason

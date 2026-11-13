@@ -312,6 +312,12 @@ var
 begin
   Modified := T;
   Modified.IsDeferred := Deferred;
+  { Cleared like every other Register* does: aliases come only through
+    RegisterHidden. The MCP bridge registers through here with a TTool
+    built on the stack, and a garbage Hidden kept the tool out of
+    ToProviderDefs for good -- absent with disclosure off, and never
+    sent even after tool_search revealed it. }
+  Modified.Hidden     := False;
   Modified.CodeMode   := False;
   Modified.AskOutsideAgents  := False;
   RegisterImpl(Modified);

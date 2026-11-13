@@ -133,6 +133,13 @@ function NeedsCompact(const Messages: array of TMessage;
                       const SystemPrompt: string;
                       Threshold: Integer): Boolean;
 
+{ The number NeedsCompact compares with the threshold: chars/4 of the
+  system prompt, plus each message body and its 4-token envelope. Public
+  so the context breakdown (/v1/context) reports the trigger's own
+  measure instead of a second estimate that could drift from it. }
+function CompactMeasure(const Messages: array of TMessage;
+                        const SystemPrompt: string): Integer;
+
 (* True when a provider response says the CONTEXT WINDOW overflowed --
    the request was too big, as opposed to failed. Matched on the error
    text because every provider words it differently (Anthropic:
@@ -213,21 +220,23 @@ begin
   Result.OnBefore           := nil;
 end;
 
+function CompactMeasure(const Messages: array of TMessage;
+                        const SystemPrompt: string): Integer;
+var
+  i: Integer;
+begin
+  Result := EstimateTokens(SystemPrompt);
+  for i := 0 to High(Messages) do
+    Result := Result + EstimateTokens(Messages[i].Content) + 4;   { envelope }
+end;
+
 function NeedsCompact(const Messages: array of TMessage;
                       const SystemPrompt: string;
                       Threshold: Integer): Boolean;
-var
-  i, Total: Integer;
 begin
-  Result := False;
-  if Threshold <= 0 then Exit;
-  Total := EstimateTokens(SystemPrompt);
-  if Total >= Threshold then Exit(True);
-  for i := 0 to High(Messages) do
-  begin
-    Total := Total + EstimateTokens(Messages[i].Content) + 4;   { envelope }
-    if Total >= Threshold then Exit(True);
-  end;
+  { Every term is >= 0, so the running total crosses the threshold
+    exactly when the whole sum does. }
+  Result := (Threshold > 0) and (CompactMeasure(Messages, SystemPrompt) >= Threshold);
 end;
 
 function IsContextOverflowError(StatusCode: Integer;

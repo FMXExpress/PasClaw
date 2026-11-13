@@ -111,6 +111,33 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            Mode: TPasClawMode;
                            NoPlan: Boolean = False): string; overload;
 
+type
+  (* One named part of the composed system prompt.
+
+     BuildSystemPrompt is these joined, so anything that needs to say
+     what the prompt is made of -- the gateway's context breakdown --
+     reads the same sections the model gets, not a second copy of the
+     composition that could drift from it. Id is stable (an API field);
+     Title is for people. *)
+  TPromptSection = record
+    Id:    string;
+    Title: string;
+    Text:  string;
+  end;
+  TPromptSectionArray = array of TPromptSection;
+
+{ The sections BuildSystemPrompt joins, in order. Empty ones are left
+  out, exactly as the join skips them. }
+function BuildSystemPromptSections(Cfg: TConfig; const UserSys: string;
+                                   ToolsEnabled: Boolean;
+                                   const TaskHint: string;
+                                   Mode: TPasClawMode;
+                                   NoPlan: Boolean = False): TPromptSectionArray;
+
+{ Join sections the way the prompt is joined: SectionSep between them,
+  blank ones skipped. }
+function JoinPromptSections(const Sections: TPromptSectionArray): string;
+
 (* The mode's own directive, on its own.
 
    Normally this rides inside BuildSystemPrompt. It is public because
@@ -1610,63 +1637,114 @@ begin
     end;
 end;
 
-function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
-                           ToolsEnabled: Boolean; const TaskHint: string;
-                           Mode: TPasClawMode;
-                           NoPlan: Boolean = False): string;
+function BuildSystemPromptSections(Cfg: TConfig; const UserSys: string;
+                                   ToolsEnabled: Boolean;
+                                   const TaskHint: string;
+                                   Mode: TPasClawMode;
+                                   NoPlan: Boolean = False): TPromptSectionArray;
+var
+  N: Integer;
+  Acc: TPromptSectionArray;
+
+  procedure Add(const Id, Title, Text: string);
+  begin
+    { The join's rule, applied here so a section list never names a part
+      the prompt does not contain. }
+    if Trim(Text) = '' then Exit;
+    if N = Length(Acc) then SetLength(Acc, N * 2 + 8);
+    Acc[N].Id    := Id;
+    Acc[N].Title := Title;
+    Acc[N].Text  := Text;
+    Inc(N);
+  end;
+
+var
+  ModeTitle, Instr: string;
 begin
-  Result := AppendSection('', BuildModeSection(Mode));
-  Result := AppendSection(Result, BuildIdentitySection);
-  Result := AppendSection(Result, BuildWorkspaceSection);
-  if Cfg <> nil then
-    Result := AppendSection(Result,
-                BuildMemorySection(Cfg.OrientTaskAware, TaskHint, Cfg.MemoryCoreBudgetBytes))
+  SetLength(Acc, 0);
+  N := 0;
+  case Mode of
+    pmPlan:    ModeTitle := 'Plan mode';
+    pmImprove: ModeTitle := 'Improve mode';
+    pmSpace:   ModeTitle := 'SPACE mode';
   else
-    Result := AppendSection(Result, BuildMemorySection(False, TaskHint, 0));
+    ModeTitle := 'Mode';
+  end;
+  Add('mode', ModeTitle, BuildModeSection(Mode));
+  Add('identity', 'Identity', BuildIdentitySection);
+  Add('workspace', 'Workspace', BuildWorkspaceSection);
+  if Cfg <> nil then
+    Add('memory', 'Memory',
+        BuildMemorySection(Cfg.OrientTaskAware, TaskHint, Cfg.MemoryCoreBudgetBytes))
+  else
+    Add('memory', 'Memory', BuildMemorySection(False, TaskHint, 0));
   { Distilled facts (Cfg.MemoryDistillEnabled). Wholesale, after the .md
     memory so curated MEMORY.md leads and auto-facts follow. }
-  Result := AppendSection(Result, BuildFactsSection(Cfg));
+  Add('facts', 'Remembered facts', BuildFactsSection(Cfg));
   { Project-level rules from AGENTS.md (opencode/Codex/Cursor
     convention). Read from the cwd, walking up to the git root. Emitted
     after memory so it can override or extend MEMORY.md guidance for
     the specific project the user is in. Always loaded (not gated on
     ToolsEnabled): even a chat-only session benefits from "in this
     project, prefer X". }
-  Result := AppendSection(Result, BuildProjectRulesSection);
+  Add('project_rules', 'Project rules (AGENTS.md)', BuildProjectRulesSection);
   { Operator-listed instruction files, globs and URLs (config
     `instructions`), right after AGENTS.md so they read as one body of
     project rules. }
-  Result := AppendSection(Result, BuildInstructionsSection(Cfg.Instructions, ''));
+  if Cfg <> nil then
+    Instr := BuildInstructionsSection(Cfg.Instructions, '')
+  else
+    Instr := '';
+  Add('instructions', 'Instruction files', Instr);
   { Active plan auto-pickup. Emitted between project rules and skills
     so the plan can reference both above it (memory + AGENTS.md) and
     below (skills, deferred MCP tools, behaviour rules). pmPlan mode
-    suppresses this -- Cmd.Plan handles existing PLAN.md via its
+    suppresses this -- Cmd.Plan handles existing PLAN.md via a planner
     --system directive, not auto-pickup. See BuildActivePlanSection. }
-  Result := AppendSection(Result, BuildActivePlanSection(NoPlan, Mode));
+  Add('active_plan', 'Active plan (PLAN.md)', BuildActivePlanSection(NoPlan, Mode));
   { Skills are only callable when the tool registry was actually built.
     --no-tools (and component UseTools=False) bypass RegisterSkills, so
     advertising the catalog would be a lie. }
   if ToolsEnabled then
-    Result := AppendSection(Result, BuildSkillsSection(
-                (Cfg <> nil) and Cfg.SelfImprovingSkills.ProgressiveDisclosure));
+    Add('skills', 'Skills', BuildSkillsSection(
+          (Cfg <> nil) and Cfg.SelfImprovingSkills.ProgressiveDisclosure));
   { Workflows: a short pointer so "build me a X->Y workflow" resolves to the
     workflow_save tool instead of the model improvising. Gated on the same
     flag that serves the endpoints. }
   if ToolsEnabled and ((Cfg = nil) or Cfg.WorkflowsEnabled) then
-    Result := AppendSection(Result, BuildWorkflowsSection);
+    Add('workflows', 'Workflows', BuildWorkflowsSection);
   { Deferred MCP tools (Cfg.MCPProgressiveDisclosure). Lists names only
     -- schemas are loaded on demand by tool_search. Emits empty string
     when disclosure is off or no MCP tools are deferred, so the gated
     section never adds whitespace to the prompt unnecessarily. }
   if ToolsEnabled then
-    Result := AppendSection(Result, BuildDeferredToolsSection);
+    Add('deferred_tools', 'Deferred tool names', BuildDeferredToolsSection);
   { Orient transparency preamble (opt-in via Cfg.OrientTaskAware): ask the
     model to announce a short plan before it starts using tools. Grouped
     with the behaviour rules below. }
-  Result := AppendSection(Result, BuildOrientPreambleSection(Cfg, ToolsEnabled, Mode));
-  Result := AppendSection(Result, BuildRulesSection(ToolsEnabled));
-  if Trim(UserSys) <> '' then
-    Result := AppendSection(Result, Trim(UserSys));
+  Add('orient', 'Plan-first preamble', BuildOrientPreambleSection(Cfg, ToolsEnabled, Mode));
+  Add('rules', 'Rules', BuildRulesSection(ToolsEnabled));
+  Add('user', 'Added by the caller', Trim(UserSys));
+  SetLength(Acc, N);
+  Result := Acc;
+end;
+
+function JoinPromptSections(const Sections: TPromptSectionArray): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 0 to High(Sections) do
+    Result := AppendSection(Result, Sections[i].Text);
+end;
+
+function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
+                           ToolsEnabled: Boolean; const TaskHint: string;
+                           Mode: TPasClawMode;
+                           NoPlan: Boolean = False): string;
+begin
+  Result := JoinPromptSections(BuildSystemPromptSections(Cfg, UserSys,
+              ToolsEnabled, TaskHint, Mode, NoPlan));
 end;
 
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;

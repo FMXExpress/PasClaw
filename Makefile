@@ -203,6 +203,14 @@ $(WEBUI_RES): src/pkg/gateway/webui.rc src/pkg/gateway/webui.html src/pkg/gatewa
 # thousands of stats to every make invocation.
 PASCLAW_SOURCES := $(shell find src -type f \( -name '*.pas' -o -name '*.dpr' -o -name '*.inc' \) 2>/dev/null)
 
+# FPC's own up-to-date check compares a unit's source time to the second, so
+# a source written in the same second its unit was compiled (an edit straight
+# after a build, a checkout, a tool that edits and rebuilds at once) is not
+# rebuilt and the old code is linked. Once per make run, before any recipe,
+# drop the units whose sources changed since the previous run started.
+# See scripts/sweep-stale-units.sh; pinned by test-stale-units.
+STALE_UNIT_SWEEP := $(shell sh scripts/sweep-stale-units.sh $(BUILDDIR)/lib src)
+
 $(BIN): $(WEBUI_RES) $(PASCLAW_SOURCES) | $(BUILDDIR) $(INDY_DIR)
 	@mkdir -p $(BUILDDIR)/lib
 	PASCLAW_VERSION='$(VERSION)' $(FPC) $(FPCFLAGS) src/pasclaw/PasClaw.dpr -o$(BIN)
@@ -795,6 +803,27 @@ test-turn-clock: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/turn_clock_tests.pas -o$(BUILDDIR)/turn_clock_tests
 	@$(BUILDDIR)/turn_clock_tests
+
+# The context breakdown (/v1/context, the web UI's Context panel): the
+# prompt split into sections, the report's sums, CompactMeasure.
+test-context-usage: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/context_usage_tests.pas -o$(BUILDDIR)/context_usage_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; \
+	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
+	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/context_usage_tests
+
+# $(BIN) because it starts the real gateway with the relay provider and a
+# stub MCP server: /v1/context is checked against the request the model
+# actually receives for the same body.
+test-context-usage-e2e: $(BIN)
+	@python3 -I src/tests/context_usage_e2e.py $(BIN)
+
+# $(BIN) because it starts the real gateway against a fake provider that
+# refuses: the refusal must reach the client as an error and never be saved
+# or replayed as the assistant's reply.
+test-provider-error-e2e: $(BIN)
+	@python3 -I src/tests/provider_error_e2e.py $(BIN)
 
 test-prompt-batching: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
@@ -1432,6 +1461,11 @@ test-acp: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/acp_tests.pas -o$(BUILDDIR)/acp_tests
 	@$(BUILDDIR)/acp_tests
 
+# FPC alone keeps a unit whose source was rewritten with its unit's timestamp;
+# after scripts/sweep-stale-units.sh the edit is built.
+test-stale-units:
+	@sh scripts/test-sweep-stale-units.sh $(FPC)
+
 # Token streaming below the editor: the incremental SSE parser, the
 # OpenAI-compatible stream put back together, the loop's OnTextDelta.
 test-streaming: | $(BUILDDIR)
@@ -1488,7 +1522,7 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-verify-routes test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-code-outline test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-gateway-local-only test-acp test-streaming test-acp-e2e test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version
+test: smoke test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-verify-routes test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-code-outline test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-gateway-local-only test-acp test-streaming test-stale-units test-context-usage test-context-usage-e2e test-provider-error-e2e test-acp-e2e test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version
 
 # Benchmark harness for the /v1/stats aggregation path. Prints timings,
 # not pass/fail -- cited by docs/stats-collection-plan.md. Not in `test`.
