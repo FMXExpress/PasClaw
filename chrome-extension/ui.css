@@ -196,7 +196,7 @@ body.panel { display: flex; flex-direction: column; overflow: hidden; }
 .thinking .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: blink 1.2s infinite ease-in-out; }
 .thinking .dots i:nth-child(2) { animation-delay: .15s; }
 .thinking .dots i:nth-child(3) { animation-delay: .3s; }
-.streaming .body > :last-child::after {
+.streaming:not(.browsing) .body > :last-child::after {
   content: ""; display: inline-block; width: 7px; height: 14px; margin-left: 2px; vertical-align: -2px;
   background: var(--accent); border-radius: 1px; animation: caret 1s steps(2) infinite;
 }
@@ -395,3 +395,47 @@ body.options { padding: 40px 20px 60px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* ------------------------------------------------------------ Browse mode */
+.ctx-chip.browse { color: var(--text); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+details.tool .t-state { display: grid; place-items: center; width: 16px; color: var(--text-3); }
+details.tool.done .t-state { color: var(--success); }
+details.tool.failed .t-state, details.tool.denied .t-state { color: var(--danger); }
+details.tool.denied .t-name, details.tool.denied .t-args { text-decoration: line-through; color: var(--text-3); }
+details.tool.running summary { cursor: default; }
+.spin {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: spin .7s linear infinite;
+}
+.body > div + details.tool, .body > details.tool + div { margin-top: 10px; }
+.body > details.tool + details.tool { margin-top: -4px; }
+.approve {
+  margin: 0 0 10px; padding: 12px 12px 10px; border-radius: var(--r-md);
+  background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft); animation: rise .18s ease-out both;
+}
+.approve.answered { box-shadow: none; border-color: var(--border); padding-bottom: 8px; }
+.ap-head { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.ap-head .ic { color: var(--accent); margin-top: 2px; }
+.ap-head b { font-weight: 650; overflow-wrap: anywhere; }
+.ap-reason { margin: 4px 0 0 24px; color: var(--text-2); font-size: 12.5px; }
+.ap-reason:empty { display: none; }
+.ap-meta { margin: 2px 0 0 24px; color: var(--text-3); font-size: 11.5px; overflow-wrap: anywhere; }
+.ap-warn {
+  display: flex; gap: 6px; align-items: flex-start; margin: 8px 0 0 24px; padding: 6px 8px;
+  border-radius: 7px; background: var(--warn-soft); color: var(--warn); font-size: 12px;
+}
+.ap-warn .ic { margin-top: 1px; }
+.ap-btns { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; margin-top: 10px; }
+.ap-btns button {
+  height: 28px; padding: 0 12px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+}
+.ap-btns button:hover { background: var(--surface-2); }
+.ap-btns .ap-allow { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ap-btns .ap-allow:hover { background: var(--accent-strong); }
+.ap-btns .ap-deny { color: var(--text-2); }
+.ap-answer { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-3); }
+.approve.yes .ap-answer .ic { color: var(--success); }
+.approve.no .ap-answer .ic { color: var(--danger); }
+@keyframes spin { to { transform: rotate(360deg); } }

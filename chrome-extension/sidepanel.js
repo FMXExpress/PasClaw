@@ -8,6 +8,8 @@ import {
 } from "./lib/config.js";
 import { renderMarkdown } from "./lib/markdown.js";
 import { icons } from "./lib/icons.js";
+import { runBrowseTask, compactHistory } from "./lib/agent.js";
+import { callLabel, describeTarget, showBanner } from "./lib/page-tools.js";
 
 const $ = (sel) => document.querySelector(sel);
 const CHAT_KEY = "chat";
@@ -17,6 +19,7 @@ let chat = await loadChat();          // { sessionId, title, turns: [{ role: "u"
 let attachPage = false;
 let abort = null;
 let pendingPage = null;               // page context staged by a context-menu click
+let lastTab = null;                   // the active tab as last seen (sync access for permission prompts)
 
 /* ---------------------------------------------------------------- state */
 
@@ -32,7 +35,7 @@ function saveChat() {
 
 async function newChat() {
   if (abort) abort.abort();
-  chat = { sessionId: newSessionId(), title: "", turns: [] };
+  chat = { sessionId: newSessionId(), title: "", turns: [], browseItems: [] };
   await saveChat();
   renderAll();
   $("#input").focus();
@@ -75,10 +78,10 @@ function bubble(turn, index) {
   } else {
     box.textContent = turn.text;
     if (turn.ctx) {
-      const c = el("div", "ctx", turn.ctx.selection ? icons.selection : icons.page);
+      const c = el("div", "ctx", turn.ctx.browse ? icons.cursor : turn.ctx.selection ? icons.selection : icons.page);
       c.title = turn.ctx.url;
       const label = el("span");
-      label.textContent = (turn.ctx.selection ? "Selection · " : "") + (turn.ctx.title || turn.ctx.url);
+      label.textContent = (turn.ctx.browse ? "Browse · " : turn.ctx.selection ? "Selection · " : "") + (turn.ctx.title || turn.ctx.url);
       c.append(label);
       box.append(c);
     }
@@ -135,7 +138,18 @@ function scrollDown(force) {
 
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (tab) lastTab = tab;
   return tab;
+}
+
+const isBrowse = () => $("#mode").value === "browse";
+const originOf = (url) => { try { return new URL(url).origin; } catch { return ""; } };
+const hostOf = (url) => { try { return new URL(url).host; } catch { return url || ""; } };
+
+async function hasAccess(url) {
+  if (!canScript(url)) return false;
+  if (url.startsWith("file:")) return true;
+  return chrome.permissions.contains({ origins: [originOf(url) + "/*"] });
 }
 
 function canScript(url) {
@@ -158,11 +172,13 @@ async function readPage() {
   }
 }
 
-function showCtx(text, url, { selection = false, muted = false } = {}) {
+function showCtx(text, url, { selection = false, muted = false, browse = false } = {}) {
   $("#ctx-row").hidden = false;
   $("#ctx-chip").hidden = !text;
   $("#ctx-chip").classList.toggle("muted", muted);
-  $("#ctx-icon").innerHTML = selection ? icons.selection : icons.page;
+  $("#ctx-icon").innerHTML = browse ? icons.cursor : selection ? icons.selection : icons.page;
+  $("#ctx-chip").classList.toggle("browse", browse);
+  $("#btn-ctx-clear").hidden = browse;
   $("#page-info").textContent = text;
   $("#ctx-chip").title = url || "";
 }
@@ -171,6 +187,20 @@ async function refreshPageInfo() {
   const grant = $("#btn-grant");
   grant.hidden = true;
   $("#btn-page").setAttribute("aria-pressed", String(attachPage || !!pendingPage));
+  $("#btn-page").hidden = isBrowse();
+  if (isBrowse()) {
+    const tab = await activeTab().catch(() => null);
+    if (!tab || !canScript(tab.url)) {
+      showCtx("Browse mode works on web pages — open one in this window", tab && tab.url, { muted: true, browse: true });
+      return;
+    }
+    showCtx("Controls · " + (tab.title || hostOf(tab.url)), tab.url, { browse: true });
+    if (!(await hasAccess(tab.url))) {
+      grant.hidden = false;
+      grant.dataset.origin = originOf(tab.url) + "/*";
+    }
+    return;
+  }
   if (pendingPage) {
     showCtx((pendingPage.selection ? "Selection · " : "") + (pendingPage.title || pendingPage.url), pendingPage.url,
       { selection: !!pendingPage.selection });
@@ -248,6 +278,7 @@ async function submit() {
   if (abort) { abort.abort(); return; }
   const text = $("#input").value.trim();
   if (!text) return;
+  if (isBrowse()) return submitBrowse(text);
 
   let page = pendingPage;
   if (!page && attachPage) {
@@ -373,6 +404,225 @@ async function stream() {
   }
 }
 
+/* ---------------------------------------------------------------- Browse mode */
+
+/* permissions.request needs the user's gesture, so it is started before
+   any await, from the cached tab. Resolves to the tab to control, or null. */
+function browseAccess() {
+  const tab = lastTab;
+  const pending = tab && canScript(tab.url) && !tab.url.startsWith("file:")
+    ? chrome.permissions.request({ origins: [originOf(tab.url) + "/*"] }).catch(() => false)
+    : Promise.resolve(!!tab && canScript(tab.url));
+  return pending.then(async (ok) => {
+    const now = await activeTab().catch(() => null);
+    if (!now || !canScript(now.url)) return { error: "Open a web page in this window first. Browse mode can't control Chrome's own pages." };
+    if (!ok || !(await hasAccess(now.url))) return { error: `PasClaw needs access to ${hostOf(now.url)} to control it. Allow it when Chrome asks.` };
+    return { tab: now };
+  });
+}
+
+function toolCard(call) {
+  const d = el("details", "tool running");
+  d.innerHTML = `<summary><span class="t-ic">${icons.tool}</span><span class="t-name"></span><span class="t-args"></span>` +
+    `<span class="t-res"></span><span class="t-state"></span></summary><pre></pre>`;
+  d.querySelector(".t-name").textContent = call.name;
+  d.querySelector(".t-args").textContent = callLabel(call.name, call.args);
+  d.querySelector(".t-state").innerHTML = '<span class="spin"></span>';
+  return d;
+}
+
+function finishCard(card, r) {
+  const firstLine = String(r.output || "").split("\n")[0];
+  const failed = r.denied || /^Error:/.test(firstLine);
+  card.classList.remove("running");
+  card.classList.add(r.denied ? "denied" : failed ? "failed" : "done");
+  card.querySelector(".t-res").textContent = r.denied ? "Denied" : r.name === "get_page" ? "Read the page" : firstLine.slice(0, 80);
+  card.querySelector(".t-state").innerHTML = r.denied ? icons.close : failed ? icons.alert : icons.check;
+  card.querySelector("pre").textContent = r.output || "";
+}
+
+const VERB = {
+  click: "click", type_text: "type into", select_option: "choose an option in",
+  press_key: "press a key on", navigate: "open",
+};
+
+/* An approval card in the transcript. Resolves true (allow) or false.
+   "Allow on <site>" lets this task act on that site without asking again. */
+function askApproval(container, call, tab, siteAllowed) {
+  return new Promise(async (resolve) => {
+    const site = hostOf(tab.url);
+    const target = call.args.ref ? await describeTarget(tab.id, call.args.ref) : null;
+    let navTo = "";
+    if (call.name === "navigate" && call.args.url !== "back") {
+      try { navTo = new URL(call.args.url, tab.url).href; } catch { navTo = String(call.args.url || ""); }
+    }
+    if (!navTo && siteAllowed.has(originOf(tab.url))) return resolve(true);
+
+    const card = el("div", "approve");
+    const what = call.name === "navigate"
+      ? (navTo ? `open <b></b>` : "go <b>back</b>")
+      : `${VERB[call.name] || call.name} <b></b>`;
+    card.innerHTML = `<div class="ap-head">${icons.cursor}<span>PasClaw wants to ${what}</span></div>` +
+      `<div class="ap-reason"></div><div class="ap-meta"></div><div class="ap-warn" hidden></div>` +
+      `<div class="ap-btns"><button type="button" class="ap-deny">Deny</button>` +
+      `<button type="button" class="ap-site"></button><button type="button" class="ap-allow">Allow</button></div>`;
+    const b = card.querySelector(".ap-head b");
+    if (b && b.textContent === "") {
+      b.textContent = navTo ? navTo.replace(/^https?:\/\//, "").slice(0, 70)
+        : target ? `“${target.name || target.tag}”` : call.args.ref ? `[${call.args.ref}]` : call.args.key || "";
+    }
+    const detail = call.name === "type_text" ? `Text: “${String(call.args.text).slice(0, 160)}”` + (call.args.submit ? " then Enter" : "")
+      : call.name === "select_option" ? `Option: “${call.args.option}”`
+      : call.name === "press_key" ? `Key: ${call.args.key}` : "";
+    card.querySelector(".ap-reason").textContent = call.args.reason || "";
+    card.querySelector(".ap-meta").textContent = [detail, "on " + site].filter(Boolean).join(" · ");
+    const warns = [];
+    if (target && target.password) warns.push("This is a password field.");
+    if (target && target.submits) warns.push("This submits a form.");
+    if (navTo && originOf(navTo) !== originOf(tab.url)) warns.push("This leaves " + site + ".");
+    if (warns.length) { const w = card.querySelector(".ap-warn"); w.hidden = false; w.innerHTML = icons.alert + "<span></span>"; w.querySelector("span").textContent = warns.join(" "); }
+    const siteBtn = card.querySelector(".ap-site");
+    siteBtn.textContent = "Allow on " + site;
+    if (navTo) siteBtn.hidden = true;
+
+    const done = (ok, label) => {
+      card.classList.add("answered", ok ? "yes" : "no");
+      card.querySelector(".ap-btns").innerHTML = `<span class="ap-answer">${ok ? icons.check : icons.close}${label}</span>`;
+      onAbort && abort && abort.signal.removeEventListener("abort", onAbort);
+      resolve(ok);
+    };
+    const onAbort = () => done(false, "Stopped");
+    if (abort) abort.signal.addEventListener("abort", onAbort, { once: true });
+
+    card.querySelector(".ap-deny").addEventListener("click", () => done(false, "Denied"));
+    siteBtn.addEventListener("click", () => { siteAllowed.add(originOf(tab.url)); done(true, "Allowed on " + site); });
+    card.querySelector(".ap-allow").addEventListener("click", () => {
+      if (navTo) {
+        /* Leaving for another site needs access to it: ask inside this click. */
+        const o = originOf(navTo);
+        if (!/^https?:/.test(navTo)) return done(false, "Only http(s) pages can be opened");
+        chrome.permissions.request({ origins: [o + "/*"] }).catch(() => false)
+          .then((ok) => done(ok, ok ? "Allowed" : "No access to " + hostOf(navTo)));
+      } else done(true, "Allowed");
+    });
+    container.append(card);
+    scrollDown(true);
+    card.querySelector(".ap-allow").focus({ preventScroll: true });
+  });
+}
+
+/* A page that has navigated to another site needs a fresh grant. */
+function askAccess(container, url) {
+  return new Promise((resolve) => {
+    const card = el("div", "approve");
+    card.innerHTML = `<div class="ap-head">${icons.lock}<span>PasClaw needs access to <b></b> to keep going</span></div>` +
+      `<div class="ap-btns"><button type="button" class="ap-deny">Stop here</button><button type="button" class="ap-allow">Allow access</button></div>`;
+    card.querySelector("b").textContent = hostOf(url);
+    const done = (ok) => { card.classList.add("answered", ok ? "yes" : "no"); card.querySelector(".ap-btns").innerHTML = `<span class="ap-answer">${ok ? icons.check + "Access allowed" : icons.close + "No access"}</span>`; resolve(ok); };
+    card.querySelector(".ap-deny").addEventListener("click", () => done(false));
+    card.querySelector(".ap-allow").addEventListener("click", () => {
+      chrome.permissions.request({ origins: [originOf(url) + "/*"] }).catch(() => false).then(done);
+    });
+    if (abort) abort.signal.addEventListener("abort", () => done(false), { once: true });
+    container.append(card);
+    scrollDown(true);
+  });
+}
+
+async function submitBrowse(text) {
+  const access = browseAccess();          // starts the permission prompt inside the gesture
+  $("#input").value = "";
+  autoGrow();
+  const res = await access;
+  if (res.error) { $("#input").value = text; autoGrow(); pushTurn({ role: "e", text: res.error }); refreshPageInfo(); return; }
+  const tab = res.tab;
+  pushTurn({ role: "u", text, content: text, ctx: { title: tab.title, url: tab.url, browse: true } });
+  if (!chat.title) chat.title = text.slice(0, 60);
+  refreshPageInfo();
+
+  const box = el("div", "msg a streaming browsing");
+  box.append(whoLine());
+  const out = el("div", "body md");
+  const status = el("div", "thinking", '<span class="dots"><i></i><i></i><i></i></span><span>Looking at the page…</span>');
+  out.append(status);
+  box.append(out);
+  log.append(box);
+  scrollDown(true);
+  abort = new AbortController();
+  setStreaming(true);
+  await showBanner(tab.id, true);
+
+  const history = (chat.browseItems || []).slice();
+  const transcript = [];
+  const siteAllowed = new Set();
+  const cards = new Map();
+  let failure = "";
+  let stopped = false;
+
+  const setStatusLine = (t) => { status.lastChild.textContent = t; out.append(status); scrollDown(false); };
+
+  try {
+    await runBrowseTask({
+      settings, model: $("#model").value, tabId: tab.id, userText: text, history, signal: abort.signal,
+      hooks: {
+        onText: (t) => {
+          transcript.push(t);
+          const p = el("div", "", renderMarkdown(t));
+          out.insertBefore(p, status);
+          scrollDown(false);
+        },
+        onCall: (call) => {
+          const card = toolCard(call);
+          cards.set(call.id, card);
+          out.insertBefore(card, status);
+          setStatusLine(call.name === "get_page" ? "Reading the page…" : "Working…");
+        },
+        approve: async (call) => {
+          status.hidden = true;
+          const now = await chrome.tabs.get(tab.id).catch(() => tab);
+          if (!(await hasAccess(now.url)) && !(await askAccess(out, now.url))) return false;
+          const ok = await askApproval(out, call, now, siteAllowed);
+          status.hidden = false;
+          out.append(status);
+          await showBanner(tab.id, true);
+          return ok;
+        },
+        onResult: async (r) => {
+          finishCard(cards.get(r.id), r);
+          transcript.push(`⏺ ${r.name}(${callLabel(r.name, r.args)})\n  ⎿ ${r.denied ? "denied by you" : r.name === "get_page" ? "read the page" : String(r.output).split("\n")[0].slice(0, 120)}`);
+          /* After a navigation the banner is gone; put it back. */
+          showBanner(tab.id, true);
+          if (r.name !== "get_page") setStatusLine("Checking the result…");
+        },
+      },
+    });
+  } catch (e) {
+    if (e && e.name === "AbortError") stopped = true;
+    else failure = e && e.message ? e.message : String(e);
+    if (/Failed to fetch|NetworkError/i.test(failure)) {
+      failure = "Can't reach the gateway at " + normalizeGatewayUrl(settings.gatewayUrl) + ".";
+      setStatus(false, "offline");
+    }
+  } finally {
+    await showBanner(tab.id, false);
+    abort = null;
+    setStreaming(false);
+    box.remove();
+    chat.browseItems = compactHistory(history);
+    if (stopped) transcript.push("_Stopped._");
+    if (transcript.length) pushTurn({ role: "a", text: transcript.join("\n\n") });
+    if (failure) pushTurn({ role: "e", text: failure });
+    await saveChat();
+    refreshPageInfo();
+    $("#input").focus();
+  }
+}
+
+/* The in-page banner's Stop button. */
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === "pasclaw-browse-stop" && abort) abort.abort();
+});
+
 /* Retry after an error: drop the error turn and send the last user turn
    again (its full content, page context included). */
 async function retryFrom(index) {
@@ -381,7 +631,15 @@ async function retryFrom(index) {
   await saveChat();
   renderAll();
   const last = chat.turns[chat.turns.length - 1];
-  if (last && last.role === "u") await stream();
+  if (last && last.role === "u") {
+    if (last.ctx && last.ctx.browse) {
+      chat.turns.pop();
+      renderAll();
+      $("#input").value = last.text;
+      autoGrow();
+      toast("Press Enter to run it again");
+    } else await stream();
+  }
 }
 
 function autoGrow() {
@@ -472,7 +730,11 @@ async function loadModels() {
 }
 
 $("#model").addEventListener("change", () => saveSettings({ model: $("#model").value }));
-$("#mode").addEventListener("change", () => saveSettings({ mode: $("#mode").value }));
+$("#mode").addEventListener("change", () => {
+  saveSettings({ mode: $("#mode").value });
+  $("#input").placeholder = isBrowse() ? "Tell PasClaw what to do on this page…" : "Ask PasClaw…";
+  refreshPageInfo();
+});
 
 function showTab(which) {
   const web = which === "web";
@@ -517,6 +779,8 @@ onSettingsChanged((s) => {
 /* ---------------------------------------------------------------- boot */
 
 $("#mode").value = settings.mode || "build";
+$("#input").placeholder = isBrowse() ? "Tell PasClaw what to do on this page…" : "Ask PasClaw…";
+refreshPageInfo();
 setStreaming(false);
 renderAll();
 $("#status").classList.add("checking");

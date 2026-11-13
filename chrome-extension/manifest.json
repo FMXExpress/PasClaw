@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "PasClaw",
   "short_name": "PasClaw",
-  "version": "0.1.0",
-  "description": "Chat with your PasClaw agent from a Chrome side panel, hand it the page you are reading, and open the full PasClaw web UI.",
+  "version": "0.2.0",
+  "description": "Chat with your PasClaw agent from a Chrome side panel, hand it the page you are reading, let it operate the tab with your approval, and open the full PasClaw web UI.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon16.png",
@@ -34,6 +34,7 @@
     "storage",
     "contextMenus",
     "activeTab",
+    "tabs",
     "scripting",
     "alarms",
     "declarativeNetRequest"
