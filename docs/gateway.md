@@ -59,7 +59,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 
 ## Embedded web UI
 
-`/` serves a single-page vanilla ES2020 app (no JS toolchain, no bundler — `src/pkg/gateway/webui.html` is `{$R webui.res}`'d into the binary). Eight tabs:
+`/` serves a single-page vanilla ES2020 app (no JS toolchain, no bundler — `src/pkg/gateway/webui.html` is `{$R webui.res}`'d into the binary). It has a dark and a light theme: it follows the operating system's setting until you use the sun/moon button in the app bar, then remembers your choice. On a narrow screen the tab strip scrolls sideways and the chat list opens over the transcript. Eight tabs:
 
 | Tab | Purpose |
 |---|---|

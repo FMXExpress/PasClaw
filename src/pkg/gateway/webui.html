@@ -4,248 +4,304 @@
 <title>PasClaw</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
+  /* ===== Design tokens =====
+     One neutral surface scale, one accent, three status colours, two type
+     families (sans for the interface, mono for code, paths and tool
+     output). Dark is the default; html.lite swaps the values -- set by the
+     theme button, or by the OS preference until the button is used.
+     Every text token is at least 4.5:1 on every surface it sits on, in
+     both themes; filled buttons carry white at 4.5:1 or better. */
   :root{color-scheme:dark;
-    --bg:#050611;--bg2:#0b1026;--fg:#f5f7ff;--mut:#8f9bc6;
-    --cyan:#20f6ff;--mag:#ff37d5;--violet:#8f5cff;--red:#ff4d6d;--orange:#ff9f1c;--green:#3df281;
-    --panel:rgba(12,18,43,.72);--panel2:rgba(23,13,46,.62);--line:rgba(32,246,255,.22);
-    --glow-cyan:0 0 18px rgba(32,246,255,.55),0 0 42px rgba(32,246,255,.18);
-    --glow-mag:0 0 18px rgba(255,55,213,.55),0 0 42px rgba(255,55,213,.18);
-    --glow-hot:0 0 20px rgba(255,77,109,.42),0 0 48px rgba(255,159,28,.16);
-    --shadow:0 18px 60px rgba(0,0,0,.45)}
+    --bg:#0e1014;--surface:#15181e;--surface-2:#1c2028;--surface-3:#262b35;
+    --field:#0b0d11;--code:#0b0d11;
+    --border:#272c36;--border-strong:#3a4150;--field-border:#525b6d;
+    --text:#e7e9ee;--text-2:#aeb5c2;--text-3:#8a92a1;
+    --accent:#7eaaff;--accent-solid:#2a66dd;--accent-solid-hover:#3170e6;--on-accent:#fff;
+    --accent-soft:rgba(42,102,221,.16);--accent-line:rgba(126,170,255,.5);
+    --ok:#4cc38a;--warn:#e0ac4a;--danger:#ff7b72;
+    --ok-soft:rgba(76,195,138,.14);--warn-soft:rgba(224,172,74,.14);
+    --danger-soft:rgba(255,123,114,.12);--danger-line:rgba(255,123,114,.4);
+    --shadow-pop:0 10px 30px rgba(0,0,0,.5),0 1px 2px rgba(0,0,0,.3);
+    --radius:6px;--radius-lg:10px;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    /* Names the script's inline styles use. */
+    --fg:var(--text);--mut:var(--text-3);--line:var(--border);
+    --panel:var(--surface);--panel2:var(--surface-2);
+    --cyan:var(--accent);--mag:var(--accent);--violet:var(--accent);
+    --red:var(--danger);--green:var(--ok);--grn:var(--ok);
+    --orange:var(--warn);--org:var(--warn);--yellow:var(--warn)}
+  html.lite{color-scheme:light;
+    --bg:#f5f6f8;--surface:#ffffff;--surface-2:#f1f2f5;--surface-3:#e6e8ed;
+    --field:#ffffff;--code:#f5f6f8;
+    --border:#e0e3e9;--border-strong:#c5cad4;--field-border:#8f97a6;
+    --text:#1a1d23;--text-2:#4a5160;--text-3:#5f6775;
+    --accent:#1d55c4;--accent-solid:#2563eb;--accent-solid-hover:#1d55d0;
+    --accent-soft:rgba(37,99,235,.1);--accent-line:rgba(29,85,196,.45);
+    --ok:#136c37;--warn:#8a5a00;--danger:#b82b26;
+    --ok-soft:rgba(19,108,55,.1);--warn-soft:rgba(138,90,0,.1);
+    --danger-soft:rgba(184,43,38,.08);--danger-line:rgba(184,43,38,.35);
+    --shadow-pop:0 10px 30px rgba(20,25,40,.14),0 1px 2px rgba(20,25,40,.1)}
+
+  /* ===== Base =====
+     Element-level looks sit in :where() (no specificity) so every control
+     starts consistent -- including ones the script creates without a class
+     -- and any class rule below overrides them. */
   *{box-sizing:border-box}
-  body{margin:0;min-height:100vh;color:var(--fg);
-    font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    display:flex;flex-direction:column;height:100vh;overflow:hidden;
-    background:
-      radial-gradient(circle at 15% 10%,rgba(255,55,213,.22),transparent 28rem),
-      radial-gradient(circle at 85% 0%,rgba(32,246,255,.18),transparent 26rem),
-      radial-gradient(circle at 55% 100%,rgba(255,77,109,.2),transparent 30rem),
-      linear-gradient(135deg,var(--bg),var(--bg2) 48%,#13051f)}
-  body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.34;
-    background-image:linear-gradient(rgba(32,246,255,.16) 1px,transparent 1px),
-                     linear-gradient(90deg,rgba(255,55,213,.12) 1px,transparent 1px);
-    background-size:42px 42px;
-    mask-image:linear-gradient(to bottom,transparent,black 14%,black 72%,transparent)}
-  header{position:relative;z-index:1;margin:.7rem .9rem 0;padding:.55rem .8rem;
-    border:1px solid var(--line);border-radius:14px;
-    background:linear-gradient(120deg,var(--panel),rgba(14,8,29,.7));
-    box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.08);
-    display:flex;align-items:center;gap:.75rem;backdrop-filter:blur(14px);flex-wrap:wrap}
-  .logo{font-weight:900;letter-spacing:.16em;font-size:16px;text-transform:uppercase;
-    text-shadow:var(--glow-cyan)}
-  .logo .blue{color:var(--cyan)} .logo .red{color:var(--mag);text-shadow:var(--glow-mag)}
-  .meta{color:#dbe7ff;font-size:11px;letter-spacing:.02em;
-    border:1px solid rgba(32,246,255,.28);border-radius:999px;padding:.28rem .55rem;
-    background:linear-gradient(90deg,rgba(32,246,255,.12),rgba(255,55,213,.12));white-space:nowrap}
-  nav{display:flex;gap:.32rem;margin-left:auto;flex-wrap:wrap}
-  nav button{background:transparent;color:var(--mut);border:1px solid rgba(255,255,255,.08);
-    border-radius:8px;padding:.32rem .68rem;font:inherit;font-size:11px;letter-spacing:.08em;
-    text-transform:uppercase;font-weight:700;cursor:pointer;transition:all .15s}
-  nav button:hover{border-color:var(--cyan);color:var(--cyan)}
-  nav button.active{background:linear-gradient(120deg,rgba(32,246,255,.18),rgba(255,55,213,.18));
-    color:var(--fg);border-color:var(--cyan);box-shadow:var(--glow-cyan)}
-  /* Plan/Build mode toggle (PR #290). Build is the default-quiet
-     appearance; Plan glows magenta-pink so the operator sees it
-     immediately. */
-  #mode-btn{font-size:11px;letter-spacing:.05em;text-transform:lowercase}
-  #mode-btn.mode-build{border-color:rgba(143,92,255,.45);color:var(--mut)}
-  #mode-btn.mode-plan{border-color:#ff37d5;color:#ff8ad5;
-    box-shadow:0 0 12px rgba(255,55,213,.45) inset, 0 0 12px rgba(255,55,213,.35)}
-  #mode-btn.mode-space{border-color:#379bff;color:#8ac8ff;
-    box-shadow:0 0 12px rgba(55,155,255,.45) inset, 0 0 12px rgba(55,155,255,.35)}
-  #mode-btn.mode-improve{border-color:#37ffb0;color:#8affd0;
-    box-shadow:0 0 12px rgba(55,255,176,.4) inset, 0 0 12px rgba(55,255,176,.3)}
-  main{position:relative;z-index:1;flex:1;display:flex;margin:.7rem .9rem .9rem;overflow:hidden;gap:.7rem}
-  .tab{display:none;flex:1;min-width:0;border:1px solid rgba(143,92,255,.26);border-radius:16px;
-    background:linear-gradient(120deg,var(--panel),rgba(32,12,45,.7));
-    box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.08);backdrop-filter:blur(14px);
-    overflow:hidden}
+  body{margin:0;min-height:100vh;height:100vh;overflow:hidden;
+    display:flex;flex-direction:column;color:var(--text);background:var(--bg);
+    font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  :where(button,input,select,textarea){font:inherit;color:inherit;margin:0}
+  :where(button){cursor:pointer;background:var(--surface-2);color:var(--text);
+    border:1px solid var(--border-strong);border-radius:var(--radius);
+    padding:.3rem .7rem;font-size:13px;line-height:1.4}
+  :where(button):hover{background:var(--surface-3)}
+  :where(button):disabled{opacity:.5;cursor:default}
+  :where(input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]),select,textarea){
+    background:var(--field);color:var(--text);border:1px solid var(--field-border);
+    border-radius:var(--radius);padding:.36rem .55rem;font-size:13px;line-height:1.4;
+    outline:none;caret-color:var(--accent)}
+  :where(input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]),select,textarea):focus{
+    border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  :where(input,textarea)::placeholder{color:var(--text-3);opacity:1}
+  :where(textarea){resize:none;min-height:2.4rem}
+  :where(input[type=checkbox],input[type=radio]){accent-color:var(--accent-solid)}
+  :where(input[type=file]){font-size:13px;color:var(--text-2)}
+  :where(input[type=file])::file-selector-button{font:inherit;font-size:13px;cursor:pointer;
+    margin-right:.6rem;padding:.3rem .7rem;border-radius:var(--radius);
+    background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong)}
+  :where(a){color:var(--accent);text-underline-offset:2px}
+  :where(code,pre,kbd){font-family:var(--mono)}
+  :where(button,a,summary,select,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  ::selection{background:var(--accent-soft)}
+  *{scrollbar-width:thin;scrollbar-color:var(--border-strong) transparent}
+
+  /* Icons: one stroke weight, drawn in the text colour of whatever holds them. */
+  svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;
+    stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+  /* The disclosure chevron every collapsible section shares. */
+  .tool-card>summary::before,.relay-info>summary::before,.relay-sec>summary::before{
+    content:"";flex:none;width:.4rem;height:.4rem;margin:0 .2rem 0 .1rem;
+    border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+    transform:rotate(-45deg);opacity:.75;transition:transform .12s}
+  .tool-card[open]>summary::before,.relay-info[open]>summary::before,
+  .relay-sec[open]>summary::before{transform:rotate(45deg)}
+
+  /* ===== App bar ===== */
+  body>header{flex:none;position:relative;z-index:2;display:flex;align-items:center;gap:.9rem;
+    height:48px;padding:0 .9rem;background:var(--surface);border-bottom:1px solid var(--border)}
+  .logo{font-weight:650;font-size:15px;letter-spacing:-.01em;white-space:nowrap;color:var(--text)}
+  .logo .blue{color:inherit} .logo .red{color:var(--accent)}
+  .meta{color:var(--text-2);font-size:12px}
+  #meta{order:3;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-family:var(--mono);font-size:11.5px;
+    border:1px solid var(--border);border-radius:999px;padding:.14rem .6rem}
+  #meta::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;
+    margin-right:.45rem;background:var(--text-3)}
+  #meta[data-state=online]::before{background:var(--ok)}
+  #meta[data-state=offline]::before{background:var(--danger)}
+  #meta[data-state=locked]::before{background:var(--warn)}
+  nav{order:2;flex:1;min-width:0;align-self:stretch;display:flex;align-items:stretch;gap:.1rem;
+    overflow-x:auto;scrollbar-width:none}
+  nav::-webkit-scrollbar{display:none}
+  nav button{flex:none;background:none;border:0;border-radius:0;padding:0 .6rem;
+    font-size:13px;color:var(--text-2);white-space:nowrap;box-shadow:inset 0 -2px 0 transparent;
+    transition:color .12s,box-shadow .12s}
+  nav button:hover{background:none;color:var(--text)}
+  nav button.active{color:var(--text);font-weight:550;box-shadow:inset 0 -2px 0 var(--accent)}
+  nav button:focus-visible{outline-offset:-2px}
+  .header-actions{order:4;display:flex;align-items:center;gap:.15rem}
+  .header-actions button{display:inline-flex;align-items:center;justify-content:center;
+    width:30px;height:30px;padding:0;background:none;border:0;color:var(--text-2)}
+  .header-actions button:hover{background:var(--surface-2);color:var(--text)}
+  main{position:relative;flex:1;min-height:0;display:flex;overflow:hidden}
+  .tab{display:none;flex:1;min-width:0;overflow:hidden;background:var(--bg)}
   .tab.active{display:flex}
+
+  /* ===== Buttons =====
+     .icon-btn is the secondary button (text, icon, or both); button.primary
+     the one filled action in a group; .on marks a toggle that is active. */
+  .icon-btn{display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap;
+    background:transparent;color:var(--text-2);border:1px solid var(--border-strong);
+    border-radius:var(--radius);padding:.24rem .6rem;font-size:12.5px;line-height:1.4}
+  .icon-btn:hover{background:var(--surface-2);color:var(--text)}
+  .icon-btn.on,#params-toggle.on,#ctx-toggle.on,#config-raw-toggle.on{
+    background:var(--accent-soft);border-color:transparent;color:var(--accent)}
+  button.primary{background:var(--accent-solid);color:var(--on-accent);border:1px solid transparent;
+    border-radius:var(--radius);padding:.32rem .9rem;font-size:13px;font-weight:600;line-height:1.4;
+    white-space:nowrap}
+  button.primary:hover{background:var(--accent-solid-hover)}
+  button.primary:disabled{opacity:.5;cursor:wait}
 
   /* ===== Chat tab ===== */
   #tab-chat{display:none}
   #tab-chat.active{display:flex}
-  aside.sessions{flex:0 0 10rem;min-width:0;border-right:1px solid rgba(255,255,255,.08);
-    display:flex;flex-direction:column;background:rgba(2,5,15,.32);overflow:hidden}
+  aside.sessions{flex:0 0 15rem;min-width:0;border-right:1px solid var(--border);
+    display:flex;flex-direction:column;background:var(--surface);overflow:hidden}
   aside.sessions.collapsed,.chat-splitter.collapsed{display:none}
-  aside.sessions header{margin:0;padding:.55rem .7rem;border:0;border-radius:0;
-    background:transparent;box-shadow:none;display:flex;align-items:center;justify-content:space-between}
-  aside.sessions header .title{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em}
-  .icon-btn{background:transparent;color:var(--cyan);border:1px solid rgba(32,246,255,.32);
-    border-radius:8px;padding:.2rem .55rem;font:inherit;font-size:11px;cursor:pointer;letter-spacing:.05em}
-  .icon-btn:hover{background:rgba(32,246,255,.12);box-shadow:var(--glow-cyan)}
-  .session-search{margin:.1rem .5rem .35rem;background:rgba(2,5,15,.72);color:var(--fg);
-    border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:.3rem .5rem;
-    font:inherit;font-size:11px;outline:none}
-  .session-search:focus{border-color:var(--cyan)}
-  .session-list{flex:1;overflow:auto;padding:.3rem;margin:0;list-style:none}
-  .session-list li.muted{opacity:.5;font-style:italic}
-  .session-list li{padding:.45rem .55rem;border-radius:8px;margin-bottom:.2rem;cursor:pointer;
-    color:var(--mut);font-size:12px;border:1px solid transparent;
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .session-list li:hover{background:rgba(255,255,255,.04);color:var(--fg);border-color:rgba(255,55,213,.2)}
-  .session-list li.active{background:rgba(32,246,255,.1);color:var(--cyan);
-    border-color:rgba(32,246,255,.4);box-shadow:var(--glow-cyan)}
-  .session-list li .del{float:right;color:var(--red);font-weight:700;opacity:0;padding-left:.5rem}
-  .session-list li:hover .del{opacity:.7}
-  .session-list li .del:hover{opacity:1}
-  .session-list li .dl{float:right;color:var(--cyan);opacity:0;padding-left:.5rem}
-  .session-list li:hover .dl{opacity:.7}
-  .session-list li .dl:hover{opacity:1}
+  aside.sessions header{display:flex;align-items:center;gap:.35rem;padding:.6rem .6rem .45rem .8rem}
+  aside.sessions header .title{margin-right:auto;font-size:12px;font-weight:600;color:var(--text-2)}
+  .session-search{margin:0 .6rem .45rem;font-size:12.5px;padding:.3rem .55rem}
+  .session-list{flex:1;overflow:auto;padding:0 .4rem .6rem;margin:0;list-style:none}
+  .session-list li{display:flex;align-items:center;gap:.15rem;padding:.38rem .55rem;
+    border-radius:var(--radius);margin-bottom:1px;cursor:pointer;
+    color:var(--text-2);font-size:13px;white-space:nowrap}
+  .session-list li>span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .session-list li.muted{color:var(--text-3);font-style:italic;cursor:default}
+  .session-list li:hover{background:var(--surface-2);color:var(--text)}
+  .session-list li.muted:hover{background:none;color:var(--text-3)}
+  .session-list li.active{background:var(--surface-3);color:var(--text)}
+  .session-list li .del,.session-list li .dl{flex:none;display:none;align-items:center;justify-content:center;
+    width:1.25rem;height:1.25rem;border-radius:4px;color:var(--text-3);order:2}
+  .session-list li .dl{order:1}
+  .session-list li .dl svg.ic{width:13px;height:13px}
+  .session-list li:hover .del,.session-list li:hover .dl{display:inline-flex}
+  .session-list li .del:hover{color:var(--danger);background:var(--surface-3)}
+  .session-list li .dl:hover{color:var(--text);background:var(--surface-3)}
   /* Draggable divider between the session list and the chat pane. */
-  .chat-splitter{flex:0 0 6px;align-self:stretch;cursor:col-resize;
-    background:linear-gradient(transparent,rgba(143,92,255,.3),transparent);
-    opacity:.45;transition:opacity .15s}
-  .chat-splitter:hover,.chat-splitter.drag{opacity:1;
-    background:linear-gradient(transparent,var(--cyan),transparent)}
+  .chat-splitter{flex:0 0 5px;margin-left:-3px;align-self:stretch;cursor:col-resize;
+    position:relative;z-index:1;transition:background .12s}
+  .chat-splitter:hover,.chat-splitter.drag{background:var(--accent-line)}
   .chat-pane{flex:1;display:flex;flex-direction:column;min-width:0}
-  .chat-toolbar{display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;
-    border-bottom:1px solid rgba(255,255,255,.06);position:relative}
-  .params-summary{font-size:10.5px;color:var(--mut);letter-spacing:.03em}
-  .sandbox-chip{font-size:10px;letter-spacing:.04em;border:1px solid rgba(255,255,255,.14);
-    border-radius:999px;padding:.16rem .5rem;color:var(--mut);white-space:nowrap;cursor:default}
-  .sandbox-chip.sb-local{color:var(--cyan);border-color:rgba(32,246,255,.3)}
-  .sandbox-chip.sb-remote{color:var(--mag);border-color:rgba(255,55,213,.3)}
+  .chat-toolbar{display:flex;align-items:center;gap:.15rem;min-height:44px;padding:.35rem .75rem;
+    border-bottom:1px solid var(--border);position:relative}
+  .chat-toolbar .icon-btn{border-color:transparent;padding:.28rem .5rem}
+  .params-summary{margin-left:.5rem;font-size:12px;color:var(--text-3)}
+  .sandbox-chip{display:inline-flex;align-items:center;gap:.4rem;margin-right:.35rem;font-size:12px;
+    border:1px solid var(--border);border-radius:999px;padding:.1rem .6rem;color:var(--text-2);
+    white-space:nowrap;cursor:default}
+  .sandbox-chip::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--text-3)}
+  .sandbox-chip.sb-remote::before{background:var(--accent)}
   .fs-menu{position:absolute;top:100%;right:.6rem;z-index:40;min-width:14rem;max-width:24rem;
-    max-height:18rem;overflow:auto;background:var(--panel);border:1px solid rgba(255,255,255,.14);
-    border-radius:8px;padding:.3rem;box-shadow:0 12px 30px rgba(0,0,0,.4)}
-  .fs-menu .frow{display:flex;justify-content:space-between;gap:.6rem;padding:.32rem .45rem;
-    cursor:pointer;border-radius:6px;font-size:11.5px;color:var(--fg)}
-  .fs-menu .frow:hover{background:rgba(32,246,255,.12)}
+    max-height:18rem;overflow:auto;background:var(--surface);border:1px solid var(--border-strong);
+    border-radius:8px;padding:.3rem;box-shadow:var(--shadow-pop)}
+  .fs-menu .frow{display:flex;justify-content:space-between;align-items:center;gap:.6rem;
+    padding:.32rem .5rem;cursor:pointer;border-radius:var(--radius);font-size:12.5px;color:var(--text)}
+  .fs-menu .frow:hover{background:var(--surface-2)}
   .fs-menu .frow span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .fs-menu .empty{color:var(--mut);padding:.45rem;font-size:11px}
-  .dl-btn{padding:.05rem .35rem;font-size:11px;margin-left:.4rem}
-  .fs-img{max-width:100%;border-radius:8px;border:1px solid rgba(255,255,255,.1)}
+  .fs-menu .frow span:last-child{color:var(--text-3)}
+  .fs-menu .empty{color:var(--text-3);padding:.45rem .5rem;font-size:12px}
+  .dl-btn{padding:.05rem .3rem;margin-left:.4rem;border-color:transparent}
+  .fs-img{max-width:100%;border-radius:8px;border:1px solid var(--border)}
   .hexbar{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.5rem}
-  .hexbar .hexpos{color:var(--mut);font-size:11px;font-family:var(--mono)}
+  .hexbar .hexpos{color:var(--text-3);font-size:12px;font-family:var(--mono)}
   .hexdump{font-family:var(--mono);font-size:12px;line-height:1.45;white-space:pre}
-  #params-toggle.on{background:rgba(32,246,255,.12);box-shadow:var(--glow-cyan)}
-  .chat-params{display:flex;flex-direction:column;gap:.5rem;padding:.6rem .7rem;
-    border-bottom:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
+
+  /* Panels that open under the toolbar: per-chat parameters, context. */
+  .chat-params,.ctx-panel{display:flex;flex-direction:column;padding:.8rem .9rem;
+    border-bottom:1px solid var(--border);background:var(--surface)}
+  .chat-params{gap:.6rem}
   .chat-params[hidden]{display:none}
-  .chat-params .pf{display:flex;flex-direction:column;gap:.25rem;font-size:10.5px;
-    text-transform:uppercase;letter-spacing:.07em;color:var(--mut)}
+  .chat-params .pf{display:flex;flex-direction:column;gap:.25rem;font-size:12px;font-weight:500;
+    color:var(--text-2)}
   .chat-params .pf-row{display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap}
-  .chat-params textarea,.chat-params input,.chat-params select{
-    background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
-    border:1px solid rgba(32,246,255,.3);border-radius:8px;padding:.4rem .5rem;
-    font:inherit;font-size:12px;outline:none;text-transform:none;letter-spacing:normal}
+  .chat-params textarea,.chat-params input,.chat-params select{font-weight:400}
   .chat-params textarea{resize:vertical;min-height:2.4rem}
-  .chat-params textarea:focus,.chat-params input:focus,.chat-params select:focus{
-    border-color:var(--cyan);box-shadow:var(--glow-cyan)}
   .chat-params .num-pf{flex:1;min-width:7rem}
   .chat-params .preset-pf{flex:1;min-width:8rem}
+
   /* ===== Context breakdown (/v1/context) =====
      One whole (the model's window, or the compaction point when the window
      is not known) split into parts: a thin segmented bar, with the names,
      token counts and shares in the list beneath it. Categorical slots in a
-     fixed order, validated for the dark surface and, for the inverted "lite"
-     theme, the light steps on counter-inverted marks (like images). */
+     fixed order; the dark steps are validated against the dark panel
+     surface and the light steps against the light one. */
   .ctx-panel,#ctx-toggle{--ctx-system:#3987e5;--ctx-memory:#d95926;--ctx-project:#199e70;
     --ctx-skills:#c98500;--ctx-tools:#d55181;--ctx-mcp:#008300;--ctx-messages:#9085e9;
-    --ctx-free:rgba(255,255,255,.12)}
+    --ctx-free:var(--surface-3)}
   html.lite .ctx-panel,html.lite #ctx-toggle{--ctx-system:#2a78d6;--ctx-memory:#eb6834;
     --ctx-project:#1baf7a;--ctx-skills:#eda100;--ctx-tools:#e87ba4;--ctx-mcp:#008300;
     --ctx-messages:#6250d6}
-  html.lite .ctx-seg:not(.free),html.lite .ctx-sw:not(.free){filter:invert(1) hue-rotate(180deg)}
-  #ctx-toggle{white-space:nowrap}
-  #ctx-toggle.on{background:rgba(32,246,255,.12);box-shadow:var(--glow-cyan)}
-  #ctx-toggle .ctx-btn-n{color:var(--fg);font-variant-numeric:tabular-nums}
-  .ctx-panel{display:flex;flex-direction:column;gap:.55rem;padding:.6rem .7rem;
-    border-bottom:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4);
-    max-height:55vh;overflow:auto}
+  #ctx-toggle .ctx-btn-n{font-variant-numeric:tabular-nums}
+  .ctx-panel{gap:.6rem;max-height:55vh;overflow:auto}
   .ctx-panel[hidden]{display:none}
   .ctx-head{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
-  .ctx-title{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--mut)}
-  .ctx-total{font-size:13px;color:var(--fg);font-variant-numeric:tabular-nums}
-  .ctx-total .ctx-of{color:var(--mut);font-size:12px}
-  .ctx-win{margin-left:auto;font-size:10.5px;color:var(--mut);display:flex;align-items:center;gap:.35rem}
-  .ctx-win input{width:7.5rem;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
-    border:1px solid rgba(32,246,255,.3);border-radius:8px;padding:.25rem .45rem;font:inherit;
-    font-size:12px;outline:none}
-  .ctx-win input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  .ctx-title{font-size:12px;font-weight:600;color:var(--text-2)}
+  .ctx-total{font-size:13px;color:var(--text);font-variant-numeric:tabular-nums}
+  .ctx-total .ctx-of{color:var(--text-3);font-size:12.5px}
+  .ctx-win{margin-left:auto;font-size:12px;color:var(--text-3);display:flex;align-items:center;gap:.4rem}
+  .ctx-win input{width:7.5rem;padding:.24rem .45rem;font-size:12.5px}
   .ctx-barwrap{position:relative;padding:4px 0}
   .ctx-bar{display:flex;gap:2px;height:8px;border-radius:999px;overflow:hidden}
   .ctx-seg{height:100%;flex-basis:0;min-width:2px}
   .ctx-seg.free{background:var(--ctx-free);min-width:0}
-  .ctx-mark{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--fg);
+  .ctx-mark{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--text);
     border-radius:1px;pointer-events:none}
   .ctx-legend{list-style:none;margin:0;padding:0;display:grid;
-    grid-template-columns:repeat(auto-fill,minmax(min(14rem,100%),1fr));gap:.1rem 1.2rem}
-  .ctx-legend li,.ctx-row{display:flex;align-items:center;gap:.45rem;font-size:12px;
-    padding:.12rem 0;min-width:0}
+    grid-template-columns:repeat(auto-fill,minmax(min(14rem,100%),1fr));gap:.1rem 1.4rem}
+  .ctx-legend li,.ctx-row{display:flex;align-items:center;gap:.45rem;font-size:12.5px;
+    padding:.14rem 0;min-width:0}
   .ctx-legend .nm,.ctx-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ctx-sw{width:10px;height:10px;border-radius:3px;flex:none}
-  .ctx-sw.free{background:transparent;box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
-  .ctx-legend .n,.ctx-row .n{margin-left:auto;color:var(--fg);font-variant-numeric:tabular-nums;
+  .ctx-sw.free{background:transparent;box-shadow:inset 0 0 0 1px var(--field-border)}
+  .ctx-legend .n,.ctx-row .n{margin-left:auto;color:var(--text);font-variant-numeric:tabular-nums;
     white-space:nowrap}
-  .ctx-legend .p{color:var(--mut);min-width:3.2rem;text-align:right;font-variant-numeric:tabular-nums}
-  .ctx-note,.ctx-foot{font-size:11px;color:var(--mut);line-height:1.5}
-  .ctx-note b{color:var(--fg);font-weight:normal}
-  .ctx-more>summary{cursor:pointer;font-size:10.5px;color:var(--mut);text-transform:uppercase;
-    letter-spacing:.07em;padding:.15rem 0}
-  .ctx-more>summary .n{text-transform:none;letter-spacing:normal;color:var(--fg);margin-left:.4rem}
+  .ctx-legend .p{color:var(--text-3);min-width:3.2rem;text-align:right;font-variant-numeric:tabular-nums}
+  .ctx-note,.ctx-foot{font-size:12px;color:var(--text-3);line-height:1.5}
+  .ctx-note b{color:var(--text);font-weight:500}
+  .ctx-more>summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--text-2);padding:.15rem 0}
+  .ctx-more>summary .n{font-weight:400;color:var(--text-3);margin-left:.5rem}
   .ctx-rows{display:flex;flex-direction:column;margin:.25rem 0 .35rem .2rem}
-  .ctx-sub{font-size:10.5px;color:var(--mut);margin:.35rem 0 .1rem;text-transform:uppercase;
-    letter-spacing:.06em}
+  .ctx-rows .ctx-row{font-family:var(--mono);font-size:12px}
+  .ctx-sub{font-size:12px;font-weight:500;color:var(--text-3);margin:.4rem 0 .1rem}
   .ctx-sec>summary{list-style:none;cursor:pointer}
   .ctx-sec>summary::-webkit-details-marker{display:none}
-  .ctx-sec>summary .ctx-row:hover{background:rgba(32,246,255,.06)}
+  .ctx-sec>summary .ctx-row{border-radius:4px;padding-left:.3rem;padding-right:.3rem}
+  .ctx-sec>summary .ctx-row:hover{background:var(--surface-2)}
   .ctx-sec pre{max-height:14rem;overflow:auto;white-space:pre-wrap;word-break:break-word;
-    font-size:11px;margin:.2rem 0 .45rem 1.2rem;padding:.45rem .55rem;border-radius:6px;
-    background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.08);color:var(--fg)}
-  .ctx-role{color:var(--mut);min-width:4.6rem}
-  .ctx-tip{position:fixed;z-index:70;pointer-events:none;background:var(--panel);
-    border:1px solid rgba(255,255,255,.16);border-radius:6px;padding:.25rem .5rem;
-    font-size:11.5px;color:var(--fg);box-shadow:0 8px 24px rgba(0,0,0,.4);white-space:nowrap}
-  #log{flex:1;overflow:auto;padding:.85rem;display:flex;flex-direction:column;gap:.55rem;
-    scrollbar-color:var(--mag) transparent}
-  .row{display:flex;gap:.6rem;align-items:flex-start;animation:rise .18s ease-out}
-  @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-  .role{flex-shrink:0;width:4.2rem;text-transform:uppercase;font-size:10.5px;
-    letter-spacing:.1em;padding-top:.6rem;color:var(--mut)}
-  .row.u .role{color:var(--cyan);text-shadow:var(--glow-cyan)}
-  .row.a .role{color:var(--mag);text-shadow:var(--glow-mag)}
-  .row.e .role{color:var(--red);text-shadow:var(--glow-hot)}
-  .bub{white-space:pre-wrap;flex:1;min-width:0;border:1px solid rgba(255,255,255,.08);
-    border-radius:14px;padding:.65rem .8rem;background:var(--panel);
-    box-shadow:0 10px 28px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.06);
-    font-size:13px}
-  .row.u .bub{border-color:rgba(32,246,255,.32);
-    background:linear-gradient(135deg,rgba(12,42,61,.72),rgba(10,19,42,.7));box-shadow:var(--glow-cyan)}
-  /* Assistant turns read as full-width prose: no empty label gutter and no
-     bubble chrome (border/background/shadow dropped). User + error keep theirs. */
-  .row.a .role{display:none}
-  .row.a .bub{border:none;background:none;box-shadow:none;padding:.45rem .15rem}
-  .row.e .bub{border-color:rgba(255,77,109,.42);
-    background:linear-gradient(135deg,rgba(65,17,32,.78),rgba(37,14,25,.72));box-shadow:var(--glow-hot)}
-  .toolcall{color:var(--cyan);font-weight:600}
-  .toolresult{color:var(--mut);padding-left:1.2rem}
-  /* Collapsible tool-call card (Claude-Code style): a ▸ disclosure that
-     expands the result summary. Built by toolCard() in JS. */
-  .tool-card{margin:.4rem 0;border:1px solid rgba(32,246,255,.22);border-radius:10px;
-    background:rgba(2,10,20,.5);overflow:hidden}
-  .tool-card.err{border-color:rgba(255,77,109,.4)}
-  .tool-card>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:.45rem;
-    padding:.4rem .6rem;font-family:ui-monospace,monospace;font-size:12px;color:var(--cyan)}
+    font-size:12px;margin:.2rem 0 .45rem 1.2rem;padding:.5rem .6rem;border-radius:var(--radius);
+    background:var(--code);border:1px solid var(--border);color:var(--text)}
+  .ctx-role{color:var(--text-3);min-width:4.6rem}
+  .ctx-tip{position:fixed;z-index:70;pointer-events:none;background:var(--surface);
+    border:1px solid var(--border-strong);border-radius:var(--radius);padding:.25rem .5rem;
+    font-size:12px;color:var(--text);box-shadow:var(--shadow-pop);white-space:nowrap}
+
+  /* ===== Transcript =====
+     A readable measure down the middle. The user's message is a bubble on
+     the right, the assistant's reply is prose on the page, an error is a
+     labelled block. Per-message actions sit in the gap under the message
+     so showing them moves nothing. */
+  #log{flex:1;overflow:auto;padding:1.25rem 1rem 1.75rem;display:flex;flex-direction:column;gap:1.5rem}
+  .row{display:flex;gap:.6rem;align-items:flex-start;width:100%;max-width:52rem;margin:0 auto;
+    animation:rise .16s ease-out}
+  @keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .role{display:none}
+  .bub{position:relative;white-space:pre-wrap;min-width:0;font-size:14px;line-height:1.6;
+    overflow-wrap:anywhere}
+  .row.u{justify-content:flex-end}
+  .row.u .bub{max-width:85%;background:var(--surface-2);border:1px solid var(--border);
+    border-radius:12px;padding:.5rem .8rem}
+  .row.a .bub{flex:1}
+  .row.e{flex-direction:column;gap:.3rem}
+  .row.e .role{display:block;font-size:12px;font-weight:600;color:var(--danger);text-transform:capitalize}
+  .row.e .bub{align-self:stretch;border:1px solid var(--danger-line);background:var(--danger-soft);
+    border-radius:8px;padding:.55rem .8rem;font-family:var(--mono);font-size:12.5px;line-height:1.5}
+  .toolcall{color:var(--text);font-weight:600}
+  .toolresult{color:var(--text-3);padding-left:1.2rem}
+  /* Collapsible tool-call card: the call is the summary line, the full
+     arguments and result the body. Built by toolCard() in the script. */
+  .tool-card{margin:.5rem 0;border:1px solid var(--border);border-radius:8px;
+    background:var(--surface);overflow:hidden;white-space:normal}
+  .tool-card.err{border-color:var(--danger-line)}
+  .tool-card>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:.4rem;
+    padding:.4rem .7rem;font-family:var(--mono);font-size:12.5px;color:var(--text-2)}
+  .tool-card>summary:hover{background:var(--surface-2);color:var(--text)}
   .tool-card>summary::-webkit-details-marker{display:none}
-  .tool-card>summary::before{content:"▸";color:var(--mut);font-size:11px}
-  .tool-card[open]>summary::before{content:"▾"}
-  .tool-card.err>summary{color:var(--red)}
-  .tool-card .tc-glyph{color:var(--mag)}
+  .tool-card.err>summary{color:var(--danger)}
+  .tool-card .tc-glyph{flex:none;width:7px;height:7px;border-radius:50%;font-size:0;
+    background:var(--accent)}
+  .tool-card.err .tc-glyph{background:var(--danger)}
   .tool-card .tc-call{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .tool-card .tc-body{padding:.45rem .7rem;border-top:1px solid rgba(255,255,255,.07);
-    font-family:ui-monospace,monospace;font-size:11.5px;color:var(--mut)}
-  .tool-card .tc-body pre{margin:.15rem 0 .4rem;white-space:pre-wrap;word-break:break-word;
+  .tool-card .tc-body{padding:.5rem .75rem .55rem;border-top:1px solid var(--border);
+    background:var(--code);font-family:var(--mono);font-size:12px;line-height:1.5;color:var(--text-2)}
+  .tool-card .tc-body pre{margin:.15rem 0 .45rem;white-space:pre-wrap;word-break:break-word;
     max-height:22rem;overflow:auto}
-  .tool-card .tc-h{font-size:9.5px;text-transform:uppercase;letter-spacing:.1em;
-    color:var(--cyan);margin:.25rem 0 .1rem;opacity:.8}
+  .tool-card .tc-h{font-family:var(--sans);font-size:11.5px;font-weight:600;color:var(--text-3);
+    text-transform:capitalize;margin:.2rem 0 .1rem}
   /* In-flight indicator inside the assistant bubble -- three pulsing dots
-     while we wait for the first SSE delta. textContent = ... naturally
-     overwrites this once content arrives. */
-  .typing{display:inline-flex;gap:.3rem;padding:.15rem 0;align-items:center}
-  .typing span{width:.5rem;height:.5rem;border-radius:50%;
-    background:var(--mag);box-shadow:var(--glow-mag);
+     while we wait for the first delta; replaced once content arrives. */
+  .typing{display:inline-flex;gap:.3rem;padding:.4rem 0;align-items:center}
+  .typing span{width:.4rem;height:.4rem;border-radius:50%;background:var(--text-3);
     animation:typingPulse 1.2s ease-in-out infinite}
   .typing span:nth-child(2){animation-delay:.15s}
   .typing span:nth-child(3){animation-delay:.3s}
@@ -253,64 +309,79 @@
     0%,80%,100%{opacity:.25;transform:scale(.85)}
     40%{opacity:1;transform:scale(1)}
   }
-  form.send{display:flex;flex-wrap:wrap;gap:.5rem;margin:0;padding:.6rem;
-    border-top:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
-  #attach-chips{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
-  #attach-chips:empty{display:none}
-  .msg-queue{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
-  .msg-queue:empty{display:none}
-  /* Transient mid-turn steering note (see steerMsg): a dashed, muted line so
-     it reads as an aside injected into the running turn, not a chat bubble. */
-  .row.steer .bub{border:1px dashed rgba(32,246,255,.4);background:rgba(2,10,20,.35);
-    color:var(--cyan);font-size:12px;font-style:italic;opacity:.9}
-  .row.steer.e .bub{border-color:rgba(255,77,109,.5);color:var(--red)}
-  .queue-chip{display:inline-flex;align-items:center;gap:.4rem;font-size:11px;color:var(--fg);
-    background:rgba(255,159,28,.1);border:1px solid rgba(255,159,28,.32);border-radius:999px;padding:.15rem .55rem}
-  .queue-chip button{background:none;border:0;color:var(--red);cursor:pointer;font-size:11px;padding:0;line-height:1}
-  /* Slash-command autocomplete, floats above the composer and filters as you type. */
-  .send{position:relative}
-  .slash-menu{position:absolute;left:0;right:0;bottom:calc(100% + .3rem);z-index:50;
-    max-height:15rem;overflow:auto;background:var(--panel);
-    border:1px solid rgba(143,92,255,.3);border-radius:10px;
-    box-shadow:0 12px 30px rgba(0,0,0,.45);padding:.25rem}
-  .slash-menu .si{display:flex;gap:.6rem;align-items:baseline;padding:.34rem .5rem;
-    border-radius:7px;cursor:pointer}
-  .slash-menu .si .cmd{color:var(--cyan);font-family:var(--mono);font-size:12px;white-space:nowrap}
-  .slash-menu .si .desc{color:var(--mut);font-size:11px;overflow:hidden;
-    text-overflow:ellipsis;white-space:nowrap}
-  .slash-menu .si.active,.slash-menu .si:hover{background:rgba(32,246,255,.12)}
-  .attach-chip{display:inline-flex;align-items:center;gap:.3rem;font-size:11px;
-    background:rgba(32,246,255,.1);color:var(--cyan);border:1px solid rgba(32,246,255,.3);
-    border-radius:999px;padding:.12rem .2rem .12rem .55rem;max-width:18rem}
-  .attach-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .attach-chip button{background:transparent;border:0;color:var(--mut);cursor:pointer;
-    font:inherit;padding:0 .25rem;line-height:1}
-  .attach-chip button:hover{color:var(--red)}
-  /* Composer toolbar sits on its own row beneath the text input. */
-  .composer-bar{display:flex;align-items:center;gap:.45rem;flex-basis:100%;order:1}
-  .composer-spacer{flex:1}
-  .composer-add{font-size:15px;line-height:1;padding:.1rem .5rem;font-weight:700}
-  #m{flex-basis:100%;max-height:none;overflow-y:hidden}
-  #model-sel{max-width:14rem}
-  textarea{flex:1;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
-    border:1px solid rgba(32,246,255,.32);border-radius:10px;padding:.55rem .65rem;font:inherit;
-    resize:none;min-height:2.4rem;max-height:9rem;outline:none}
-  textarea:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
-  button.primary{color:#fff;border:0;border-radius:10px;padding:.42rem .9rem;cursor:pointer;
-    font:inherit;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
-    background:linear-gradient(135deg,var(--cyan),var(--violet) 48%,var(--mag));
-    box-shadow:0 0 16px rgba(255,55,213,.24)}
-  button.primary:disabled{opacity:.45;cursor:wait}
+  /* Transient mid-turn steering note (see steerMsg): an aside injected into
+     the running turn, not a message. */
+  .row.steer .bub{flex:1;border-left:2px solid var(--accent-line);padding:.1rem 0 .1rem .7rem;
+    color:var(--text-2);font-size:13px;font-style:italic}
+  .row.steer.e .bub{border:0;border-left:2px solid var(--danger-line);background:none;
+    border-radius:0;color:var(--danger);font-family:inherit}
 
-  /* ===== In-tab sub-tabs (pill segmented control, e.g. Memory) ===== */
-  .subtabs{display:flex;gap:.4rem;padding:.55rem .6rem;flex:0 0 auto;
-    border-bottom:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.32)}
-  .subtabs button{background:transparent;color:var(--mut);
-    border:1px solid rgba(255,255,255,.08);border-radius:999px;padding:.3rem .9rem;
-    font:inherit;font-size:12px;cursor:pointer;transition:color .15s,border-color .15s}
-  .subtabs button:hover{border-color:var(--cyan);color:var(--cyan)}
-  .subtabs button.active{background:linear-gradient(120deg,rgba(32,246,255,.18),rgba(255,55,213,.18));
-    color:var(--fg);border-color:transparent}
+  /* ===== Per-message actions =====
+     Inside the bubble's box in the DOM, drawn in the gap below it. */
+  .msg-actions{position:absolute;top:100%;left:0;display:flex;gap:.1rem;padding-top:.15rem;
+    opacity:0;transition:opacity .12s;white-space:nowrap}
+  .row.u .msg-actions{left:auto;right:0}
+  .row:hover .msg-actions,.msg-actions:focus-within{opacity:1}
+  .msg-actions button{background:transparent;color:var(--text-3);border:0;border-radius:4px;
+    padding:.05rem .4rem;font-family:var(--sans);font-size:12px;line-height:1.4;text-transform:capitalize}
+  .msg-actions button:hover{color:var(--text);background:var(--surface-2)}
+  .msg-actions button.ok{color:var(--ok)}
+
+  /* ===== Composer =====
+     One bordered box holds the queue, attachments, the input and its bar. */
+  form.send{position:relative;display:flex;flex-wrap:wrap;gap:.35rem;
+    width:calc(100% - 2rem);max-width:52rem;margin:0 auto 1rem;padding:.5rem .55rem .45rem;
+    border:1px solid var(--border-strong);border-radius:12px;background:var(--surface)}
+  form.send:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  #attach-chips,.msg-queue{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
+  #attach-chips:empty,.msg-queue:empty{display:none}
+  .queue-chip,.attach-chip{display:inline-flex;align-items:center;gap:.35rem;max-width:18rem;
+    font-size:12px;color:var(--text-2);background:var(--surface-2);border:1px solid var(--border);
+    border-radius:999px;padding:.1rem .3rem .1rem .6rem}
+  .attach-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .queue-chip button,.attach-chip button{background:none;border:0;color:var(--text-3);
+    font-size:12px;padding:0 .25rem;line-height:1}
+  .queue-chip button:hover,.attach-chip button:hover{color:var(--danger);background:none}
+  /* Slash-command autocomplete: floats above the composer, filters as you type. */
+  .slash-menu{position:absolute;left:0;right:0;bottom:calc(100% + .4rem);z-index:50;
+    max-height:15rem;overflow:auto;background:var(--surface);border:1px solid var(--border-strong);
+    border-radius:8px;box-shadow:var(--shadow-pop);padding:.25rem}
+  .slash-menu .si{display:flex;gap:.7rem;align-items:baseline;padding:.32rem .55rem;
+    border-radius:var(--radius);cursor:pointer}
+  .slash-menu .si .cmd{color:var(--text);font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+  .slash-menu .si .desc{color:var(--text-3);font-size:12.5px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .slash-menu .si.active,.slash-menu .si:hover{background:var(--surface-2)}
+  #m{flex-basis:100%;border:0;background:transparent;box-shadow:none;border-radius:0;
+    padding:.3rem .35rem;font-size:14px;line-height:1.5;min-height:2.6rem;max-height:none;
+    overflow-y:hidden;resize:none}
+  #m:focus{border:0;box-shadow:none}
+  /* The composer's bar sits on its own row beneath the input. */
+  .composer-bar{display:flex;align-items:center;gap:.35rem;flex-basis:100%;order:1}
+  .composer-spacer{flex:1}
+  .composer-bar .icon-btn{border-color:transparent}
+  .composer-add{padding:.24rem .4rem}
+  /* The mode button: a dot names the mode. Build is the quiet default; the
+     others are coloured so a mode that restricts or redirects the agent is
+     never missed. */
+  #mode-btn::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--text-3)}
+  #mode-btn.mode-plan{color:var(--warn);background:var(--warn-soft)}
+  #mode-btn.mode-plan::before{background:var(--warn)}
+  #mode-btn.mode-improve{color:var(--ok);background:var(--ok-soft)}
+  #mode-btn.mode-improve::before{background:var(--ok)}
+  #mode-btn.mode-space{color:var(--accent);background:var(--accent-soft)}
+  #mode-btn.mode-space::before{background:var(--accent)}
+  #model-sel{max-width:14rem;min-width:4rem;flex:0 1 auto;background:transparent;border-color:transparent;color:var(--text-2);
+    font-size:12.5px;padding:.26rem .3rem;cursor:pointer}
+  #model-sel:hover{background:var(--surface-2);color:var(--text)}
+
+  /* ===== In-tab sub-tabs (segmented control, e.g. Memory) ===== */
+  .subtabs{display:flex;gap:.2rem;padding:.5rem .75rem;flex:0 0 auto;
+    border-bottom:1px solid var(--border);background:var(--surface)}
+  .subtabs button{background:transparent;color:var(--text-2);border:0;
+    border-radius:var(--radius);padding:.28rem .7rem;font-size:13px}
+  .subtabs button:hover{background:var(--surface-2);color:var(--text)}
+  .subtabs button.active{background:var(--surface-3);color:var(--text);font-weight:550}
   .subpane{display:none;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden}
   .subpane.active{display:flex}
   /* A nested .two-col inside a column-oriented .subpane is a flex item on the
@@ -319,346 +390,381 @@
      instead of letting .col-list / .col-view scroll. */
   .subpane .two-col{min-height:0}
   #tab-memory{flex-direction:column}
+  #subpane-setup{padding:1.1rem 1.25rem;overflow:auto}
   #facts-box{flex:1;min-height:0;display:flex;flex-direction:column;
-    padding:.7rem .8rem;overflow:hidden}
+    padding:1.1rem 1.25rem;overflow:hidden;max-width:60rem}
   #facts-list{flex:1;overflow:auto;min-height:0}
   #facts-list .item{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;
-    padding:.45rem .55rem;border-radius:8px;margin-bottom:.25rem;font-size:12.5px;
-    border:1px solid rgba(255,255,255,.06);background:rgba(2,5,15,.32)}
-  #facts-list .item:hover{border-color:rgba(255,55,213,.2)}
-  #facts-list .item .sub{display:block;color:var(--mut);font-size:10px;margin-top:.15rem}
-  #facts-list .item button{background:transparent;border:none;color:var(--mut);cursor:pointer;
-    font-size:13px;line-height:1;padding:.1rem .3rem;border-radius:6px;flex:0 0 auto}
-  #facts-list .item button:hover{color:var(--red)}
+    padding:.5rem .65rem;font-size:13px;border-bottom:1px solid var(--border)}
+  #facts-list .item:hover{background:var(--surface)}
+  #facts-list .item .sub{display:block;color:var(--text-3);font-size:12px;margin-top:.15rem}
+  #facts-list .item button{background:transparent;border:0;color:var(--text-3);
+    font-size:13px;line-height:1;padding:.15rem .35rem;border-radius:4px;flex:0 0 auto}
+  #facts-list .item button:hover{color:var(--danger);background:var(--surface-2)}
+  .crumb{font-size:12px;color:var(--text-3);margin-bottom:.5rem}
 
   /* ===== Generic two-column tabs ===== */
   .two-col{display:flex;flex:1;min-width:0}
-  .col-list{flex:0 0 16rem;border-right:1px solid rgba(255,255,255,.08);
-    overflow:auto;padding:.5rem;background:rgba(2,5,15,.32)}
-  .col-view{flex:1;overflow:auto;padding:.85rem;min-width:0;
-    font-family:ui-monospace,monospace;font-size:12.5px;white-space:pre-wrap}
-  .col-list .item{padding:.4rem .55rem;border-radius:8px;margin-bottom:.18rem;cursor:pointer;
-    color:var(--mut);font-size:12px;border:1px solid transparent;
+  .col-list{flex:0 0 17rem;border-right:1px solid var(--border);
+    overflow:auto;padding:.6rem .5rem;background:var(--surface)}
+  .col-view>.empty-pane{margin-top:18vh}
+  .col-view{flex:1;overflow:auto;padding:1.1rem 1.4rem;min-width:0;margin:0;
+    font-family:var(--mono);font-size:12.5px;line-height:1.55;white-space:pre-wrap}
+  .col-list .item{padding:.36rem .55rem;border-radius:var(--radius);margin-bottom:1px;cursor:pointer;
+    color:var(--text-2);font-size:13px;
     display:flex;justify-content:space-between;align-items:center}
-  .col-list .item:hover{background:rgba(255,255,255,.04);color:var(--fg);border-color:rgba(255,55,213,.2)}
-  .col-list .item.active{background:rgba(32,246,255,.1);color:var(--cyan);
-    border-color:rgba(32,246,255,.4)}
-  .col-list .item .size{color:var(--mut);font-size:10px}
-  .col-list .crumb{font-size:11px;color:var(--mut);padding:.3rem .55rem;
-    border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:.3rem;
+  .col-list .item>span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .col-list .item .dl-btn{visibility:hidden}
+  .col-list .item:hover .dl-btn,.col-list .item .dl-btn:focus-visible{visibility:visible}
+  .col-list .item:hover{background:var(--surface-2);color:var(--text)}
+  .col-list .item.active{background:var(--surface-3);color:var(--text)}
+  .col-list .item .size{color:var(--text-3);font-size:11.5px;font-variant-numeric:tabular-nums}
+  .col-list .crumb{font-family:var(--mono);font-size:11.5px;color:var(--text-3);padding:.3rem .55rem .45rem;
+    border-bottom:1px solid var(--border);margin-bottom:.35rem;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .fs-roots{display:flex;gap:.35rem;padding:.4rem .55rem .1rem;flex-wrap:wrap}
-  .fs-roots button{background:transparent;color:var(--mut);
-    border:1px solid rgba(255,255,255,.12);border-radius:999px;
-    padding:.18rem .6rem;font:inherit;font-size:10.5px;cursor:pointer}
-  .fs-roots button:hover{border-color:var(--cyan);color:var(--cyan)}
-  .fs-roots button.active{background:linear-gradient(120deg,rgba(32,246,255,.18),rgba(255,55,213,.18));
-    color:var(--fg);border-color:transparent}
+  .fs-roots{display:flex;gap:.25rem;padding:.1rem .3rem .45rem;flex-wrap:wrap}
+  .fs-roots button{background:transparent;color:var(--text-2);border:1px solid var(--border-strong);
+    border-radius:999px;padding:.1rem .6rem;font-size:12px}
+  .fs-roots button:hover{background:var(--surface-2);color:var(--text)}
+  .fs-roots button.active{background:var(--surface-3);border-color:transparent;color:var(--text)}
 
   /* ===== Table tabs (MCP, Cron) ===== */
-  .pane{flex:1;overflow:auto;padding:.85rem;min-width:0}
-  table.data{width:100%;border-collapse:collapse;font-size:12.5px}
-  table.data th{text-align:left;color:var(--cyan);padding:.42rem .55rem;
-    border-bottom:1px solid var(--line);text-transform:uppercase;font-size:10.5px;letter-spacing:.08em}
-  table.data td{padding:.42rem .55rem;border-bottom:1px solid rgba(255,255,255,.05);vertical-align:top}
-  table.data tr:hover td{background:rgba(32,246,255,.04)}
+  .pane{flex:1;overflow:auto;padding:1.25rem;min-width:0}
+  table.data{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;
+    background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  table.data th{text-align:left;font-size:12px;font-weight:600;color:var(--text-3);
+    padding:.5rem .75rem;border-bottom:1px solid var(--border);background:var(--surface)}
+  table.data td{padding:.55rem .75rem;border-bottom:1px solid var(--border);vertical-align:top;
+    overflow-wrap:anywhere}
+  table.data tbody tr:last-child td{border-bottom:0}
+  table.data tbody tr:hover td{background:var(--surface-2)}
   .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
-    gap:.65rem;padding:.5rem .8rem}
-  .stat-card{background:rgba(255,255,255,.03);border:1px solid var(--line);
-    border-radius:8px;padding:.65rem .8rem}
-  .stat-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
-    color:var(--mut);margin-bottom:.25rem}
-  .stat-value{font-size:18px;font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
-  .stats-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
-    gap:1rem;padding:.5rem .8rem 1rem}
-  .stats-table-wrap h3{margin:.2rem 0 .4rem;font-size:11px;color:var(--cyan);
-    text-transform:uppercase;letter-spacing:.1em;font-weight:600}
-  /* Relay tab. Reuses .stat-card for the status numbers; adds a config
-     row (URL/token inputs) and a snippets stack. */
-  #relay-pane h3{margin:1rem .8rem .35rem;font-size:11px;color:var(--cyan);
-    text-transform:uppercase;letter-spacing:.1em;font-weight:600}
-  .relay-hint{padding:.4rem .8rem;color:var(--mut);font-size:12.5px;line-height:1.5}
-  .relay-hint code{background:rgba(255,255,255,.05);padding:.05rem .25rem;border-radius:3px}
-  .relay-hint-small{display:block;color:var(--mut);font-size:11px;margin-top:.25rem;line-height:1.4}
-  .relay-hint-small code{background:rgba(255,255,255,.05);padding:.05rem .25rem;border-radius:3px}
-  /* Condensed lead text with an inline collapsible "details" disclosure. */
-  .relay-lead{padding:.45rem .8rem;color:var(--mut);font-size:12.5px;line-height:1.5}
-  .relay-lead code{background:rgba(255,255,255,.05);padding:.05rem .25rem;border-radius:3px}
+    gap:.75rem;padding:0 0 1rem}
+  .stat-card{background:var(--surface);border:1px solid var(--border);
+    border-radius:8px;padding:.75rem .9rem}
+  .stat-label{font-size:12px;color:var(--text-3);margin-bottom:.2rem}
+  .stat-value{font-size:20px;font-weight:600;line-height:1.3;color:var(--text);
+    font-variant-numeric:tabular-nums}
+  .stats-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
+  .stats-table-wrap h3{margin:.2rem 0 .5rem;font-size:13px;font-weight:600;color:var(--text)}
+  #stats-hint{padding:0 0 .9rem;font-size:13px;line-height:1.5}
+  #stats-hint:empty{display:none}
+
+  /* ===== Relay tab =====
+     Reuses .stat-card for the status numbers; adds a config row (URL and
+     token inputs) and a stack of snippets. */
+  #relay-pane h3{margin:1rem 0 .35rem;font-size:13px;font-weight:600;color:var(--text)}
+  .relay-hint,.relay-lead{color:var(--text-2);font-size:13px;line-height:1.55}
+  .relay-lead{padding:0 0 .9rem;max-width:60rem}
+  .relay-hint code,.relay-lead code,.relay-hint-small code,.settings-hint code{
+    background:var(--surface-2);border-radius:4px;padding:.05rem .3rem;font-size:.92em}
+  .relay-hint-small{display:block;color:var(--text-3);font-size:12px;font-weight:400;line-height:1.45}
+  /* Lead text with an inline collapsible "details" disclosure. */
   .relay-info{margin-top:.35rem}
-  .relay-info > summary{cursor:pointer;color:var(--cyan);font-size:11px;width:auto;
-    list-style:none;display:inline-flex;align-items:center;gap:.3rem}
+  .relay-info > summary{cursor:pointer;color:var(--accent);font-size:12.5px;width:auto;
+    list-style:none;display:inline-flex;align-items:center;gap:.2rem}
   .relay-info > summary::-webkit-details-marker{display:none}
-  .relay-info > summary::before{content:"▸";font-size:.8em;transition:transform .15s}
-  .relay-info[open] > summary::before{transform:rotate(90deg)}
-  /* Collapsible major sections -- summary styled like the old <h3> headings. */
-  .relay-sec{border-top:1px solid rgba(255,255,255,.07);margin-top:.55rem}
-  .relay-sec > summary{cursor:pointer;margin:0;padding:.7rem .8rem .5rem;font-size:11px;
-    color:var(--cyan);text-transform:uppercase;letter-spacing:.1em;font-weight:600;
-    list-style:none;display:flex;align-items:center;gap:.45rem}
+  /* Collapsible major sections. */
+  .relay-sec{border-top:1px solid var(--border);margin-top:1rem}
+  .relay-sec > summary{cursor:pointer;margin:0;padding:.8rem 0 .6rem;font-size:13px;font-weight:600;
+    color:var(--text);list-style:none;display:flex;align-items:center;gap:.3rem}
   .relay-sec > summary::-webkit-details-marker{display:none}
-  .relay-sec > summary::before{content:"▸";font-size:.85em;color:var(--mut);transition:transform .15s}
-  .relay-sec[open] > summary::before{transform:rotate(90deg)}
-  /* Group the URL + token inputs in a bordered panel. */
-  .relay-panel{margin:.5rem .8rem;border:1px solid rgba(255,255,255,.08);
-    border-radius:10px;background:rgba(2,5,15,.3)}
-  .relay-status-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
-    gap:.5rem;padding:.4rem .8rem}
-  /* Checkpoints tab */
-  #cp-pane{display:flex;flex-direction:column;min-height:0;flex:1}
-  .cp-bar{display:flex;align-items:center;gap:.5rem;padding:.5rem .8rem;
-    border-bottom:1px solid rgba(255,255,255,.06)}
-  .cp-status{font-size:11px;color:var(--mut);margin-left:.4rem}
-  .cp-list{padding:.5rem .8rem;overflow:auto;flex:1}
-  .cp-turn{border:1px solid rgba(255,255,255,.08);border-radius:10px;
-    margin-bottom:.5rem;background:rgba(2,5,15,.3)}
-  .cp-turn-head{display:flex;justify-content:space-between;align-items:center;gap:.6rem;
-    padding:.45rem .7rem;font-size:12px;color:var(--fg);border-bottom:1px solid rgba(255,255,255,.06)}
-  .cp-files{padding:.4rem .7rem;display:flex;flex-direction:column;gap:.15rem}
-  .cp-file{font-family:var(--mono);font-size:11.5px;color:var(--mut);
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .relay-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;padding:.6rem .8rem}
-  .relay-config-grid label{display:flex;flex-direction:column;gap:.3rem;font-size:11px;
-    text-transform:uppercase;letter-spacing:.06em;color:var(--cyan)}
-  .relay-token-label > span:first-child{display:flex;align-items:center;gap:.4rem}
-  .relay-config-grid input{font-family:var(--mono);font-size:12.5px;padding:.42rem .55rem;
-    background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:6px;
-    color:var(--fg);text-transform:none;letter-spacing:0}
-  .relay-config-grid input:focus{outline:none;border-color:var(--cyan)}
-  .relay-snippets{display:flex;flex-direction:column;gap:.7rem;padding:.4rem .8rem}
-  /* In-browser worker pane. Same panel feel as the rest of the relay
-     tab; the picker + buttons row uses a flex layout so it collapses
-     gracefully on narrow widths. */
-  .relay-inb{display:flex;flex-direction:column;gap:.55rem;padding:.4rem .8rem .8rem}
-  .relay-inb-row{display:grid;grid-template-columns:1fr 1fr auto;gap:.65rem;align-items:end}
-  .relay-inb-row label{display:flex;flex-direction:column;gap:.3rem;font-size:11px;
-    text-transform:uppercase;letter-spacing:.06em;color:var(--cyan)}
-  .relay-inb-row select, .relay-inb-row input{font-family:var(--mono);font-size:12.5px;
-    padding:.42rem .55rem;background:rgba(255,255,255,.04);border:1px solid var(--line);
-    border-radius:6px;color:var(--fg);text-transform:none;letter-spacing:0}
-  .relay-inb-row select:focus, .relay-inb-row input:focus{outline:none;border-color:var(--cyan)}
+  .relay-sec > table.data{margin-bottom:.5rem}
+  /* The URL + token inputs, grouped in one panel. */
+  .relay-panel{margin:.9rem 0 0;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+  .relay-status-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem}
+  .relay-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;padding:.9rem}
+  .relay-config-grid label,.relay-inb-row label{display:flex;flex-direction:column;gap:.3rem;
+    font-size:12px;font-weight:500;color:var(--text-2)}
+  .relay-token-label > span:first-child{display:flex;align-items:center;gap:.5rem}
+  .relay-token-label .icon-btn{padding:0 .45rem;font-size:11.5px}
+  .relay-config-grid input,.relay-inb-row select,.relay-inb-row input{
+    font-family:var(--mono);font-size:12.5px;font-weight:400}
+  .relay-snippets{display:flex;flex-direction:column;gap:.7rem;padding:0 0 .6rem}
+  /* In-browser worker: the picker + buttons row collapses on narrow widths. */
+  .relay-inb{display:flex;flex-direction:column;gap:.6rem;padding:0 0 .6rem}
+  .relay-inb .relay-lead{padding-bottom:.2rem}
+  .relay-inb-row{display:grid;grid-template-columns:1fr 1fr auto;gap:.75rem;align-items:end}
   .relay-inb-actions{display:flex;gap:.45rem;align-items:end}
-  .relay-inb-status{display:flex;gap:.65rem;align-items:center;padding:.45rem .7rem;
-    background:rgba(2,5,15,.5);border:1px solid var(--line);border-radius:8px;font-size:12px}
-  .relay-inb-status .dot{width:.55rem;height:.55rem;border-radius:50%;background:var(--mut)}
-  .relay-inb-status .dot.on{background:var(--green);box-shadow:0 0 8px rgba(61,242,129,.6)}
-  .relay-inb-status .dot.err{background:var(--red);box-shadow:0 0 8px rgba(255,77,109,.5)}
-  .relay-inb-status .dot.busy{background:var(--orange);box-shadow:0 0 8px rgba(255,159,28,.55)}
-  .relay-inb-meter{flex:1;height:4px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden}
-  .relay-inb-meter > span{display:block;height:100%;background:var(--cyan);width:0%;transition:width .3s ease}
-  #relay-inb-jobs{color:var(--cyan)}
-  #relay-inb-log{margin:0;padding:.7rem;max-height:220px;overflow:auto;
-    background:rgba(2,5,15,.7);border:1px solid var(--line);border-radius:8px;
-    font-size:11.5px;line-height:1.5;color:var(--mut);
+  .relay-inb-status{display:flex;gap:.65rem;align-items:center;padding:.5rem .75rem;
+    background:var(--surface);border:1px solid var(--border);border-radius:8px;font-size:13px}
+  .relay-inb-status .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--text-3)}
+  .relay-inb-status .dot.on{background:var(--ok)}
+  .relay-inb-status .dot.err{background:var(--danger)}
+  .relay-inb-status .dot.busy{background:var(--warn)}
+  .relay-inb-meter{flex:1;height:4px;background:var(--surface-3);border-radius:2px;overflow:hidden}
+  .relay-inb-meter > span{display:block;height:100%;background:var(--accent-solid);width:0%;
+    transition:width .3s ease}
+  #relay-inb-jobs{color:var(--text-3);font-variant-numeric:tabular-nums}
+  #relay-inb-log{margin:0;padding:.7rem .8rem;max-height:220px;overflow:auto;
+    background:var(--code);border:1px solid var(--border);border-radius:8px;
+    font-size:12px;line-height:1.5;color:var(--text-2);
     white-space:pre-wrap;word-break:break-word;font-family:var(--mono)}
-  #relay-inb-log .ok{color:var(--green)}
-  #relay-inb-log .warn{color:var(--orange)}
-  #relay-inb-log .err{color:var(--red)}
-  @media (max-width:780px){.relay-inb-row{grid-template-columns:1fr}.relay-inb-actions{justify-content:flex-end}}
+  #relay-inb-log .ok{color:var(--ok)}
+  #relay-inb-log .warn{color:var(--warn)}
+  #relay-inb-log .err{color:var(--danger)}
   @media (max-width:780px){
+    .relay-inb-row{grid-template-columns:1fr}
+    .relay-inb-actions{justify-content:flex-end}
     .relay-config-grid{grid-template-columns:1fr}
   }
-  .badge{display:inline-block;padding:.1rem .45rem;border-radius:999px;font-size:10px;
-    text-transform:uppercase;letter-spacing:.06em;font-weight:700}
-  .badge.on{background:rgba(61,242,129,.16);color:var(--green);border:1px solid rgba(61,242,129,.4)}
-  .badge.off{background:rgba(255,77,109,.16);color:var(--red);border:1px solid rgba(255,77,109,.4)}
+  .badge{display:inline-block;padding:.05rem .5rem;border-radius:999px;font-size:11.5px;
+    font-weight:500;line-height:1.5}
+  .badge.on{background:var(--ok-soft);color:var(--ok)}
+  .badge.off{background:var(--surface-3);color:var(--text-2)}
+
+  /* ===== Checkpoints tab ===== */
+  #cp-pane{display:flex;flex-direction:column;min-height:0;flex:1;padding:0}
+  .cp-bar{display:flex;align-items:center;gap:.4rem;padding:.6rem 1.25rem;
+    border-bottom:1px solid var(--border);background:var(--surface)}
+  .cp-status{font-size:12px;color:var(--text-3);margin-left:.4rem}
+  .cp-list{padding:1rem 1.25rem;overflow:auto;flex:1}
+  .cp-turn{border:1px solid var(--border);border-radius:8px;margin-bottom:.6rem;background:var(--surface)}
+  .cp-turn-head{display:flex;justify-content:space-between;align-items:center;gap:.6rem;
+    padding:.5rem .75rem;font-size:13px;color:var(--text);border-bottom:1px solid var(--border)}
+  .cp-files{padding:.45rem .75rem;display:flex;flex-direction:column;gap:.15rem}
+  .cp-file{font-family:var(--mono);font-size:12px;color:var(--text-2);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
   /* ===== Skills tab ===== */
-  .skill-card{padding:.7rem .85rem;border:1px solid rgba(255,255,255,.08);border-radius:10px;
-    margin-bottom:.55rem;background:rgba(2,5,15,.32)}
-  .skill-card .name{font-weight:700;color:var(--cyan)}
-  .skill-card .kind{display:inline-block;margin-left:.5rem;padding:.05rem .4rem;border-radius:999px;
-    font-size:10px;background:rgba(255,55,213,.16);color:var(--mag);text-transform:uppercase;letter-spacing:.06em}
-  .skill-card .desc{color:var(--mut);font-size:12px;margin-top:.3rem}
-  .skill-card .path{color:rgba(143,155,198,.5);font-size:10.5px;margin-top:.3rem;word-break:break-all}
-  .skill-card{position:relative}
-  .skill-card .remove{position:absolute;top:.55rem;right:.7rem;background:transparent;
-    color:var(--mut);border:1px solid rgba(255,255,255,.1);border-radius:6px;
-    padding:.06rem .42rem;font:inherit;font-size:10px;cursor:pointer;
-    text-transform:uppercase;letter-spacing:.05em}
-  .skill-card .remove:hover{color:var(--red);border-color:var(--red)}
-  .skill-pending-hdr{margin:1rem 0 .4rem;font-weight:700;color:var(--mut);
-    text-transform:uppercase;letter-spacing:.06em;font-size:11px}
-  .skill-card.pending{border-color:rgba(255,55,213,.35)}
-  .skill-card .skill-preview{margin-top:.4rem;max-height:11rem;overflow:auto;
-    background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.06);border-radius:6px;
-    padding:.5rem;font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--mut)}
-  .skill-card .skill-actions{margin-top:.5rem;display:flex;gap:.5rem}
-  .skill-card .pend-approve,.skill-card .pend-reject{font:inherit;font-size:11px;
-    border-radius:6px;padding:.18rem .6rem;cursor:pointer;border:1px solid rgba(255,255,255,.12);
-    background:transparent;color:var(--mut)}
-  .skill-card .pend-reject:hover{color:var(--red);border-color:var(--red)}
-  .skill-install-row{display:flex;gap:.5rem;margin-bottom:.6rem}
-  .skill-install-row input{flex:1;background:rgba(2,5,15,.72);color:var(--fg);
-    caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:10px;
-    padding:.45rem .6rem;font:inherit;font-size:12px;outline:none}
-  .skill-install-row input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  .skill-card{position:relative;padding:.75rem .9rem;border:1px solid var(--border);border-radius:8px;
+    margin-bottom:.6rem;background:var(--surface)}
+  .skill-card .name{font-weight:600;color:var(--text)}
+  .skill-card .kind{display:inline-block;margin-left:.5rem;padding:.02rem .45rem;border-radius:999px;
+    font-size:11.5px;font-weight:500;background:var(--surface-3);color:var(--text-2)}
+  .skill-card .desc{color:var(--text-2);font-size:13px;margin-top:.25rem}
+  .skill-card .path{color:var(--text-3);font-family:var(--mono);font-size:11.5px;margin-top:.3rem;
+    word-break:break-all}
+  .skill-card .remove{position:absolute;top:.6rem;right:.7rem;background:transparent;
+    color:var(--text-3);border:1px solid var(--border-strong);border-radius:var(--radius);
+    padding:.06rem .5rem;font-size:12px;text-transform:capitalize}
+  .skill-card .remove:hover{color:var(--danger);border-color:var(--danger-line);background:var(--danger-soft)}
+  .skill-pending-hdr{margin:1.1rem 0 .45rem;font-weight:600;color:var(--text-2);font-size:13px}
+  .skill-card.pending{border-color:var(--accent-line)}
+  .skill-card .skill-preview{margin-top:.45rem;max-height:11rem;overflow:auto;
+    background:var(--code);border:1px solid var(--border);border-radius:var(--radius);
+    padding:.5rem .6rem;font-family:var(--mono);font-size:12px;white-space:pre-wrap;
+    word-break:break-word;color:var(--text-2)}
+  .skill-card .skill-actions{margin-top:.55rem;display:flex;gap:.5rem}
+  .skill-card .pend-approve,.skill-card .pend-reject{font-size:12.5px;
+    border-radius:var(--radius);padding:.2rem .7rem;border:1px solid var(--border-strong);
+    background:transparent;color:var(--text-2)}
+  .skill-card .pend-approve:hover{color:var(--text);background:var(--surface-2)}
+  .skill-card .pend-reject:hover{color:var(--danger);border-color:var(--danger-line);background:var(--danger-soft)}
+  .skill-install-row{display:flex;gap:.5rem;margin-bottom:.6rem;max-width:60rem}
+  .skill-install-row input{flex:1;min-width:0}
 
   /* ===== KB tab ===== */
-  .kb-stats{color:var(--mut);font-size:11px;margin:.2rem 0 .6rem;letter-spacing:.03em}
+  .kb-stats{color:var(--text-3);font-size:12px;margin:.2rem 0 .6rem}
 
   /* ===== Logs tab ===== */
   #tab-logs{display:none;flex-direction:column}
   #tab-logs.active{display:flex}
-  .logs-bar{display:flex;gap:.5rem;align-items:center;padding:.55rem .7rem;
-    border-bottom:1px solid rgba(255,255,255,.06)}
+  .logs-bar{display:flex;gap:.5rem;align-items:center;padding:.5rem 1.25rem;
+    border-bottom:1px solid var(--border);background:var(--surface)}
   .logs-bar .spacer{flex:1}
-  #logs-view{flex:1;overflow:auto;margin:0;padding:.7rem .9rem;
-    font:12px ui-monospace,monospace;white-space:pre-wrap;color:#cdd6ff}
+  #logs-view{flex:1;overflow:auto;margin:0;padding:.9rem 1.25rem;
+    font:12px/1.55 var(--mono);white-space:pre-wrap;color:var(--text-2)}
 
   /* ===== Settings tab ===== */
-  #config-view{font:12px ui-monospace,monospace;white-space:pre-wrap;color:#cdd6ff;
-    padding:.85rem;margin:0;overflow:auto;flex:1}
-  .settings-pane{flex:1;display:flex;flex-direction:column;min-width:0;padding:.7rem .85rem;gap:.5rem}
-  .settings-bar{display:flex;align-items:center;gap:.5rem}
-  .settings-status{font-size:11px;color:var(--mut)}
-  .settings-status.ok{color:var(--green)} .settings-status.err{color:var(--red)}
-  .settings-hint{margin:0;font-size:11px;color:var(--mut)}
-  .settings-hint code{background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.1);
-    border-radius:5px;padding:.02rem .25rem}
-  #config-edit{flex:1;min-height:0;resize:none;background:rgba(2,5,15,.72);color:#cdd6ff;
-    caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:10px;
-    padding:.7rem .8rem;font:12px ui-monospace,monospace;line-height:1.5;outline:none;
-    white-space:pre;overflow:auto}
-  #config-edit:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
-  #config-form{flex:1;min-height:0;overflow:auto;padding-right:.3rem}
-  .cfg-section{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--cyan);
-    margin:.7rem 0 .25rem;font-weight:700}
-  .cfg-row{display:flex;align-items:center;gap:.6rem;margin:.18rem 0 .18rem .6rem}
-  .cfg-label{flex:0 0 38%;font-size:11.5px;color:var(--mut);word-break:break-word}
-  .cfg-input{flex:1;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
-    border:1px solid rgba(32,246,255,.3);border-radius:8px;padding:.32rem .5rem;
-    font:inherit;font-size:12px;outline:none}
-  .cfg-input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
-  .cfg-check{width:16px;height:16px;accent-color:var(--cyan)}
-  #config-raw-toggle.on{border-color:var(--cyan);color:var(--cyan)}
+  #config-view{font:12px/1.55 var(--mono);white-space:pre-wrap;color:var(--text-2);
+    padding:1rem;margin:0;overflow:auto;flex:1}
+  .settings-pane{flex:1;display:flex;flex-direction:column;min-width:0;padding:1rem 1.25rem;gap:.6rem}
+  .settings-bar{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+  .settings-status{font-size:12.5px;color:var(--text-3)}
+  .settings-status.ok{color:var(--ok)} .settings-status.err{color:var(--danger)}
+  .settings-hint{margin:0;max-width:60rem;font-size:12.5px;line-height:1.5;color:var(--text-3)}
+  #config-edit{flex:1;min-height:0;resize:none;padding:.75rem .85rem;
+    font:12.5px/1.55 var(--mono);white-space:pre;overflow:auto}
+  #config-form{flex:1;min-height:0;overflow:auto;padding-right:.5rem}
+  .cfg-section{max-width:60rem;margin:1.1rem 0 .4rem;padding-top:.9rem;border-top:1px solid var(--border);
+    font-size:13px;font-weight:600;color:var(--text)}
+  /* A section inside a section: a sub-heading, not another rule across the form. */
+  .cfg-section.sub{margin-top:.8rem;padding-top:0;border-top:0;font-size:12.5px;color:var(--text-2)}
+  .cfg-section:first-child{margin-top:.4rem;padding-top:0;border-top:0}
+  .cfg-row{display:flex;align-items:center;gap:.75rem;max-width:60rem;margin:.3rem 0}
+  .cfg-label{flex:0 0 38%;font-family:var(--mono);font-size:12.5px;color:var(--text-2);word-break:break-word}
+  .cfg-input{flex:1;min-width:0}
+  .cfg-check{width:16px;height:16px}
 
-  /* ===== First-boot onboarding wizard ===== */
+  /* ===== First-boot onboarding dialog ===== */
   #onboard-overlay{position:fixed;inset:0;z-index:200;display:flex;align-items:center;
-    justify-content:center;background:rgba(2,5,15,.74);backdrop-filter:blur(6px);padding:1rem}
+    justify-content:center;background:rgba(8,10,14,.6);padding:1rem}
   #onboard-overlay[hidden]{display:none}
-  #onboard-card{width:min(460px,94vw);max-height:92vh;overflow:auto;
-    border:1px solid rgba(143,92,255,.4);border-radius:16px;padding:1.1rem 1.2rem;
-    background:linear-gradient(140deg,var(--panel),rgba(32,12,45,.92));
-    box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.08)}
+  #onboard-card{width:min(480px,94vw);max-height:92vh;overflow:auto;
+    border:1px solid var(--border-strong);border-radius:12px;padding:1.25rem 1.4rem;
+    background:var(--surface);box-shadow:var(--shadow-pop)}
   #onboard-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem}
-  #onboard-head .ob-title{font-size:15px;letter-spacing:.04em}
-  #onboard-close{background:transparent;border:none;color:var(--mut);cursor:pointer;font-size:15px}
-  #onboard-close:hover{color:var(--fg)}
-  .ob-sub{color:var(--mut);font-size:12px;margin:.1rem 0 .8rem;line-height:1.45}
-  .ob-field{display:flex;flex-direction:column;gap:.25rem;margin-bottom:.6rem}
-  .ob-field label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--cyan)}
+  #onboard-head .ob-title{font-size:16px;font-weight:600}
+  #onboard-close{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;
+    padding:0;background:transparent;border:0;color:var(--text-3)}
+  #onboard-close:hover{color:var(--text);background:var(--surface-2)}
+  .ob-sub{color:var(--text-2);font-size:13px;margin:.1rem 0 .9rem;line-height:1.5;max-width:60rem}
+  .ob-field{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.7rem}
+  .ob-field label{font-size:12px;font-weight:500;color:var(--text-2)}
   .ob-field[hidden]{display:none}
-  .ob-note{font-size:10.5px;color:var(--mut);min-height:.8rem}
-  .ob-divider{margin:.9rem 0 .5rem;font-size:10px;text-transform:uppercase;letter-spacing:.08em;
-    color:var(--mut);text-align:center;border-top:1px solid rgba(255,255,255,.08);padding-top:.55rem}
-  .ob-check{display:flex;align-items:center;gap:.4rem;font-size:11.5px;color:var(--fg);margin:.15rem 0}
+  .ob-note{font-size:12px;color:var(--text-3);min-height:.8rem}
+  .ob-divider{margin:1rem 0 .7rem;padding-top:.8rem;border-top:1px solid var(--border);
+    font-size:12px;font-weight:500;color:var(--text-3)}
+  .ob-check{display:flex;align-items:center;gap:.45rem;font-size:13px;color:var(--text);margin:.25rem 0}
   .ob-check[hidden]{display:none}
-  .ob-check input{accent-color:var(--cyan)}
-  .ob-err{color:var(--red);font-size:11.5px;margin:.2rem 0 .5rem}
+  .ob-err{color:var(--danger);font-size:12.5px;margin:.2rem 0 .5rem}
   .ob-err[hidden]{display:none}
-  #onboard-actions,#onboard-mem-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:.6rem}
+  #onboard-actions,#onboard-mem-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:.9rem}
   /* An author-level `display` beats the UA's [hidden]{display:none}, which made
-     BOTH wizard button rows render at once. Re-assert hidden for these rows. */
+     BOTH button rows render at once. Re-assert hidden for these rows. */
   #onboard-actions[hidden],#onboard-mem-actions[hidden]{display:none}
-  .ob-btn{background:linear-gradient(120deg,rgba(32,246,255,.22),rgba(255,55,213,.22));
-    color:var(--fg);border:1px solid transparent;border-radius:999px;padding:.4rem 1.1rem;
-    font:inherit;font-size:12.5px;cursor:pointer}
-  .ob-btn:hover{border-color:var(--cyan)}
+  .ob-btn{background:var(--accent-solid);color:var(--on-accent);border:1px solid transparent;
+    border-radius:var(--radius);padding:.36rem 1rem;font-size:13px;font-weight:600}
+  .ob-btn:hover{background:var(--accent-solid-hover)}
   .ob-btn[disabled]{opacity:.5;cursor:default}
-  .ob-btn-ghost{background:transparent;color:var(--mut);border:1px solid rgba(255,255,255,.12);
-    border-radius:999px;padding:.4rem 1rem;font:inherit;font-size:12.5px;cursor:pointer}
-  .ob-btn-ghost:hover{color:var(--fg);border-color:var(--cyan)}
+  .ob-btn-ghost{background:transparent;color:var(--text-2);border:1px solid var(--border-strong);
+    border-radius:var(--radius);padding:.36rem .9rem;font-size:13px}
+  .ob-btn-ghost:hover{color:var(--text);background:var(--surface-2)}
 
-  .empty-pane{margin:auto;color:var(--mut);text-align:center;padding:2rem;font-size:12px}
+  .empty-pane{margin:auto;color:var(--text-3);text-align:center;padding:2rem;
+    font-family:var(--sans);font-size:13px;white-space:normal}
 
   /* ===== Vault tab ===== */
-  .vault-search-row{margin:0 0 .45rem}
-  .vault-search-row input{width:100%;background:rgba(2,5,15,.72);color:var(--fg);
-    caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:8px;
-    padding:.4rem .55rem;font:inherit;font-size:12px;outline:none}
-  .vault-search-row input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
-  .vault-item .sub,.col-list .item .sub{display:block;color:var(--mut);font-size:10px;margin-top:.15rem;
+  .vault-search-row{margin:0 0 .5rem}
+  .vault-search-row input{width:100%}
+  .vault-item .sub,.col-list .item .sub{display:block;color:var(--text-3);font-size:12px;margin-top:.15rem;
     white-space:normal;overflow:hidden;text-overflow:ellipsis}
-  #vault-view{white-space:normal}
-  .build-with{margin:.35rem 0 .55rem;font-size:11px;padding:.34rem .7rem}
-  #vault-view h2{margin:.1rem 0 .3rem;font-size:1.2em;color:var(--cyan)}
+  #vault-view{white-space:normal;font-family:var(--sans);font-size:14px}
+  .build-with{margin:.35rem 0 .6rem}
+  #vault-view h2{margin:.1rem 0 .3rem;font-size:1.2em;color:var(--text)}
   #vault-view p{margin:.35rem 0}
-  #vault-view a{color:var(--cyan);text-decoration:underline;word-break:break-all}
+  #vault-view a{word-break:break-all}
   #vault-view ul{margin:.3rem 0;padding-left:1.3rem}
   .vault-meta{display:flex;flex-wrap:wrap;gap:.3rem;margin:.4rem 0}
-  .vault-meta .badge{background:rgba(143,92,255,.16);color:var(--violet);
-    border:1px solid rgba(143,92,255,.4)}
+  .vault-meta .badge{background:var(--surface-3);color:var(--text-2)}
 
-  /* ===== Markdown rendering inside assistant bubbles ===== */
-  /* Markdown styling is shared by chat bubbles (.bub.md) and the file/memory
-     viewers (.col-view.md) -- scope to .md so both pick it up. */
+  /* ===== Workflow tab =====
+     The editor's layout lives in its markup; this gives it the page's
+     spacing and the nodes the page's colours. */
+  .wf-shell{display:flex;gap:1rem;width:100%;height:100%;overflow:hidden;padding:1rem 1.25rem}
+  .wf-side{flex:0 0 13rem;display:flex;flex-direction:column;gap:.5rem;overflow:auto}
+  .wf-side>.icon-btn{justify-content:center}
+  #wfList{display:flex;flex-direction:column;gap:1px}
+  #wfList button{text-align:left;background:transparent;border-color:transparent;color:var(--text-2);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #wfList button:hover{background:var(--surface-2);color:var(--text)}
+  .wf-main{flex:1;display:flex;flex-direction:column;gap:.5rem;overflow:hidden;min-width:0}
+  .wf-bar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+  .wf-bar #wfName{flex:1;min-width:10rem}
+  .wf-bar #wfPalette{flex:0 1 15rem}
+  .wf-code{font-family:var(--mono);font-size:12px}
+  .wf-hint,#wfMsg{font-size:12px;color:var(--text-3)}
+  #wfMsg:empty{display:none}
+  #wfCanvas{position:relative;flex:1;min-height:280px;overflow:auto;
+    border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+  #wfEdgeLayer path{stroke:var(--accent)}
+  /* Wires light up under the cursor (they are click-to-delete). */
+  #wfEdgeLayer path.wf-edge:hover{stroke-width:3.5}
+  .wf-node,.wf-io{color:var(--text)}
+  #wfRunPanel{border-top:1px solid var(--border);padding-top:.5rem;max-height:34%;overflow:auto}
+  #wfRunInputs{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.4rem}
+  #wfResults{margin:0;white-space:pre-wrap;font-size:12px;color:var(--text-2)}
+  #wfInspect{flex:0 0 17rem;flex-direction:column;gap:.4rem;overflow:auto;
+    border-left:1px solid var(--border);padding-left:1rem}
+  .wf-insp-head{display:flex;align-items:center;gap:.4rem}
+  .wf-insp-head #wfInspTool{font-family:var(--mono);font-size:12px;color:var(--text-3)}
+  .wf-insp-head .icon-btn{margin-left:auto}
+  #wfInspect label,#wfInspRawWrap>summary{font-size:12px;font-weight:500;color:var(--text-2)}
+  #wfInspRawWrap{margin-top:.25rem}
+  #wfInspRawWrap>summary{cursor:pointer;margin-bottom:.3rem}
+  #wfInspBody{display:flex;flex-direction:column;gap:.4rem}
+  #wfInspArgs{width:100%}
+
+  /* ===== Markdown =====
+     Shared by chat replies (.bub.md) and the file / memory viewers
+     (.col-view.md) -- scoped to .md so both pick it up. */
   .md{white-space:normal}
-  .col-view.md{font-family:inherit;line-height:1.5}
-  .md h1,.md h2,.md h3,.md h4{margin:.5rem 0 .3rem;line-height:1.25;color:var(--fg)}
-  .md h1{font-size:1.32em} .md h2{font-size:1.18em}
-  .md h3{font-size:1.06em} .md h4{font-size:1em}
-  .md p{margin:.35rem 0} .md p:first-child{margin-top:0} .md p:last-child{margin-bottom:0}
-  .md ul,.md ol{margin:.35rem 0;padding-left:1.35rem}
-  .md li{margin:.12rem 0}
-  .md a{color:var(--cyan);text-decoration:underline}
-  .md-img{max-width:100%;border-radius:8px;margin:.35rem 0;display:block;
-    border:1px solid rgba(255,255,255,.1)}
-  .md blockquote{margin:.4rem 0;padding:.15rem .7rem;border-left:2px solid var(--mag);color:var(--mut)}
-  .md hr{border:0;border-top:1px solid rgba(255,255,255,.14);margin:.55rem 0}
-  code.ic{background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.1);
-    border-radius:5px;padding:.04rem .3rem;font-size:.92em}
-  .code-wrap{margin:.5rem 0;border:1px solid rgba(32,246,255,.22);border-radius:10px;
-    overflow:hidden;background:rgba(2,5,15,.72)}
+  .col-view.md{font-family:var(--sans);font-size:14px;line-height:1.6;max-width:60rem}
+  .md h1,.md h2,.md h3,.md h4{margin:1.1rem 0 .4rem;line-height:1.3;font-weight:650;color:var(--text)}
+  .md h1:first-child,.md h2:first-child,.md h3:first-child,.md h4:first-child{margin-top:0}
+  .md h1{font-size:1.35em} .md h2{font-size:1.2em}
+  .md h3{font-size:1.07em} .md h4{font-size:1em}
+  .md p{margin:.55rem 0} .md p:first-child{margin-top:0} .md p:last-child{margin-bottom:0}
+  .md ul,.md ol{margin:.5rem 0;padding-left:1.4rem}
+  .md li{margin:.2rem 0}
+  .md-img{max-width:100%;border-radius:8px;margin:.5rem 0;display:block;border:1px solid var(--border)}
+  .md blockquote{margin:.6rem 0;padding:.1rem .9rem;border-left:3px solid var(--border-strong);color:var(--text-2)}
+  .md hr{border:0;border-top:1px solid var(--border);margin:1rem 0}
+  code.ic{background:var(--surface-2);border-radius:4px;padding:.08rem .32rem;font-size:.9em}
+  .code-wrap{margin:.7rem 0;border:1px solid var(--border);border-radius:8px;
+    overflow:hidden;background:var(--code)}
   .code-head{display:flex;align-items:center;justify-content:space-between;
-    padding:.18rem .55rem;background:rgba(255,255,255,.04);
-    border-bottom:1px solid rgba(255,255,255,.08)}
-  .code-lang{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut)}
-  .copy-btn{background:transparent;color:var(--cyan);border:1px solid rgba(32,246,255,.3);
-    border-radius:6px;padding:.08rem .45rem;font:inherit;font-size:10px;cursor:pointer;
-    text-transform:uppercase;letter-spacing:.05em}
-  .copy-btn:hover{background:rgba(32,246,255,.12)}
-  .copy-btn.ok{color:var(--green);border-color:rgba(61,242,129,.4)}
-  .code-wrap pre{margin:0;padding:.6rem .7rem;overflow:auto;font-size:12.5px;line-height:1.45}
+    padding:.25rem .45rem .25rem .75rem;background:var(--surface);border-bottom:1px solid var(--border)}
+  .code-lang{font-family:var(--mono);font-size:11.5px;color:var(--text-3)}
+  .copy-btn{background:transparent;color:var(--text-3);border:0;border-radius:4px;
+    padding:.08rem .45rem;font-size:12px;text-transform:capitalize}
+  .copy-btn:hover{color:var(--text);background:var(--surface-2)}
+  .copy-btn.ok{color:var(--ok)}
+  .code-wrap pre{margin:0;padding:.7rem .8rem;overflow:auto;font-size:12.5px;line-height:1.55}
   .code-wrap code{white-space:pre}
 
-  /* ===== Per-message hover actions ===== */
-  /* Action bar lives INSIDE the bubble now (was a sibling row that made
-     user/assistant rows different heights). Right-aligned, separated from
-     the content by a hairline, revealed on hover. */
-  .msg-actions{display:flex;gap:.35rem;justify-content:flex-end;margin:.5rem -.2rem -.1rem;
-    padding-top:.4rem;border-top:1px solid rgba(255,255,255,.08);
-    opacity:0;transition:opacity .12s}
-  .row:hover .msg-actions{opacity:.9}
-  .msg-actions button{background:transparent;color:var(--mut);
-    border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:.06rem .42rem;
-    font:inherit;font-size:10px;cursor:pointer;text-transform:uppercase;letter-spacing:.05em}
-  .msg-actions button:hover{color:var(--cyan);border-color:var(--cyan)}
-  .msg-actions button.ok{color:var(--green);border-color:rgba(61,242,129,.4)}
-
-  /* ===== Header model picker + theme toggle ===== */
-  #model-sel{background:rgba(2,5,15,.72);color:var(--fg);
-    border:1px solid rgba(32,246,255,.3);border-radius:8px;padding:.26rem .4rem;
-    font:inherit;font-size:11px;max-width:13rem}
-  #model-sel:focus{outline:none;border-color:var(--cyan);box-shadow:var(--glow-cyan)}
-
-  /* ===== Light theme: a single CSS-filter invert on the root, with media
-     elements counter-inverted so photos/video stay true-colour. Toggled by
-     #theme-btn; preference persisted in localStorage. ===== */
-  html.lite{filter:invert(1) hue-rotate(180deg)}
-  html.lite img,html.lite video,html.lite iframe{filter:invert(1) hue-rotate(180deg)}
-
-  /* workflow wires light up under the cursor (they are click-to-delete) */
-  #wfEdgeLayer path.wf-edge:hover{stroke-width:3.5}
-
+  /* ===== Narrow screens =====
+     The tab strip moves to its own row and scrolls sideways; lists and the
+     transcript give back their margins. */
+  /* Below this the chip's counts would push tabs off the strip: keep the model, drop the counts. */
+  @media (max-width:1240px){
+    #meta .m-extra{display:none}
+  }
+  @media (max-width:900px){
+    body>header{flex-wrap:wrap;height:auto;padding:.45rem .75rem 0;row-gap:.2rem}
+    .logo{margin-right:auto}
+    nav{order:10;flex:0 0 100%;height:36px;margin:0 -.75rem;padding:0 .4rem}
+  }
   @media (max-width:760px){
-    nav{order:99;width:100%;margin-left:0}
-    aside.sessions,.col-list{flex-basis:8rem}
-    .role{width:3.4rem}
+    /* The chat list opens over the transcript instead of squeezing it. */
+    #tab-chat{position:relative}
+    aside.sessions{position:absolute;z-index:30;top:0;bottom:0;left:0;width:min(18rem,85vw);
+      flex-basis:auto !important;box-shadow:var(--shadow-pop)}
+    .chat-splitter{display:none}
+    .chat-toolbar{flex-wrap:wrap}
+    .chat-toolbar .lbl{display:none}
+    .col-list{flex-basis:9rem}
+    /* The workflow editor stacks: list, then the editor, then the inspector. */
+    .wf-shell{flex-direction:column;overflow:auto}
+    .wf-side,.wf-main,#wfInspect{flex:none}
+    .wf-main{overflow:visible}
+    #wfCanvas{flex:none;height:22rem}
+    #wfInspect{border-left:0;padding-left:0;border-top:1px solid var(--border);padding-top:.75rem}
+    #log{padding:1rem .75rem 1.5rem}
+    form.send{width:calc(100% - 1.5rem);margin-bottom:.75rem}
+    .pane,.settings-pane,#subpane-setup,#facts-box{padding:.9rem}
+    .cfg-row{flex-wrap:wrap;gap:.25rem}
+    .cfg-label{flex-basis:100%}
+    .params-summary{display:none}
+  }
+  @media (max-width:480px){
+    .sandbox-chip{display:none}
   }
 </style>
 </head><body>
+<!-- Icons: one 16px grid, one stroke weight; drawn with <use href="#i-name">
+     (see icon() in the script) so they take the colour of their button. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-sidebar" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M6 3v10"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 16 16"><path d="M2.5 5h4.75M10.75 5h2.75M2.5 11h2.25M8.25 11h5.25"/><circle cx="9" cy="5" r="1.75"/><circle cx="6.5" cy="11" r="1.75"/></symbol>
+  <symbol id="i-context" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="M8 2.25V8h5.75"/></symbol>
+  <symbol id="i-list" viewBox="0 0 16 16"><path d="M5.75 4.5h7.75M5.75 8h7.75M5.75 11.5h7.75M2.6 4.5h.01M2.6 8h.01M2.6 11.5h.01"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 16 16"><path d="M6 3.5 3 6.5l3 3"/><path d="M3 6.5h6.25a3.25 3.25 0 0 1 0 6.5H7"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 16 16"><path d="m10 3.5 3 3-3 3"/><path d="M13 6.5H6.75a3.25 3.25 0 0 0 0 6.5H9"/></symbol>
+  <symbol id="i-download" viewBox="0 0 16 16"><path d="M8 2.5v7.5M4.75 7 8 10.25 11.25 7M3 13.25h10"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 16 16"><path d="M8 10.5V3M4.75 6 8 2.75 11.25 6M3 13.25h10"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3.25v9.5M3.25 8h9.5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 16 16"><path d="M13.25 9.6A5.6 5.6 0 0 1 6.4 2.75a5.6 5.6 0 1 0 6.85 6.85Z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.75"/><path d="M8 1.5V3M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.05 1.05M11.55 11.55l1.05 1.05M3.4 12.6l1.05-1.05M11.55 4.45l1.05-1.05"/></symbol>
+  <symbol id="i-key" viewBox="0 0 16 16"><circle cx="5.25" cy="10.75" r="2.75"/><path d="M7.2 8.8 13 3M10.75 5.25l1.75 1.75"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.55"/><path d="M13 2.75v2.5h-2.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M5.25 3.5v9l7-4.5z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></symbol>
+</defs></svg>
 <header>
-  <span class="logo"><span class="blue">PAS</span><span class="red">CLAW</span></span>
+  <span class="logo"><span class="blue">Pas</span><span class="red">Claw</span></span>
   <span id="meta" class="meta">loading...</span>
   <nav id="tabs">
     <button data-tab="chat" class="active">Chat</button>
@@ -675,36 +781,38 @@
     <button data-tab="checkpoints">Checkpoints</button>
     <button data-tab="relay">Relay</button>
     <button data-tab="settings">Settings</button>
-    <button id="theme-btn" title="Toggle light / dark theme" style="margin-left:auto">🌙</button>
-    <button id="gw-token-btn" title="Set / clear gateway bearer token (used when PASCLAW_GATEWAY_TOKEN is set on the server)">🔑</button>
   </nav>
+  <div class="header-actions">
+    <button id="theme-btn" type="button" title="Switch between light and dark" aria-label="Switch between light and dark"><svg class="ic" aria-hidden="true"><use href="#i-moon"/></svg></button>
+    <button id="gw-token-btn" type="button" title="Set / clear gateway bearer token (used when PASCLAW_GATEWAY_TOKEN is set on the server)" aria-label="Gateway token"><svg class="ic" aria-hidden="true"><use href="#i-key"/></svg></button>
+  </div>
 </header>
 <main>
   <div id="tab-chat" class="tab active">
     <aside class="sessions">
       <header>
         <span class="title">Sessions</span>
-        <button class="icon-btn" id="session-import" title="Import chats: ChatGPT conversations.json, Claude Code / Pi / OpenClaw .jsonl, or a PasClaw session export">⇪</button>
-        <button class="icon-btn" id="session-new">+ New</button>
+        <button class="icon-btn" id="session-import" aria-label="Import chats" title="Import chats: ChatGPT conversations.json, Claude Code / Pi / OpenClaw .jsonl, or a PasClaw session export"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg></button>
+        <button class="icon-btn" id="session-new"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>New</button>
       </header>
       <input id="session-import-file" type="file" accept=".json,.jsonl,application/json" hidden>
       <input id="session-search" class="session-search" type="search"
-             placeholder="search…" autocomplete="off">
+             placeholder="Search chats" autocomplete="off">
       <ul class="session-list" id="session-list"></ul>
     </aside>
     <div class="chat-splitter" id="chat-splitter" title="Drag to resize"></div>
     <div class="chat-pane">
       <div class="chat-toolbar">
-        <button class="icon-btn" id="sidebar-toggle" title="Collapse / show the session list">☰</button>
-        <button class="icon-btn" id="params-toggle" title="Per-chat parameters">⚙ Params</button>
+        <button class="icon-btn" id="sidebar-toggle" aria-label="Show or hide the chat list" title="Collapse / show the session list"><svg class="ic" aria-hidden="true"><use href="#i-sidebar"/></svg></button>
+        <button class="icon-btn" id="params-toggle" title="Per-chat parameters"><svg class="ic" aria-hidden="true"><use href="#i-sliders"/></svg><span class="lbl">Parameters</span></button>
         <button class="icon-btn" id="ctx-toggle" type="button"
-          title="Context: what the next turn puts in front of the model (estimated)">◔ <span class="ctx-btn-n">Context</span></button>
-        <button class="icon-btn" id="tools-toggle" title="Expand or collapse tool-call details (full args + results) in the transcript">🔧 details ▾</button>
+          title="Context: what the next turn puts in front of the model (estimated)"><svg class="ic" aria-hidden="true"><use href="#i-context"/></svg><span class="ctx-btn-n">Context</span></button>
+        <button class="icon-btn" id="tools-toggle" title="Expand or collapse tool-call details (full args + results) in the transcript"><svg class="ic" aria-hidden="true"><use href="#i-list"/></svg><span class="lbl">Tool details</span></button>
         <span id="params-summary" class="params-summary"></span>
         <span id="sandbox-chip" class="sandbox-chip" style="margin-left:auto" hidden></span>
-        <button class="icon-btn" id="chat-undo" title="Undo the last turn's file edits (checkpoints)">↶</button>
-        <button class="icon-btn" id="chat-redo" title="Redo (zpaq backend only)">↷</button>
-        <button class="icon-btn" id="chat-files-btn" title="Download files created in this chat">🗎 Files</button>
+        <button class="icon-btn" id="chat-undo" aria-label="Undo file edits" title="Undo the last turn's file edits (checkpoints)"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg></button>
+        <button class="icon-btn" id="chat-redo" aria-label="Redo file edits" title="Redo (zpaq backend only)"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg></button>
+        <button class="icon-btn" id="chat-files-btn" title="Download files created in this chat"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg><span class="lbl">Files</span></button>
         <div id="chat-files-menu" class="fs-menu" hidden></div>
       </div>
       <div id="chat-params" class="chat-params" hidden>
@@ -716,8 +824,8 @@
           <label class="pf preset-pf">Preset
             <select id="p-preset"><option value="">—</option></select>
           </label>
-          <button class="icon-btn" id="p-preset-save"  title="Save the system prompt above as a preset">save</button>
-          <button class="icon-btn" id="p-preset-del"   title="Delete the selected preset">del</button>
+          <button class="icon-btn" id="p-preset-save"  title="Save the system prompt above as a preset">Save preset</button>
+          <button class="icon-btn" id="p-preset-del"   title="Delete the selected preset">Delete</button>
         </div>
         <div class="pf-row">
           <label class="pf num-pf">Temperature
@@ -726,16 +834,16 @@
           <label class="pf num-pf">Max tokens
             <input id="p-maxtok" type="number" min="1" step="1" placeholder="default">
           </label>
-          <button class="icon-btn" id="p-reset" title="Clear all per-chat parameters">reset</button>
+          <button class="icon-btn" id="p-reset" title="Clear all per-chat parameters">Reset</button>
         </div>
       </div>
       <div id="ctx-panel" class="ctx-panel" hidden>
         <div class="ctx-head">
           <span class="ctx-title">Context</span>
           <span id="ctx-total" class="ctx-total">counting…</span>
-          <label class="ctx-win" title="The model's context window in tokens. Empty = the gateway's context_window setting, else the compaction point.">window
+          <label class="ctx-win" title="The model's context window in tokens. Empty = the gateway's context_window setting, else the compaction point.">Window
             <input id="ctx-window" type="number" min="1000" step="1000" placeholder="auto"></label>
-          <button class="icon-btn" id="ctx-refresh" type="button" title="Count again">↻</button>
+          <button class="icon-btn" id="ctx-refresh" type="button" aria-label="Count again" title="Count again"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
         </div>
         <div class="ctx-barwrap"><div id="ctx-bar" class="ctx-bar" role="img"></div></div>
         <ul id="ctx-legend" class="ctx-legend"></ul>
@@ -751,7 +859,7 @@
         <div id="msg-queue" class="msg-queue"></div>
         <div id="attach-chips"></div>
         <textarea id="m" rows="2"
-          placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline, / for commands)"></textarea>
+          placeholder="Ask PasClaw…  Enter to send, Shift+Enter for a new line, / for commands"></textarea>
         <input id="attach-file" type="file" multiple style="display:none">
         <!-- Toolbar under the input: mode + attach on the left, model
              picker + Send on the right. mode-btn / model-sel were lifted
@@ -759,9 +867,9 @@
              lives next to the send box. -->
         <div class="composer-bar">
           <button id="mode-btn" class="icon-btn" type="button"
-            title="Cycle mode: build / plan / improve / space.">🛠 build</button>
+            title="Cycle mode: build / plan / improve / space.">Build</button>
           <button class="icon-btn composer-add" id="attach-btn" type="button"
-            title="Attach text file(s) — contents are folded into your message">+</button>
+            aria-label="Attach files" title="Attach text file(s) — contents are folded into your message"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg></button>
           <span class="composer-spacer"></span>
           <select id="model-sel" title="Model used for new messages (empty = server default)"></select>
           <button class="primary" id="b">Send</button>
@@ -778,7 +886,7 @@
     </div>
     <div class="subpane" id="subpane-setup">
       <div id="mem-setup-box" style="max-width:560px">
-        <div class="crumb">memory &amp; reranking setup <span id="mem-setup-status"></span></div>
+        <div class="crumb">Memory &amp; reranking setup <span id="mem-setup-status"></span></div>
         <p class="ob-sub">Local semantic search + optional cross-encoder reranking.
           Runs on-device; nothing leaves the host. Model downloads happen here.</p>
         <div class="ob-field">
@@ -808,11 +916,11 @@
     </div>
     <div class="subpane" id="subpane-facts">
       <div id="facts-box">
-        <div class="crumb">distilled facts <span id="facts-status"></span>
-          <a href="#" id="facts-export" style="float:right">export .md</a></div>
+        <div class="crumb">Distilled facts <span id="facts-status"></span>
+          <a href="#" id="facts-export" style="float:right">Export .md</a></div>
         <form id="facts-add" class="vault-search-row">
           <input id="facts-text" type="text" autocomplete="off"
-                 placeholder="remember a fact… (Enter to add)">
+                 placeholder="Remember a fact…  Enter to add">
         </form>
         <div id="facts-list"></div>
       </div>
@@ -822,7 +930,7 @@
         <div class="col-list">
           <form id="mem-search" class="vault-search-row">
             <input id="mem-q" type="text" autocomplete="off"
-                   placeholder="search memory (BM25 / vector)…">
+                   placeholder="Search memory">
           </form>
           <div class="crumb">workspace/memory/</div>
           <div id="mem-list"></div>
@@ -839,7 +947,7 @@
         <button class="primary" id="kb-upload-btn" type="submit">Upload &amp; index</button>
       </form>
       <form id="kb-search" class="skill-install-row">
-        <input id="kb-q" type="text" autocomplete="off" placeholder="search the knowledge base…">
+        <input id="kb-q" type="text" autocomplete="off" placeholder="Search the knowledge base">
         <button class="primary" id="kb-search-btn" type="submit">Search</button>
       </form>
       <div id="kb-status" class="settings-status"></div>
@@ -881,12 +989,12 @@
     <div class="pane">
       <form id="skill-install" class="skill-install-row">
         <input id="skill-target" type="text" autocomplete="off"
-               placeholder="install: owner/repo · clawhub:slug · hub:slug · or a bare slug">
+               placeholder="Install: owner/repo · clawhub:slug · hub:slug · or a bare slug">
         <button class="primary" id="skill-install-btn">Install</button>
       </form>
       <form id="skill-search" class="skill-install-row">
         <input id="skill-q" type="text" autocomplete="off"
-               placeholder="search the skill catalog (pasclaw.dev + ClawHub)…">
+               placeholder="Search the skill catalog (pasclaw.dev + ClawHub)">
         <button class="primary" id="skill-search-btn">Search</button>
       </form>
       <div id="skill-status" class="settings-status"></div>
@@ -900,7 +1008,7 @@
       <div class="col-list">
         <form id="vault-form" class="vault-search-row">
           <input id="vault-q" type="search" autocomplete="off"
-                 placeholder="search Code Vault (Object Pascal)…">
+                 placeholder="Search the Code Vault (Object Pascal)">
         </form>
         <div id="vault-list"></div>
       </div>
@@ -910,7 +1018,7 @@
 
   <div id="tab-logs" class="tab">
     <div class="logs-bar">
-      <span class="meta" id="logs-status">disconnected</span>
+      <span class="meta" id="logs-status">Disconnected</span>
       <span class="spacer"></span>
       <button class="icon-btn" id="logs-clear">Clear</button>
     </div>
@@ -926,7 +1034,7 @@
            agent loop. Empty / "stats collection off" state is rendered
            inline so a fresh-onboarded operator sees actionable
            guidance instead of zeros. -->
-      <div id="stats-hint" class="meta" style="padding:.5rem .8rem"></div>
+      <div id="stats-hint" class="meta"></div>
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-label">Sessions</div>
@@ -983,9 +1091,9 @@
   <div id="tab-checkpoints" class="tab">
     <div class="pane" id="cp-pane">
       <div class="cp-bar">
-        <button class="icon-btn" id="cp-undo" title="Undo the last turn's file edits">↶ Undo</button>
-        <button class="icon-btn" id="cp-redo" title="Redo (zpaq backend only)">↷ Redo</button>
-        <button class="icon-btn" id="cp-refresh" title="Refresh">⟳</button>
+        <button class="icon-btn" id="cp-undo" title="Undo the last turn's file edits"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg>Undo</button>
+        <button class="icon-btn" id="cp-redo" title="Redo (zpaq backend only)"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg>Redo</button>
+        <button class="icon-btn" id="cp-refresh" aria-label="Refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
         <span id="cp-status" class="cp-status"></span>
       </div>
       <div class="cp-list" id="cp-list"><div class="empty-pane">Loading…</div></div>
@@ -1043,7 +1151,7 @@
           <div class="relay-inb-row">
             <label>Model
               <select id="relay-inb-model">
-                <option value="" disabled selected>-- choose a model --</option>
+                <option value="" disabled selected>Choose a model</option>
               </select>
             </label>
             <label>Worker id
@@ -1051,12 +1159,12 @@
             </label>
             <div class="relay-inb-actions">
               <button type="button" id="relay-inb-connect" class="primary">Connect</button>
-              <button type="button" id="relay-inb-disconnect" disabled>Disconnect</button>
+              <button type="button" id="relay-inb-disconnect" class="icon-btn" disabled>Disconnect</button>
             </div>
           </div>
           <div class="relay-inb-status">
             <span class="dot" id="relay-inb-dot"></span>
-            <span id="relay-inb-status-text">idle -- pick a model and click Connect</span>
+            <span id="relay-inb-status-text">Idle. Pick a model and click Connect.</span>
             <div class="relay-inb-meter"><span id="relay-inb-meter-fill"></span></div>
             <span id="relay-inb-jobs">0 served</span>
           </div>
@@ -1080,48 +1188,48 @@
   </div>
 
   <div id="tab-workflow" class="tab">
-    <div style="display:flex;gap:12px;width:100%;height:100%;overflow:hidden">
-      <div style="flex:0 0 200px;display:flex;flex-direction:column;gap:8px;overflow:auto">
-        <button id="wfNew">+ New workflow</button>
-        <div id="wfList" style="display:flex;flex-direction:column;gap:4px"></div>
+    <div class="wf-shell">
+      <div class="wf-side">
+        <button id="wfNew" class="icon-btn"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>New workflow</button>
+        <div id="wfList"></div>
       </div>
-      <div style="flex:1;display:flex;flex-direction:column;gap:8px;overflow:hidden;min-width:0">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <input id="wfName" placeholder="workflow name (letters, digits, _ -)" style="flex:1;min-width:160px">
-          <select id="wfPalette" style="flex:0 0 240px"><option value="">— add a node —</option></select>
-          <button id="wfAddNode">+ Node</button>
-          <button id="wfSave">Save</button>
-          <button id="wfRun">Run ▶</button>
-          <button id="wfDelete">Delete</button>
+      <div class="wf-main">
+        <div class="wf-bar">
+          <input id="wfName" placeholder="Workflow name (letters, digits, _ -)">
+          <select id="wfPalette"><option value="">Add a node…</option></select>
+          <button id="wfAddNode" class="icon-btn"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Node</button>
+          <button id="wfRun" class="icon-btn"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Run</button>
+          <button id="wfDelete" class="icon-btn">Delete</button>
+          <button id="wfSave" class="primary">Save</button>
         </div>
-        <input id="wfDesc" placeholder="description (optional)">
-        <input id="wfOutputDir" placeholder="output folder (workflows/&lt;id&gt;)" title="Where runs write their outputs, under the workspace. Empty = workflows/<id>/<timestamp>.">
-        <input id="wfInputs" placeholder="inputs (comma-separated names, e.g. prompt)">
-        <textarea id="wfOutputs" rows="2" style="font-family:ui-monospace,monospace;font-size:12px"
-          placeholder="outputs — one per line, name = template. e.g.  video_url = {{nodes.animate.output[0]}}"></textarea>
-        <textarea id="wfLoop" rows="2" style="font-family:ui-monospace,monospace;font-size:12px"
-          placeholder="loop (optional) — max = 5 · until = {{nodes.judge.done}} · one feedback per line: output -> input"></textarea>
-        <div style="font-size:11px;opacity:.6">Drag a node by its title to move it; drag from a node's right ● to another node's left ● to connect. Click a node to edit its args.</div>
-        <div id="wfCanvas" style="position:relative;flex:1;min-height:280px;border:1px solid var(--border,#333);border-radius:6px;background:rgba(127,127,127,.05);overflow:auto">
+        <input id="wfDesc" placeholder="Description (optional)">
+        <input id="wfOutputDir" placeholder="Output folder (workflows/&lt;id&gt;)" title="Where runs write their outputs, under the workspace. Empty = workflows/<id>/<timestamp>.">
+        <input id="wfInputs" placeholder="Inputs (comma-separated names, e.g. prompt)">
+        <textarea id="wfOutputs" rows="2" class="wf-code"
+          placeholder="Outputs, one per line: name = template.  e.g.  video_url = {{nodes.animate.output[0]}}"></textarea>
+        <textarea id="wfLoop" rows="2" class="wf-code"
+          placeholder="Loop (optional): max = 5 · until = {{nodes.judge.done}} · one feedback per line: output -> input"></textarea>
+        <div class="wf-hint">Drag a node by its title to move it. Drag from a node's right port to another node's left port to connect them. Click a node to edit its arguments.</div>
+        <div id="wfCanvas">
           <svg id="wfEdgeLayer" style="position:absolute;left:0;top:0;pointer-events:none;z-index:0"></svg>
         </div>
-        <div id="wfRunPanel" style="display:none;border-top:1px solid var(--border,#333);padding-top:8px;max-height:34%;overflow:auto">
-          <div id="wfRunInputs" style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px"></div>
-          <pre id="wfResults" style="white-space:pre-wrap;font-size:12px"></pre>
+        <div id="wfRunPanel" style="display:none">
+          <div id="wfRunInputs"></div>
+          <pre id="wfResults"></pre>
         </div>
-        <div id="wfMsg" style="font-size:12px;opacity:.8"></div>
+        <div id="wfMsg"></div>
       </div>
-      <div id="wfInspect" style="flex:0 0 260px;display:none;flex-direction:column;gap:6px;border-left:1px solid var(--border,#333);padding-left:10px;overflow:auto">
-        <div style="display:flex;align-items:center;gap:6px">
-          <strong>Node</strong><span id="wfInspTool" style="font-size:11px;opacity:.7"></span>
-          <button id="wfInspDel" style="margin-left:auto">✕ delete</button>
+      <div id="wfInspect" style="display:none">
+        <div class="wf-insp-head">
+          <strong>Node</strong><span id="wfInspTool"></span>
+          <button id="wfInspDel" class="icon-btn">Delete node</button>
         </div>
-        <label style="font-size:11px;opacity:.7">id</label>
+        <label for="wfInspId">Id</label>
         <input id="wfInspId">
-        <div id="wfInspBody" style="display:flex;flex-direction:column;gap:6px"></div>
-        <details id="wfInspRawWrap" style="margin-top:4px">
-          <summary style="font-size:11px;opacity:.7;cursor:pointer">raw args (JSON)</summary>
-          <textarea id="wfInspArgs" rows="10" style="width:100%;font-family:monospace;font-size:12px"></textarea>
+        <div id="wfInspBody"></div>
+        <details id="wfInspRawWrap">
+          <summary>Raw arguments (JSON)</summary>
+          <textarea id="wfInspArgs" rows="10" class="wf-code"></textarea>
         </details>
       </div>
     </div>
@@ -1133,8 +1241,8 @@
         <button class="primary" id="config-save">Save</button>
         <button class="icon-btn" id="config-reload">Reload</button>
         <button class="icon-btn" id="config-raw-toggle" title="Toggle the raw JSON editor (for adding/removing array entries the form can't)">Raw JSON</button>
-        <button class="icon-btn" id="ws-export" title="Download workspace/ (memory, skills, KB, sessions) as a zip with a top-level workspace/ dir — drops straight into `pasclaw build --workspace-in`. Secrets in config.json are NOT included.">⬇ workspace.zip</button>
-        <button class="icon-btn" id="ws-import" title="Upload a workspace.zip and overlay it onto workspace/ — files in the zip overwrite, others are kept. Restart serve/gateway to pick up new skills.">⬆ import zip</button>
+        <button class="icon-btn" id="ws-export" title="Download workspace/ (memory, skills, KB, sessions) as a zip with a top-level workspace/ dir — drops straight into `pasclaw build --workspace-in`. Secrets in config.json are NOT included."><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg>Export workspace</button>
+        <button class="icon-btn" id="ws-import" title="Upload a workspace.zip and overlay it onto workspace/ — files in the zip overwrite, others are kept. Restart serve/gateway to pick up new skills."><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>Import workspace</button>
         <input type="file" id="ws-import-file" accept=".zip,application/zip" style="display:none">
         <span id="config-status" class="settings-status"></span>
       </div>
@@ -1153,8 +1261,8 @@
 <div id="onboard-overlay" hidden>
   <div id="onboard-card">
     <div id="onboard-head">
-      <span class="ob-title">Welcome to <b>PAS<span style="color:var(--mag)">CLAW</span></b></span>
-      <button type="button" id="onboard-close" title="Configure later in Settings">✕</button>
+      <span class="ob-title">Welcome to PasClaw</span>
+      <button type="button" id="onboard-close" aria-label="Close" title="Configure later in Settings"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
     </div>
     <div id="ob-provider-step">
     <p class="ob-sub">No model provider is configured yet. Pick one and add your API key to start chatting — saved straight to the gateway, no restart needed.</p>
@@ -1178,7 +1286,7 @@
 
     <!-- Optional secondary/cheap tier: powers the auto-router (easy turns) and/or
          a rate-limit fallback. Mirrors the CLI `pasclaw onboard` PromptAutoRouter. -->
-    <div class="ob-divider">optional · cheaper model</div>
+    <div class="ob-divider">Optional: a cheaper second model</div>
     <div class="ob-field" id="ob2-provider-field">
       <label for="ob2-provider">Secondary provider</label>
       <select id="ob2-provider" class="cfg-input"></select>
@@ -1243,6 +1351,8 @@
 "use strict";
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
+/* An icon from the sprite at the top of <body>, as markup. */
+const icon = name => '<svg class="ic" aria-hidden="true"><use href="#i-' + name + '"/></svg>';
 
 /* ===== Gateway bearer-token auth =====
    When PasClaw.Gateway.Server has Cfg.Gateway.Token set, every
@@ -1362,7 +1472,12 @@ function showTab(name) {
   // [data-tab] qualifier the new 🔑 token button in the nav would also
   // get a click handler bound, which would call showTab(undefined) and
   // hide every .tab (Codex P2 on PR #249).
-  $$("nav button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  $$("nav button[data-tab]").forEach(b => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle("active", on);
+    /* The strip scrolls sideways on narrow screens: keep the current tab in view. */
+    if (on && b.scrollIntoView) b.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
   $$(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
   // Reflect the active tab in the URL hash so it survives a reload, is
   // bookmarkable, and rides browser back/forward. Skip the write when the
@@ -1412,23 +1527,37 @@ function metaStopProbe() {
   if (metaRecoverTimer) { clearInterval(metaRecoverTimer); metaRecoverTimer = null; }
 }
 
+/* The app bar's status chip: its text, and the state its dot is coloured by. */
+function setMeta(text, state, extra) {
+  const el = $("#meta");
+  if (!el) return;
+  el.textContent = text;
+  if (extra) {
+    const x = document.createElement("span");
+    x.className = "m-extra";
+    x.textContent = extra;
+    el.appendChild(x);
+  }
+  el.dataset.state = state;
+}
+
 function refreshMeta() {
   /* noPrompt: background refresh must never pop the token modal. _silentMeta:
      don't let our own probe re-trigger the gwFetch online/offline hooks. */
   return gwFetch("/v1/status", { noPrompt: true, _silentMeta: true }).then(r => {
     if (r.status === 401) {            // reachable, just needs a token
-      $("#meta").textContent = "locked";
+      setMeta("Locked", "locked");
       metaOffline = false; metaStopProbe();
       return;
     }
     if (!r.ok) throw new Error("status " + r.status);   // funnel to the offline path
     return r.json().then(s => {
-      $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
+      setMeta(`${s.default_provider}/${s.default_model}`, "online", ` · ${s.tools} tools · ${s.mcp_servers} MCP`);
       metaOffline = false; metaStopProbe();
     });
   }).catch(_ => {
     /* Unreachable OR erroring -> show offline and keep probing until it answers. */
-    $("#meta").textContent = "offline";
+    setMeta("Offline", "offline");
     metaOffline = true;
     metaStartProbe();
   });
@@ -1438,7 +1567,7 @@ function refreshMeta() {
 function metaWentOffline() {
   if (metaOffline) return;
   metaOffline = true;
-  $("#meta").textContent = "offline";
+  setMeta("Offline", "offline");
   metaStartProbe();
 }
 function metaCameOnline() {
@@ -1528,10 +1657,10 @@ function renderSessions() {
     del.className = "del"; del.textContent = "×";
     del.addEventListener("click", e => { e.stopPropagation(); deleteSession(s.id); });
     const dl = document.createElement("span");
-    dl.className = "dl"; dl.textContent = "⬇"; dl.title = "Export session JSON";
+    dl.className = "dl"; dl.innerHTML = icon("download"); dl.title = "Export session JSON";
     dl.addEventListener("click", e => { e.stopPropagation(); exportSession(s.id); });
     li.appendChild(span); li.appendChild(del); li.appendChild(dl);
-    li.addEventListener("click", () => activateSession(s.id));
+    li.addEventListener("click", () => { activateSession(s.id); closeSidebarIfOverlay(); });
     ul.appendChild(li);
   }
   if (shown === 0) {
@@ -1650,7 +1779,7 @@ async function persistActive() {
   } catch { /* keep going; next turn will retry the write */ }
 }
 
-$("#session-new").addEventListener("click", () => newSession());
+$("#session-new").addEventListener("click", () => { newSession(); closeSidebarIfOverlay(); });
 /* Import: pick a ChatGPT conversations.json / Claude Code .jsonl / PasClaw
    export; the gateway auto-detects and converts. */
 $("#session-import").addEventListener("click", () => $("#session-import-file").click());
@@ -1703,6 +1832,17 @@ function makeRow(role) {
    persist in localStorage. The drag range is intentionally wide -- the
    sidebar can shrink to a sliver or grow until the chat pane is nearly
    gone, clamped only by the current viewport. */
+/* True when the chat list is drawn over the transcript rather than beside it. */
+function sidebarIsOverlay() {
+  return !!(window.matchMedia && window.matchMedia("(max-width:760px)").matches);
+}
+/* Put the overlaid list away once it has done its job (a chat was picked). */
+function closeSidebarIfOverlay() {
+  if (!sidebarIsOverlay()) return;
+  const aside = document.querySelector("aside.sessions"), sp = document.getElementById("chat-splitter");
+  if (aside) aside.classList.add("collapsed");
+  if (sp) sp.classList.add("collapsed");
+}
 (function initChatSplitter() {
   const run = () => {
     const aside = document.querySelector("aside.sessions");
@@ -1713,7 +1853,12 @@ function makeRow(role) {
     const maxW = () => Math.max(MIN, window.innerWidth - 120);
     const saved = parseInt(localStorage.getItem(WKEY), 10);
     if (saved >= MIN) aside.style.flexBasis = Math.min(saved, maxW()) + "px";
-    if (localStorage.getItem(CKEY) === "1") { aside.classList.add("collapsed"); sp.classList.add("collapsed"); }
+    /* On a narrow screen the list is drawn over the transcript (see the
+       stylesheet), so it starts closed until the reader says otherwise. */
+    const savedC = localStorage.getItem(CKEY);
+    if (savedC === "1" || (savedC === null && sidebarIsOverlay())) {
+      aside.classList.add("collapsed"); sp.classList.add("collapsed");
+    }
     if (toggle) toggle.addEventListener("click", () => {
       const collapsed = aside.classList.toggle("collapsed");
       sp.classList.toggle("collapsed", collapsed);
@@ -2175,11 +2320,11 @@ async function renderCheckpoints() {
     const card = document.createElement("div");
     card.className = "cp-turn";
     const files = (t.files || []).map(f =>
-      '<div class="cp-file">' + (f.created ? "➕ " : "✎ ") + escapeHtml(f.path) + "</div>").join("");
+      '<div class="cp-file">' + (f.created ? "+ " : "~ ") + escapeHtml(f.path) + "</div>").join("");
     card.innerHTML =
       '<div class="cp-turn-head"><span>Turn ' + t.turn + (t.ts ? " · " + escapeHtml(t.ts) : "") +
       " · " + (t.files || []).length + ' file(s)</span>' +
-      '<button class="icon-btn cp-revert" data-turn="' + t.turn + '">⮌ revert to before</button></div>' +
+      '<button class="icon-btn cp-revert" data-turn="' + t.turn + '">Revert to before this turn</button></div>' +
       '<div class="cp-files">' + files + "</div>";
     list.appendChild(card);
   });
@@ -2311,10 +2456,10 @@ function viewHex(path, name, sizeHint) {
     const end = offset + bytes.length;
     v.classList.remove("md");
     v.innerHTML = '<div class="hexbar">'
-      + '<button class="icon-btn" data-h="first" title="First">⏮</button>'
-      + '<button class="icon-btn" data-h="prev" title="Previous page">◀</button>'
-      + '<button class="icon-btn" data-h="next" title="Next page">▶</button>'
-      + '<button class="icon-btn" data-h="last" title="Last">⏭</button>'
+      + '<button class="icon-btn" data-h="first" title="First">«</button>'
+      + '<button class="icon-btn" data-h="prev" title="Previous page">‹</button>'
+      + '<button class="icon-btn" data-h="next" title="Next page">›</button>'
+      + '<button class="icon-btn" data-h="last" title="Last">»</button>'
       + '<span class="hexpos"></span></div><div class="hexdump"></div>';
     v.querySelector(".hexpos").textContent =
       name + " — bytes " + offset + "–" + (end > offset ? end - 1 : offset) +
@@ -2421,7 +2566,7 @@ function chatFiles() {
       const row = document.createElement("div");
       row.className = "frow";
       const name = p.replace(/^.*[\\/]/, "");
-      row.innerHTML = `<span title="${escapeHtml(p)}">${escapeHtml(name)}</span><span>⬇</span>`;
+      row.innerHTML = `<span title="${escapeHtml(p)}">${escapeHtml(name)}</span><span>${icon("download")}</span>`;
       row.addEventListener("click", () => { menu.hidden = true; downloadPath(p, name); });
       menu.appendChild(row);
     });
@@ -2444,7 +2589,7 @@ function chatFiles() {
   if (!chip) return;
   gwFetch("/v1/config").then(r => r.json()).then(c => {
     const docker = String(c.shell_backend || "local").toLowerCase() === "docker";
-    chip.textContent = docker ? "🐳 docker" : "💻 local";
+    chip.textContent = docker ? "Docker" : "Local";
     chip.classList.add(docker ? "sb-remote" : "sb-local");
     const sb = c.sandbox || {};
     const ws = sb.workspace || "(startup working dir)";
@@ -2456,7 +2601,7 @@ function chatFiles() {
     chip.title = head + "\nworkspace: " + ws + "\n" + restrict;
     chip.hidden = false;
   }).catch(() => {
-    chip.textContent = "💻 local"; chip.classList.add("sb-local"); chip.hidden = false;
+    chip.textContent = "Local"; chip.classList.add("sb-local"); chip.hidden = false;
   });
 })();
 
@@ -2592,7 +2737,7 @@ function msRenderJob(job) {
   const el = $("#ms-job");
   if (!job || job.phase === "idle") { el.hidden = true; if (msPollTimer) { clearInterval(msPollTimer); msPollTimer = null; } return; }
   el.hidden = false;
-  if (job.phase === "running") el.innerHTML = '⏳ downloading: ' + escapeHtml(job.step || "…");
+  if (job.phase === "running") el.innerHTML = 'Downloading: ' + escapeHtml(job.step || "…");
   else if (job.phase === "done") el.innerHTML = (job.step && /not loadable/.test(job.step))
     ? '<span style="color:var(--org)">⚠ ' + escapeHtml(job.step) + '</span>'
     : '<span style="color:var(--grn)">✓ download complete</span>';
@@ -2731,9 +2876,9 @@ function renderAttachChips() {
   chatAttachments.forEach((a, i) => {
     const chip = document.createElement("span");
     chip.className = "attach-chip";
-    chip.innerHTML = `<span title="${escapeHtml(a.name)}">📄 ${escapeHtml(a.name)}</span>`;
+    chip.innerHTML = `<span title="${escapeHtml(a.name)}">${escapeHtml(a.name)}</span>`;
     const x = document.createElement("button");
-    x.type = "button"; x.textContent = "✕"; x.title = "remove attachment";
+    x.type = "button"; x.textContent = "×"; x.title = "Remove attachment";
     x.addEventListener("click", () => { chatAttachments.splice(i, 1); renderAttachChips(); });
     chip.appendChild(x);
     attachChips.appendChild(chip);
@@ -3028,21 +3173,32 @@ async function loadModels() {
   });
 }
 
-/* ===== Theme toggle (CSS-filter invert on <html>) ===== */
+/* ===== Theme =====
+   html.lite swaps the stylesheet's tokens to the light values. The button's
+   choice is remembered; until it is used the page follows the OS setting,
+   and keeps following it if that changes. */
 const THEME_KEY = "pasclaw.theme.v1";
+const osLight = window.matchMedia ? window.matchMedia("(prefers-color-scheme: light)") : null;
+function themeIsLight() {
+  let saved = null; try { saved = localStorage.getItem(THEME_KEY); } catch {}
+  if (saved === "lite") return true;
+  if (saved === "dark") return false;
+  return !!(osLight && osLight.matches);
+}
 function applyTheme() {
-  let lite = false; try { lite = localStorage.getItem(THEME_KEY) === "lite"; } catch {}
+  const lite = themeIsLight();
   document.documentElement.classList.toggle("lite", lite);
   const tb = $("#theme-btn");
-  if (tb) tb.textContent = lite ? "☀️" : "🌙";
+  /* The icon names where the click goes: the sun in the dark, the moon in the light. */
+  if (tb) tb.innerHTML = icon(lite ? "moon" : "sun");
 }
 function initTheme() {
   const tb = $("#theme-btn");
   if (tb) tb.addEventListener("click", () => {
-    let lite = false; try { lite = localStorage.getItem(THEME_KEY) === "lite"; } catch {}
-    try { localStorage.setItem(THEME_KEY, lite ? "dark" : "lite"); } catch {}
+    try { localStorage.setItem(THEME_KEY, themeIsLight() ? "dark" : "lite"); } catch {}
     applyTheme();
   });
+  if (osLight && osLight.addEventListener) osLight.addEventListener("change", applyTheme);
   applyTheme();
 }
 
@@ -3063,13 +3219,13 @@ function loadMode() {
    toggling a pair -- adding more to the old add/remove dance would
    have left whichever class nobody remembered to clear. */
 const MODES = {
-  build:   { label: "🛠 build",   cls: "mode-build",
+  build:   { label: "Build",   cls: "mode-build",
              hint: "full tool access" },
-  plan:    { label: "📋 plan",    cls: "mode-plan",
+  plan:    { label: "Plan",    cls: "mode-plan",
              hint: "read-only: mutating tools refuse" },
-  improve: { label: "📈 improve", cls: "mode-improve",
+  improve: { label: "Improve", cls: "mode-improve",
              hint: "benchmark, profile, one change, re-measure" },
-  space:   { label: "🚀 space",   cls: "mode-space",
+  space:   { label: "Space",   cls: "mode-space",
              hint: "search, plan, assert, code, evaluate; mutating tools unlock after plan_write" },
 };
 function applyModeUI() {
@@ -3077,7 +3233,7 @@ function applyModeUI() {
   if (!b) return;
   const m = MODES[currentMode] || MODES.build;
   b.textContent = m.label;
-  b.title = m.hint;
+  b.title = m.label + " mode: " + m.hint + ". Click to change mode.";
   Object.values(MODES).forEach(x => b.classList.remove(x.cls));
   b.classList.add(m.cls);
 }
@@ -3106,7 +3262,7 @@ const TOOLS_KEY = "pasclaw.tooldetails.v1";
 let toolsExpanded = true;
 function applyToolsUI() {
   const b = $("#tools-toggle");
-  if (b) b.textContent = toolsExpanded ? "🔧 details ▾" : "🔧 details ▸";
+  if (b) { b.classList.toggle("on", toolsExpanded); b.setAttribute("aria-pressed", String(toolsExpanded)); }
   /* Flip already-rendered cards to match; new cards pick it up via toolCard(). */
   document.querySelectorAll(".tool-card").forEach(d => { d.open = toolsExpanded; });
 }
@@ -3153,7 +3309,7 @@ const tabLoaders = {
         for (const f of j.files) {
           const el = document.createElement("div");
           el.className = "item";
-          el.innerHTML = `<span>${escapeHtml(f.name)}</span><span class="size">${f.size}b</span>`;
+          el.innerHTML = `<span>${escapeHtml(f.name)}</span><span class="size">${humanBytes(f.size)}</span>`;
           el.addEventListener("click", () => openFile(f.name, el));
           list.appendChild(el);
         }
@@ -3210,7 +3366,7 @@ const tabLoaders = {
           el.innerHTML = `<div style="flex:1"><span>${escapeHtml(f.text)}</span>`
                        + `<span class="sub">#${f.id} · ${escapeHtml(meta)}</span></div>`;
           const x = document.createElement("button");
-          x.type = "button"; x.textContent = "✕"; x.title = "Forget";
+          x.type = "button"; x.textContent = "×"; x.title = "Forget";
           x.addEventListener("click", async () => {
             try {
               const r = await gwFetch("/v1/memory/facts/" + f.id, { method: "DELETE" });
@@ -3291,8 +3447,8 @@ const tabLoaders = {
           el.className = "item";
           const full = (cwd ? cwd.replace(/\/$/, "") + "/" : "") + e.name;
           el.innerHTML = `<span>${escapeHtml(e.name)}${e.dir?"/":""}</span>`
-                       + `<span class="size">${e.dir?"":e.size+"b"}</span>`
-                       + (e.dir ? "" : `<button class="dl-btn icon-btn" title="Download">⬇</button>`);
+                       + `<span class="size">${e.dir ? "" : humanBytes(e.size)}</span>`
+                       + (e.dir ? "" : `<button class="dl-btn icon-btn" title="Download" aria-label="Download">${icon("download")}</button>`);
           el.addEventListener("click", () => { if (e.dir) load(full); else viewFile(full, e.name, e.size); });
           if (!e.dir) el.querySelector(".dl-btn").addEventListener("click", ev => {
             ev.stopPropagation(); downloadPath(full, e.name);
@@ -3628,7 +3784,7 @@ const tabLoaders = {
         if (d.suspicious || d.blocked)
           html += `<div class="vault-meta"><span class="badge off">${d.blocked ? "blocked" : "flagged"}</span></div>`;
         if (!d.blocked)
-          html += `<button class="primary build-with" type="button" title="Start a chat set up to build with this library">⚒ Build with this</button>`;
+          html += `<button class="primary build-with" type="button" title="Start a chat set up to build with this library">Build with this</button>`;
         if (d.repoUrl)
           html += /^https?:\/\//i.test(d.repoUrl)
             ? `<p><a href="${escapeHtml(d.repoUrl)}" target="_blank" rel="noopener">${escapeHtml(d.repoUrl)}</a></p>`
@@ -3813,7 +3969,7 @@ const tabLoaders = {
     }
     function sectionHead(text, depth) {
       const h = document.createElement("div");
-      h.className = "cfg-section";
+      h.className = "cfg-section" + (depth ? " sub" : "");
       h.style.marginLeft = (depth * 0.6) + "rem";
       h.textContent = text;
       return h;
@@ -3988,11 +4144,11 @@ async function refreshStats() {
     const hint = $("#stats-hint");
     if (!j.stats_collection_enabled) {
       hint.innerHTML =
-        '⚠️ <strong>Stats collection is off.</strong> ' +
+        '<strong>Stats collection is off.</strong> ' +
         'Flip <code>stats_collection_enabled</code> in <code>config.json</code> ' +
         'or re-run <code>pasclaw onboard</code> to enable. ' +
         'Existing sessions stay at zero -- new turns from now on will accumulate.';
-      hint.style.color = "var(--yellow, #d8a000)";
+      hint.style.color = "var(--warn)";
     } else {
       hint.innerHTML =
         'Aggregating ' + fmtInt(j.sessions) + ' session(s). ' +
@@ -4247,7 +4403,7 @@ async function wfInit() {
   try { wf.tools = (await (await gwFetch("/v1/mcp/tools")).json()).tools || []; }
   catch (e) { wf.tools = []; }
   const pal = document.getElementById("wfPalette");
-  pal.innerHTML = '<option value="">— add a node —</option>' +
+  pal.innerHTML = '<option value="">Add a node…</option>' +
     '<option value="replicate">Model (Replicate) — run a model</option>' +
     '<option value="llm">LLM — call a provider</option>' +
     (wf.tools.length
@@ -4262,7 +4418,7 @@ async function wfLoadList() {
   const box = document.getElementById("wfList");
   try {
     const ws = (await (await gwFetch("/v1/workflows")).json()).workflows || [];
-    box.innerHTML = ws.length ? "" : '<div style="opacity:.6;font-size:12px">no workflows yet</div>';
+    box.innerHTML = ws.length ? "" : '<div class="wf-hint">No workflows yet</div>';
     ws.forEach(w => {
       const b = document.createElement("button");
       b.textContent = w.name + " (" + w.nodes + ")";
@@ -4270,7 +4426,7 @@ async function wfLoadList() {
       b.addEventListener("click", () => wfLoad(w.id));
       box.appendChild(b);
     });
-  } catch (e) { box.innerHTML = '<div style="opacity:.6">workflows disabled or unavailable</div>'; }
+  } catch (e) { box.innerHTML = '<div class="wf-hint">Workflows are disabled or unavailable</div>'; }
 }
 
 function wfNewClicked() {
@@ -4359,8 +4515,8 @@ function wfShowPalette(x, y) {
   const dropX = wfSnap(x), dropY = wfSnap(y);
   wfPal = document.createElement("div");
   wfPal.style.cssText = `position:absolute;left:${x}px;top:${y}px;z-index:5;width:220px;` +
-    `background:var(--bg,#1b1b1b);border:1px solid var(--border,#444);border-radius:6px;` +
-    `box-shadow:0 4px 14px rgba(0,0,0,.4);padding:6px;display:flex;flex-direction:column;gap:6px`;
+    `background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;` +
+    `box-shadow:var(--shadow-pop);padding:6px;display:flex;flex-direction:column;gap:6px`;
   const inp = document.createElement("input");
   inp.placeholder = "search tools…";
   const list = document.createElement("div");
@@ -4476,7 +4632,7 @@ function wfSetArgs(n, obj) {
 }
 function wfField(label, el) {
   const d = document.createElement("label");
-  d.style.cssText = "font-size:11px;opacity:.75;display:flex;flex-direction:column;gap:2px";
+  d.style.cssText = "font-size:12px;color:var(--text-2);display:flex;flex-direction:column;gap:2px";
   d.appendChild(document.createTextNode(label)); d.appendChild(el);
   return d;
 }
@@ -4532,31 +4688,31 @@ function wfRenderReplicateForm(body, n) {
   body.appendChild(srow); body.appendChild(results); body.appendChild(formArea);
   const doSearch = async () => {
     const q = sbox.value.trim(); if (!q) return;
-    results.innerHTML = '<span style="opacity:.6;font-size:11px">searching…</span>';
+    results.innerHTML = '<span style="color:var(--text-3);font-size:12px">searching…</span>';
     try {
       const j = await (await gwFetch("/v1/replicate/search?q=" + encodeURIComponent(q))).json();
-      if (j && j.ok === false) { results.innerHTML = '<span style="opacity:.6;font-size:11px">' + escapeHtml(j.error || "search unavailable") + '</span>'; return; }
+      if (j && j.ok === false) { results.innerHTML = '<span style="color:var(--text-3);font-size:12px">' + escapeHtml(j.error || "search unavailable") + '</span>'; return; }
       const models = wfExtractModels(j);
-      results.innerHTML = models.length ? "" : '<span style="opacity:.6;font-size:11px">no results (is the Replicate MCP connected + authorized?)</span>';
+      results.innerHTML = models.length ? "" : '<span style="color:var(--text-3);font-size:12px">no results (is the Replicate MCP connected + authorized?)</span>';
       models.slice(0, 12).forEach(m => {
-        const b = document.createElement("button"); b.style.cssText = "text-align:left;font-size:11px";
+        const b = document.createElement("button"); b.style.cssText = "text-align:left;font-size:12px";
         b.textContent = m.owner + "/" + m.name; b.title = m.description || "";
         b.addEventListener("click", () => wfPickModel(m, n, formArea));
         results.appendChild(b);
       });
-    } catch (e) { results.innerHTML = '<span style="opacity:.6;font-size:11px">search failed: ' + escapeHtml(String(e)) + "</span>"; }
+    } catch (e) { results.innerHTML = '<span style="color:var(--text-3);font-size:12px">search failed: ' + escapeHtml(String(e)) + "</span>"; }
   };
   sbtn.addEventListener("click", doSearch);
   sbox.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); doSearch(); } });
   if (cur.version) {
-    const p = document.createElement("div"); p.style.cssText = "font-size:11px;opacity:.7";
+    const p = document.createElement("div"); p.style.cssText = "font-size:12px;color:var(--text-2)";
     p.textContent = "current version: " + cur.version + " — search to change the model/fields";
     formArea.appendChild(p);
   }
 }
 
 async function wfPickModel(m, n, formArea) {
-  formArea.innerHTML = '<span style="opacity:.6;font-size:11px">loading ' + escapeHtml(m.owner + "/" + m.name) + "…</span>";
+  formArea.innerHTML = '<span style="color:var(--text-3);font-size:12px">loading ' + escapeHtml(m.owner + "/" + m.name) + "…</span>";
   let schema = null, version = m.version;
   try {
     const j = await (await gwFetch("/v1/replicate/model?owner=" + encodeURIComponent(m.owner) + "&name=" + encodeURIComponent(m.name))).json();
@@ -4570,7 +4726,7 @@ async function wfPickModel(m, n, formArea) {
 
 function wfRenderModelForm(formArea, n, m, version, schema) {
   formArea.innerHTML = "";
-  const title = document.createElement("div"); title.style.cssText = "font-size:11px;opacity:.85;font-weight:600";
+  const title = document.createElement("div"); title.style.cssText = "font-size:12px;font-weight:600";
   title.textContent = m.owner + "/" + m.name + (version ? " @ " + String(version).slice(0, 8) : "");
   formArea.appendChild(title);
   const curInput = (wfParseArgs(n).input) || {};
@@ -4579,7 +4735,7 @@ function wfRenderModelForm(formArea, n, m, version, schema) {
   const keys = Object.keys(props).sort((a, b) => ((props[a]["x-order"] || 0) - (props[b]["x-order"] || 0)));
   const fields = {};
   if (!keys.length) {
-    const w = document.createElement("div"); w.style.cssText = "font-size:11px;opacity:.6";
+    const w = document.createElement("div"); w.style.cssText = "font-size:12px;color:var(--text-3)";
     w.textContent = "no input schema — set inputs in raw args"; formArea.appendChild(w);
   }
   keys.forEach(k => {
@@ -4637,26 +4793,26 @@ function wfIOBox(canvas, kind, x, y, fields) {
   const el = document.createElement("div");
   el.className = "wf-io wf-io-" + kind;
   el.dataset.kind = kind;
-  el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${IO_W}px;border:1px dashed #6a8fd0;` +
-    `border-radius:6px;background:rgba(106,143,208,.08);z-index:1;font-size:11px`;
-  const title = kind === "input" ? "▸ INPUT" : "OUTPUT ▸";
+  el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${IO_W}px;border:1px dashed var(--accent-line);` +
+    `border-radius:6px;background:var(--accent-soft);z-index:1;font-size:12px`;
+  const title = kind === "input" ? "Inputs" : "Outputs";
   let rows = fields.map(f => {
     const nm = typeof f === "string" ? f : f.name;
     if (kind === "input")
       return `<div class="wf-infield" data-in="${escapeHtml(nm)}" ` +
         `title="click to copy {{inputs.${escapeHtml(nm)}}}" style="padding:2px 7px;white-space:nowrap;` +
         `overflow:hidden;text-overflow:ellipsis;cursor:copy">${escapeHtml(nm)}</div>`;
-    const wired = f.value ? "" : ` <span style="opacity:.4;font-size:10px">·drop</span>`;
+    const wired = f.value ? "" : ` <span style="color:var(--text-3);font-size:12px">·drop</span>`;
     return `<div class="wf-outfield" data-out="${escapeHtml(nm)}" ` +
       `title="drag a node's ● output here to set ${escapeHtml(nm)}${f.value ? " (now: " + escapeHtml(f.value) + ")" : ""}" ` +
       `style="padding:2px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(nm)}${wired}</div>`;
   }).join("");
-  if (!rows) rows = `<div style="padding:2px 7px;opacity:.5">(none yet)</div>`;
+  if (!rows) rows = `<div style="padding:2px 7px;color:var(--text-3)">(none yet)</div>`;
   const port = kind === "input"
-    ? `<div class="wf-port" style="position:absolute;right:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:#6a8fd0;border:2px solid var(--bg,#111)"></div>`
-    : `<div class="wf-port" style="position:absolute;left:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:#888;border:2px solid var(--bg,#111)"></div>`;
+    ? `<div class="wf-port" style="position:absolute;right:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:var(--accent);border:2px solid var(--surface)"></div>`
+    : `<div class="wf-port" style="position:absolute;left:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:var(--text-3);border:2px solid var(--surface)"></div>`;
   el.innerHTML = `<div class="wf-io-head" style="padding:4px 7px;font-weight:600;border-bottom:1px solid var(--border,#444);` +
-    `opacity:.8;cursor:move">${title}</div>${rows}${port}`;
+    `cursor:move">${title}</div>${rows}${port}`;
   canvas.appendChild(el);
 }
 
@@ -4754,22 +4910,22 @@ function wfRender() {
     const el = document.createElement("div");
     el.className = "wf-node"; el.dataset.node = n.id;
     el.style.cssText = `position:absolute;left:${n.x}px;top:${n.y}px;width:${NODE_W}px;` +
-      `border:1px solid ${n.id === wf.sel ? "#6a8fd0" : "var(--border,#444)"};border-radius:6px;` +
-      `background:var(--bg,#1b1b1b);z-index:1;box-shadow:0 1px 4px rgba(0,0,0,.3);font-size:12px`;
+      `border:1px solid ${n.id === wf.sel ? "var(--accent)" : "var(--border-strong)"};border-radius:6px;` +
+      `background:var(--surface-2);z-index:1;box-shadow:0 1px 3px rgba(0,0,0,.18);font-size:12px`;
     const kind = (n.tool === "llm" || n.tool === "replicate") ? n.tool : "tool";
     const st = wfRunStatus[n.id];
     el.innerHTML =
       `<div class="wf-head" style="cursor:move;padding:5px 7px;border-bottom:1px solid var(--border,#444);` +
-        `display:flex;gap:6px;align-items:center;border-radius:6px 6px 0 0;background:rgba(106,143,208,.15)">` +
+        `display:flex;gap:6px;align-items:center;border-radius:6px 6px 0 0;background:var(--surface-3)">` +
         `<span style="font-weight:600">${escapeHtml(n.id)}</span>` +
         (st ? `<span title="last run: ${st.ok ? "ok" : "failed"}" style="width:8px;height:8px;` +
-          `border-radius:50%;flex:0 0 auto;background:${st.ok ? "#43b97f" : "#e0565a"}"></span>` : "") +
-        `<span style="opacity:.6;font-size:10px;margin-left:auto">${escapeHtml(kind)}</span></div>` +
-      `<div style="padding:6px 7px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(n.tool)}</div>` +
-      (st && st.line ? `<div title="last run output" style="padding:0 7px 5px;opacity:.55;font-size:10px;` +
+          `border-radius:50%;flex:0 0 auto;background:${st.ok ? "var(--ok)" : "var(--danger)"}"></span>` : "") +
+        `<span style="color:var(--text-3);font-size:12px;margin-left:auto">${escapeHtml(kind)}</span></div>` +
+      `<div style="padding:6px 7px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(n.tool)}</div>` +
+      (st && st.line ? `<div title="last run output" style="padding:0 7px 5px;color:var(--text-3);font-size:12px;` +
         `white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(st.line)}</div>` : "") +
-      `<div class="wf-port wf-in"  data-node="${escapeHtml(n.id)}" title="input"  style="position:absolute;left:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:#888;border:2px solid var(--bg,#111);cursor:crosshair"></div>` +
-      `<div class="wf-port wf-out" data-node="${escapeHtml(n.id)}" title="output" style="position:absolute;right:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:#6a8fd0;border:2px solid var(--bg,#111);cursor:crosshair"></div>`;
+      `<div class="wf-port wf-in"  data-node="${escapeHtml(n.id)}" title="input"  style="position:absolute;left:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:var(--text-3);border:2px solid var(--surface);cursor:crosshair"></div>` +
+      `<div class="wf-port wf-out" data-node="${escapeHtml(n.id)}" title="output" style="position:absolute;right:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:var(--accent);border:2px solid var(--surface);cursor:crosshair"></div>`;
     canvas.appendChild(el);
     el.querySelector(".wf-head").addEventListener("mousedown", ev => wfStartDrag(ev, n));
     el.addEventListener("click", ev => { if (!el.dataset.dragged) wfSelect(n.id); el.dataset.dragged = ""; });
@@ -4807,7 +4963,7 @@ function wfDrawEdges() {
     const p = document.createElementNS(NS, "path");
     p.setAttribute("class", "wf-edge");
     p.setAttribute("d", wfEdgePath(a, b));
-    p.setAttribute("fill", "none"); p.setAttribute("stroke", "#6a8fd0"); p.setAttribute("stroke-width", "2");
+    p.setAttribute("fill", "none"); p.setAttribute("stroke", "currentColor"); p.setAttribute("stroke-width", "2");
     p.style.pointerEvents = "stroke"; p.style.cursor = "pointer";
     const tip = document.createElementNS(NS, "title");
     tip.textContent = ed.from + " → " + ed.to + "  (click to delete)";
@@ -4821,7 +4977,7 @@ function wfDrawEdges() {
     if (!a || !b) return;
     const p = document.createElementNS(NS, "path");
     p.setAttribute("d", wfEdgePath(a, b));
-    p.setAttribute("fill", "none"); p.setAttribute("stroke", "#6a8fd0"); p.setAttribute("stroke-width", "1.5");
+    p.setAttribute("fill", "none"); p.setAttribute("stroke", "currentColor"); p.setAttribute("stroke-width", "1.5");
     p.setAttribute("stroke-dasharray", "4 3"); p.setAttribute("opacity", "0.7");
     svg.appendChild(p);
   };
@@ -4866,7 +5022,7 @@ function wfStartConnect(ev, fromId) {
   const r = canvas.getBoundingClientRect();
   const svg = document.getElementById("wfEdgeLayer");
   const tmp = document.createElementNS(NS, "path");
-  tmp.setAttribute("fill", "none"); tmp.setAttribute("stroke", "#6a8fd0");
+  tmp.setAttribute("fill", "none"); tmp.setAttribute("stroke", "currentColor");
   tmp.setAttribute("stroke-width", "2"); tmp.setAttribute("stroke-dasharray", "4 3");
   svg.appendChild(tmp);
   const a = wfPortXY(fromId, "out");
@@ -5358,7 +5514,7 @@ async function obMemDone() {
     await gwFetch("/v1/memory/provision", { method: "POST",
       headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     if (vector || dlRerank) {
-      const job = $("#ob-mem-job"); job.hidden = false; job.textContent = "⏳ downloading models in the background…";
+      const job = $("#ob-mem-job"); job.hidden = false; job.textContent = "Downloading models in the background…";
       // let it run in the background; the Memory ▸ Setup tab shows live progress.
       sysNote("downloading memory models — track progress in <b>Memory ▸ Setup</b>.");
     } else {
