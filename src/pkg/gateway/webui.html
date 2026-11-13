@@ -2807,7 +2807,7 @@ f.addEventListener("submit", e => {
    Non-tool text is rendered as markdown as before. */
 const TV_CALL = "⏺", TV_RESULT = "⎿", TV_ERR = "✗";
 function renderAssistantHTML(src, tools) {
-  const lines = String(src).split("\n");
+  const lines = String(src).replace(/\r\n?|\u2028|\u2029/g, "\n").split("\n");
   const out = [];
   let buf = [], cardIdx = 0;
   const strip = ln => ln.replace(/^\s+/, "");
@@ -2908,7 +2908,12 @@ function renderMarkdown(src) {
                   (_, t, u) => '<a href="' + esc(u) + '" target="_blank" rel="noopener">' + t + "</a>");
     return s;
   };
-  const lines = String(src).split("\n");
+  /* One line terminator. In a JS regex "." stops at \r, U+2028 and U+2029,
+     so on CRLF text (the Delphi build's sLineBreak, a model on Windows)
+     "## Title\r" failed the heading test below while still stopping a
+     paragraph -- the paragraph loop took no line, i never moved, and the
+     tab froze pushing empty paragraphs. Same for a "```lang\r" fence. */
+  const lines = String(src).replace(/\r\n?|\u2028|\u2029/g, "\n").split("\n");
   const out = [];
   let i = 0;
   while (i < lines.length) {
@@ -2949,7 +2954,10 @@ function renderMarkdown(src) {
       continue;
     }
     if (/^\s*$/.test(ln)) { i++; continue; }
-    const para = [];
+    /* The current line failed every block test above, so it is paragraph
+       text: take it unconditionally. That alone guarantees the loop moves,
+       whatever a future block test and these stop tests disagree on. */
+    const para = [lines[i++]];
     while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^```/.test(lines[i]) &&
            !/^#{1,6}\s/.test(lines[i]) && !/^\s*[-*+]\s+/.test(lines[i]) &&
            !/^\s*\d+\.\s+/.test(lines[i]) && !/^>\s?/.test(lines[i])) {
