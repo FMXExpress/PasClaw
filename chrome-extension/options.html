@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PasClaw Settings</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="options">
+  <main>
+    <h1><span class="logo"><span class="blue">Pas</span><span class="red">Claw</span></span> for Chrome</h1>
+    <p class="mut">Connects to a running <code>pasclaw gateway</code> (or <code>pasclaw serve</code>, or the Docker image).</p>
+
+    <form id="form" class="card">
+      <label for="gatewayUrl">Gateway URL</label>
+      <input id="gatewayUrl" type="url" placeholder="http://127.0.0.1:8088" required>
+      <p class="hint">Loopback addresses work out of the box. Chrome asks once for access to any other host.</p>
+
+      <label for="token">Gateway token</label>
+      <div class="row">
+        <input id="token" type="password" placeholder="PASCLAW_GATEWAY_TOKEN (optional)" autocomplete="off">
+        <button type="button" id="show" class="btn">Show</button>
+      </div>
+      <p class="hint">Needed when the gateway sets <code>PASCLAW_GATEWAY_TOKEN</code> / <code>gateway.token</code>, and recommended for any gateway that is not on this machine. Stored in this browser profile only.</p>
+
+      <label for="pageCharLimit">Page text limit (characters)</label>
+      <input id="pageCharLimit" type="number" min="1000" max="200000" step="1000">
+      <p class="hint">How much of a page is attached when <strong>Page</strong> is on. Long pages cost tokens on every turn.</p>
+
+      <label class="check"><input id="serverHistory" type="checkbox">
+        <span>Let PasClaw hold the conversation <span class="mut">(<code>session_context</code>: only new turns are sent; the chat appears in <code>pasclaw session list</code> and can be resumed from the CLI)</span></span>
+      </label>
+
+      <div class="buttons">
+        <button type="submit" class="btn">Save</button>
+        <button type="button" id="test" class="btn">Test connection</button>
+      </div>
+      <div id="result" role="status"></div>
+    </form>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

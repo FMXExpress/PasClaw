@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PasClaw</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="panel">
+  <header class="bar">
+    <div class="logo"><span class="blue">Pas</span><span class="red">Claw</span></div>
+    <span id="status" class="status" title="Checking gateway…"><span class="dot"></span><span id="status-text">…</span></span>
+    <nav class="tabs" role="tablist">
+      <button role="tab" id="tab-chat" class="active" aria-selected="true">Chat</button>
+      <button role="tab" id="tab-web" aria-selected="false">Web UI</button>
+    </nav>
+    <button id="btn-new" class="icon-btn" title="New chat">＋</button>
+    <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
+  </header>
+
+  <section id="view-chat" class="view">
+    <div id="log" class="log" aria-live="polite">
+      <div id="empty" class="empty">
+        <p class="big">Ask your PasClaw agent anything.</p>
+        <p>Turn on <strong>Page</strong> to hand it the tab you are reading, or right-click a selection and choose <em>Ask PasClaw</em>.</p>
+      </div>
+    </div>
+
+    <form id="composer" class="composer" autocomplete="off">
+      <div class="ctx-row">
+        <button type="button" id="btn-page" class="chip" aria-pressed="false" title="Attach the active tab's text to your next message">📄 Page</button>
+        <span id="page-info" class="page-info"></span>
+        <button type="button" id="btn-grant" class="chip warn" hidden>Allow access to this site</button>
+      </div>
+      <textarea id="input" rows="3" placeholder="Message PasClaw…  (Enter to send, Shift+Enter for a new line)"></textarea>
+      <div class="send-row">
+        <select id="mode" title="Plan mode asks the agent to plan without changing anything">
+          <option value="build">Build</option>
+          <option value="plan">Plan</option>
+        </select>
+        <select id="model" title="Model"><option value="">Gateway default</option></select>
+        <span class="spacer"></span>
+        <button type="submit" id="btn-send" class="primary">Send</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="view-web" class="view" hidden>
+    <div class="web-bar">
+      <span class="mut" id="web-url"></span>
+      <span class="spacer"></span>
+      <button id="btn-reload" class="icon-btn" title="Reload">⟳</button>
+      <button id="btn-open-tab" class="icon-btn" title="Open in a tab">↗</button>
+    </div>
+    <iframe id="webui" title="PasClaw web UI"></iframe>
+  </section>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
