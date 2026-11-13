@@ -38,6 +38,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/version` | GET | Version + build metadata. |
 | `/v1/status` | GET | Default provider/model + provider, MCP, cron, skill, tool counts. |
 | `/v1/tools` | GET | Registered tool descriptors. |
+| `/v1/context` | POST | What the next `/v1/chat/completions` turn puts in front of the model, by part — system prompt sections, tool schemas (built-in / MCP), messages — as token estimates. Takes the chat request's body. See [below](#v1context--the-context-breakdown). |
 | `/v1/mcp` | GET | Configured MCP servers (`name`, `cmd`, `args`, `enabled`). |
 | `/v1/cron` | GET | Cron entries (`id`, `spec`, `skill`, `args`, `channel_*`, `enabled`). |
 | `/v1/skills` | GET | Installed skills (`name`, `description`, `kind`, `path`, `dir`). |
@@ -62,7 +63,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 
 | Tab | Purpose |
 |---|---|
-| **Chat** | SSE-streamed conversation. Tool activity surfaced inline. LocalStorage session history. |
+| **Chat** | SSE-streamed conversation. Tool activity surfaced inline. LocalStorage session history. The **◔** toolbar button shows how much context the conversation uses; click it (or type `/context`) for the breakdown. |
 | **Memory** | Browse and read `workspace/memory/*.md`. |
 | **Files** | Browse `$PASCLAW_HOME`. Read individual files up to 256 KB. |
 | **MCP** | List configured MCP servers and their tool counts. |
@@ -203,6 +204,48 @@ So every message is also appended, once, to `<id>.log.jsonl` beside the session:
 Windowed because the record grows without bound: the desktop measured 10.4 s and 2.1 MB to paint a 1500-turn conversation in one go, against 94 ms and 369 DOM nodes for a 120-message window. Page backwards by walking `offset` down from `total`; `limit` is capped at 2000.
 
 `?full=1` falls back to the live transcript for a session recorded before the log existed, so old sessions still answer. Deleting a session deletes its record with it.
+
+## `/v1/context` — the context breakdown
+
+What the next chat turn puts in front of the model, part by part: the web UI's **Context** panel (the ◔ button in the chat toolbar, or `/context`), and the equivalent of Claude Code's `/context`.
+
+Send it the body you would send `/v1/chat/completions` — `model`, `mode`, `messages`, `system`, `no_tools`, `session_context` with `X-PasClaw-Session` — and it assembles that request with the chat route's own code (the same message parsing, stored-turn merge, system-prompt composition, tool list and turn clock) without calling a model. `messages` may be empty: a new chat is all system prompt and tools.
+
+```bash
+curl -s -X POST http://127.0.0.1:8088/v1/context \
+  -H 'content-type: application/json' \
+  -d '{"mode":"build","messages":[{"role":"user","content":"hello"}]}'
+```
+
+```json
+{
+  "model": "claude-sonnet", "mode": "build", "estimate": "chars/4",
+  "total_tokens": 5971,
+  "window": { "tokens": 80000, "source": "compaction" },
+  "free_tokens": 74029,
+  "compaction": { "enabled": true, "threshold_tokens": 80000, "counted_tokens": 2252, "remaining_tokens": 77748 },
+  "categories": [
+    { "id": "system",   "label": "System prompt",  "tokens": 1898 },
+    { "id": "memory",   "label": "Memory",         "tokens": 25 },
+    { "id": "project",  "label": "Project rules",  "tokens": 112 },
+    { "id": "skills",   "label": "Skills",         "tokens": 175 },
+    { "id": "tools",    "label": "Built-in tools", "tokens": 3719 },
+    { "id": "mcp",      "label": "MCP tools",      "tokens": 0 },
+    { "id": "messages", "label": "Messages",       "tokens": 42 }
+  ],
+  "system":   { "source": "pasclaw", "tokens": 2210, "sections": [ { "id": "identity", "title": "Identity", "group": "system", "tokens": 258 }, … ] },
+  "tools":    { "enabled": true, "tokens": 3719, "count": 19, "deferred": 23, "deferred_names": [ … ], "items": [ { "name": "read_file", "server": "", "tokens": 214 }, … ] },
+  "messages": { "count": 1, "from_session": 0, "tokens": 42, "by_role": { … }, "largest": [ { "index": 0, "role": "user", "tokens": 42, "preview": "hello" } ] }
+}
+```
+
+- **Estimates.** Every count is about 4 characters per token, the rule compaction itself uses — right for "which part is big", not your provider's exact bill.
+- **Categories** add up to `total_tokens` and come in a fixed order with stable ids. Memory is `MEMORY.md` and the remembered facts; project rules are `AGENTS.md` and the `instructions` files.
+- **`window`** is what the total is drawn against: the request's `context_window`, else the config's `context_window` (source `"request"` / `"config"`), else the compaction threshold (`"compaction"`), since PasClaw has no per-model table of window sizes.
+- **`compaction.counted_tokens`** is the exact number the compaction trigger measures — system prompt and message bodies, not tool schemas or the turn clock — so `remaining_tokens` is how far the conversation is from being summarised.
+- **A caller's own system message** replaces PasClaw's prompt (as on the chat route): `system.source` is `"caller"` and it is counted as the system prompt, not as a message.
+- **`text: true`** adds each section's `text`, so a reader can see what the memory or rules section actually holds.
+- Deferred tools (`tools.deferred_names`) send no schema until `tool_search` reveals them; their names cost a few tokens in the prompt's deferred-tools section.
 
 ## `/v1/responses` — OpenAI Responses API
 

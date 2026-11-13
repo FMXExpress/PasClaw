@@ -135,6 +135,69 @@
     border-color:var(--cyan);box-shadow:var(--glow-cyan)}
   .chat-params .num-pf{flex:1;min-width:7rem}
   .chat-params .preset-pf{flex:1;min-width:8rem}
+  /* ===== Context breakdown (/v1/context) =====
+     One whole (the model's window, or the compaction point when the window
+     is not known) split into parts: a thin segmented bar, with the names,
+     token counts and shares in the list beneath it. Categorical slots in a
+     fixed order, validated for the dark surface and, for the inverted "lite"
+     theme, the light steps on counter-inverted marks (like images). */
+  .ctx-panel,#ctx-toggle{--ctx-system:#3987e5;--ctx-memory:#d95926;--ctx-project:#199e70;
+    --ctx-skills:#c98500;--ctx-tools:#d55181;--ctx-mcp:#008300;--ctx-messages:#9085e9;
+    --ctx-free:rgba(255,255,255,.12)}
+  html.lite .ctx-panel,html.lite #ctx-toggle{--ctx-system:#2a78d6;--ctx-memory:#eb6834;
+    --ctx-project:#1baf7a;--ctx-skills:#eda100;--ctx-tools:#e87ba4;--ctx-mcp:#008300;
+    --ctx-messages:#6250d6}
+  html.lite .ctx-seg:not(.free),html.lite .ctx-sw:not(.free){filter:invert(1) hue-rotate(180deg)}
+  #ctx-toggle{white-space:nowrap}
+  #ctx-toggle.on{background:rgba(32,246,255,.12);box-shadow:var(--glow-cyan)}
+  #ctx-toggle .ctx-btn-n{color:var(--fg);font-variant-numeric:tabular-nums}
+  .ctx-panel{display:flex;flex-direction:column;gap:.55rem;padding:.6rem .7rem;
+    border-bottom:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4);
+    max-height:55vh;overflow:auto}
+  .ctx-panel[hidden]{display:none}
+  .ctx-head{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
+  .ctx-title{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--mut)}
+  .ctx-total{font-size:13px;color:var(--fg);font-variant-numeric:tabular-nums}
+  .ctx-total .ctx-of{color:var(--mut);font-size:12px}
+  .ctx-win{margin-left:auto;font-size:10.5px;color:var(--mut);display:flex;align-items:center;gap:.35rem}
+  .ctx-win input{width:7.5rem;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
+    border:1px solid rgba(32,246,255,.3);border-radius:8px;padding:.25rem .45rem;font:inherit;
+    font-size:12px;outline:none}
+  .ctx-win input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  .ctx-barwrap{position:relative;padding:4px 0}
+  .ctx-bar{display:flex;gap:2px;height:8px;border-radius:999px;overflow:hidden}
+  .ctx-seg{height:100%;flex-basis:0;min-width:2px}
+  .ctx-seg.free{background:var(--ctx-free);min-width:0}
+  .ctx-mark{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--fg);
+    border-radius:1px;pointer-events:none}
+  .ctx-legend{list-style:none;margin:0;padding:0;display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(min(14rem,100%),1fr));gap:.1rem 1.2rem}
+  .ctx-legend li,.ctx-row{display:flex;align-items:center;gap:.45rem;font-size:12px;
+    padding:.12rem 0;min-width:0}
+  .ctx-legend .nm,.ctx-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ctx-sw{width:10px;height:10px;border-radius:3px;flex:none}
+  .ctx-sw.free{background:transparent;box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
+  .ctx-legend .n,.ctx-row .n{margin-left:auto;color:var(--fg);font-variant-numeric:tabular-nums;
+    white-space:nowrap}
+  .ctx-legend .p{color:var(--mut);min-width:3.2rem;text-align:right;font-variant-numeric:tabular-nums}
+  .ctx-note,.ctx-foot{font-size:11px;color:var(--mut);line-height:1.5}
+  .ctx-note b{color:var(--fg);font-weight:normal}
+  .ctx-more>summary{cursor:pointer;font-size:10.5px;color:var(--mut);text-transform:uppercase;
+    letter-spacing:.07em;padding:.15rem 0}
+  .ctx-more>summary .n{text-transform:none;letter-spacing:normal;color:var(--fg);margin-left:.4rem}
+  .ctx-rows{display:flex;flex-direction:column;margin:.25rem 0 .35rem .2rem}
+  .ctx-sub{font-size:10.5px;color:var(--mut);margin:.35rem 0 .1rem;text-transform:uppercase;
+    letter-spacing:.06em}
+  .ctx-sec>summary{list-style:none;cursor:pointer}
+  .ctx-sec>summary::-webkit-details-marker{display:none}
+  .ctx-sec>summary .ctx-row:hover{background:rgba(32,246,255,.06)}
+  .ctx-sec pre{max-height:14rem;overflow:auto;white-space:pre-wrap;word-break:break-word;
+    font-size:11px;margin:.2rem 0 .45rem 1.2rem;padding:.45rem .55rem;border-radius:6px;
+    background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.08);color:var(--fg)}
+  .ctx-role{color:var(--mut);min-width:4.6rem}
+  .ctx-tip{position:fixed;z-index:70;pointer-events:none;background:var(--panel);
+    border:1px solid rgba(255,255,255,.16);border-radius:6px;padding:.25rem .5rem;
+    font-size:11.5px;color:var(--fg);box-shadow:0 8px 24px rgba(0,0,0,.4);white-space:nowrap}
   #log{flex:1;overflow:auto;padding:.85rem;display:flex;flex-direction:column;gap:.55rem;
     scrollbar-color:var(--mag) transparent}
   .row{display:flex;gap:.6rem;align-items:flex-start;animation:rise .18s ease-out}
@@ -634,6 +697,8 @@
       <div class="chat-toolbar">
         <button class="icon-btn" id="sidebar-toggle" title="Collapse / show the session list">☰</button>
         <button class="icon-btn" id="params-toggle" title="Per-chat parameters">⚙ Params</button>
+        <button class="icon-btn" id="ctx-toggle" type="button"
+          title="Context: what the next turn puts in front of the model (estimated)">◔ <span class="ctx-btn-n">Context</span></button>
         <button class="icon-btn" id="tools-toggle" title="Expand or collapse tool-call details (full args + results) in the transcript">🔧 details ▾</button>
         <span id="params-summary" class="params-summary"></span>
         <span id="sandbox-chip" class="sandbox-chip" style="margin-left:auto" hidden></span>
@@ -663,6 +728,22 @@
           </label>
           <button class="icon-btn" id="p-reset" title="Clear all per-chat parameters">reset</button>
         </div>
+      </div>
+      <div id="ctx-panel" class="ctx-panel" hidden>
+        <div class="ctx-head">
+          <span class="ctx-title">Context</span>
+          <span id="ctx-total" class="ctx-total">counting…</span>
+          <label class="ctx-win" title="The model's context window in tokens. Empty = the gateway's context_window setting, else the compaction point.">window
+            <input id="ctx-window" type="number" min="1000" step="1000" placeholder="auto"></label>
+          <button class="icon-btn" id="ctx-refresh" type="button" title="Count again">↻</button>
+        </div>
+        <div class="ctx-barwrap"><div id="ctx-bar" class="ctx-bar" role="img"></div></div>
+        <ul id="ctx-legend" class="ctx-legend"></ul>
+        <div id="ctx-note" class="ctx-note"></div>
+        <details class="ctx-more" data-k="system"><summary>System prompt, by section<span class="n" id="ctx-sys-n"></span></summary><div id="ctx-sys"></div></details>
+        <details class="ctx-more" data-k="tools"><summary>Tools<span class="n" id="ctx-tools-n"></span></summary><div id="ctx-tools"></div></details>
+        <details class="ctx-more" data-k="messages"><summary>Messages<span class="n" id="ctx-msgs-n"></span></summary><div id="ctx-msgs"></div></details>
+        <div class="ctx-foot">Estimated at about 4 characters per token, the rule PasClaw's compaction uses; your provider's own count will differ somewhat. Counts what the next message would send, before your new text.</div>
       </div>
       <div id="log"></div>
       <form class="send" id="f">
@@ -1466,6 +1547,8 @@ function renderSessions() {
 function renderActive() {
   clearLog();
   activeTurns.forEach((t, i) => renderTurn(t.role, t.text, i));
+  /* Another conversation (or a cleared one): its context differs. */
+  if (typeof ctxRefreshSoon === "function") ctxRefreshSoon();
 }
 
 /* Switch to a stored session: pull its transcript and show it. */
@@ -1735,6 +1818,32 @@ function setStreaming(on) {
   streaming = on;
   b.textContent = on ? "Stop" : "Send";
   b.disabled = false;
+  /* A finished turn changed the conversation: recount the context. */
+  if (!on && typeof ctxRefreshSoon === "function") ctxRefreshSoon();
+}
+
+/* The body of the next /v1/chat/completions request, minus `stream`.
+   One function so the Context panel (/v1/context) counts exactly what the
+   next turn will send. */
+function chatRequestBody() {
+  let history = activeTurns.filter(t => t.role === "u" || t.role === "a")
+                          .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
+  const body = {};
+  /* Model from the header picker, if the operator chose one. Empty value
+     means "let the gateway use FCfg.DefaultModel" -- the historical default. */
+  const sel = $("#model-sel");
+  if (sel && sel.value) body.model = sel.value;
+  /* PR #290: Plan/Build mode. Send the current toggle on every chat
+     request. The gateway's ParseModeFromBody picks the field out of
+     the body; absent / unknown values default to "build" so OpenAI
+     clients that don't know about plan keep working. */
+  body.mode = currentMode;
+  /* Per-chat parameters: a leading system message (the gateway lets a
+     client system prompt win over its default), plus temperature /
+     max_tokens, all honoured by /v1/chat/completions. */
+  history = applyChatParams(body, history);
+  body.messages = history;
+  return body;
 }
 
 /* Stream one assistant reply for the active session's current history.
@@ -1782,23 +1891,7 @@ async function streamAssistant() {
   /* Use /v1/chat/completions with stream:true so tool calls + results
      surface as content deltas (the gateway emits ⏺/⎿ markers per
      PasClaw.Gateway.ToolView). */
-  let history = activeTurns.filter(t => t.role === "u" || t.role === "a")
-                          .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
-  const body = { stream: true };
-  /* Model from the header picker, if the operator chose one. Empty value
-     means "let the gateway use FCfg.DefaultModel" -- the historical default. */
-  const sel = $("#model-sel");
-  if (sel && sel.value) body.model = sel.value;
-  /* PR #290: Plan/Build mode. Send the current toggle on every chat
-     request. The gateway's ParseModeFromBody picks the field out of
-     the body; absent / unknown values default to "build" so OpenAI
-     clients that don't know about plan keep working. */
-  body.mode = currentMode;
-  /* Per-chat parameters: a leading system message (the gateway lets a
-     client system prompt win over its default), plus temperature /
-     max_tokens, all honoured by /v1/chat/completions. */
-  history = applyChatParams(body, history);
-  body.messages = history;
+  const body = Object.assign({ stream: true }, chatRequestBody());
 
   try {
     const r = await gwFetch("/v1/chat/completions", {
@@ -2351,9 +2444,11 @@ const SLASH = {
       "/model [name] — list models, or set the default (restart to apply)<br>" +
       "/provider [name] — list providers, or set the default (restart to apply)<br>" +
       "/tools — list registered tools<br>" +
+      "/context — what the next turn's context is made of<br>" +
       "/stats, /files, /memory, /logs, /settings, /mcp, /cron, /skills — open that tab");
   },
   clear() { activeTurns = []; activeSessionId = null; renderActive(); },
+  context() { openContextPanel(); },
   new() { const b = $("#session-new"); if (b) b.click(); },
   async remember(arg) {
     const text = (arg || "").trim();
@@ -2544,7 +2639,8 @@ const SLASH_DESC = {
   help: "show this list", clear: "clear this chat", new: "start a new session",
   remember: "<fact> — store a durable memory fact", forget: "<id> — delete a fact",
   model: "[name] — list models / set default", provider: "[name] — list providers / set default",
-  tools: "list registered tools", stats: "open the Stats tab", files: "open the Files tab",
+  tools: "list registered tools", context: "show what the context is made of",
+  stats: "open the Stats tab", files: "open the Files tab",
   memory: "open the Memory tab", logs: "open the Logs tab", settings: "open the Settings tab",
   mcp: "open the MCP tab", cron: "open the Cron tab", skills: "open the Skills tab",
   onboard: "set up a model provider + API key",
@@ -2960,6 +3056,8 @@ function initMode() {
     currentMode = order[(order.indexOf(currentMode) + 1) % order.length];
     try { localStorage.setItem(MODE_KEY, currentMode); } catch {}
     applyModeUI();
+    /* Each mode adds its own directive to the prompt. */
+    if (typeof ctxRefreshSoon === "function") ctxRefreshSoon();
   });
 }
 
@@ -5292,12 +5390,300 @@ async function maybeOnboard() {
   } catch (_) { /* offline / auth wall -- don't force the wizard */ }
 }
 
+/* ===== Context breakdown =====
+   What the next turn puts in front of the model, by part, from POST
+   /v1/context -- the chat request's own body (chatRequestBody), assembled
+   by the gateway with the chat route's own code, nothing sent to a model.
+   The toolbar button always shows the running total; the panel draws it
+   against the model's window (or the compaction point when the window is
+   not known) and lists each part. Recounted after every turn, on a session
+   switch, and when the mode, model or system prompt changes. */
+const CTX_WIN_KEY = "pasclaw.ctxwindow.v1";
+const CTX_CATS = ["system", "memory", "project", "skills", "tools", "mcp", "messages"];
+let ctxTimer = null, ctxSeq = 0, ctxLast = null;
+
+function ctxWindows() {
+  try { return JSON.parse(localStorage.getItem(CTX_WIN_KEY) || "{}") || {}; } catch { return {}; }
+}
+function ctxModelKey() { const sel = $("#model-sel"); return (sel && sel.value) || "(default)"; }
+function fmtTok(n) {
+  n = Number(n) || 0;
+  if (n < 1000) return String(n);
+  if (n < 10000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  if (n < 1000000) return Math.round(n / 1000) + "k";
+  return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+}
+function ctxPct(n, of) {
+  if (!of) return "";
+  const p = n * 100 / of;
+  if (p > 0 && p < 0.1) return "<0.1%";
+  return (p < 10 ? p.toFixed(1).replace(/\.0$/, "") : Math.round(p)) + "%";
+}
+function ctxPanelOpen() { const p = $("#ctx-panel"); return !!p && !p.hidden; }
+
+function ctxRefreshSoon() {
+  clearTimeout(ctxTimer);
+  ctxTimer = setTimeout(ctxRefresh, 250);
+}
+
+async function ctxRefresh() {
+  const seq = ++ctxSeq;
+  const body = chatRequestBody();
+  /* Section text only when the panel is there to show it. */
+  if (ctxPanelOpen()) body.text = true;
+  const w = parseInt(ctxWindows()[ctxModelKey()], 10);
+  if (w > 0) body.context_window = w;
+  let rep;
+  try {
+    const r = await gwFetch("/v1/context", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(body), noPrompt: true
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    rep = await r.json();
+  } catch (e) {
+    if (seq === ctxSeq) ctxFailed(e);
+    return;
+  }
+  if (seq !== ctxSeq) return;          // a newer count is on its way
+  ctxLast = rep;
+  renderContext(rep);
+}
+
+function ctxFailed(e) {
+  const n = $("#ctx-toggle .ctx-btn-n");
+  if (n) n.textContent = "Context";
+  const t = $("#ctx-total");
+  if (t) t.textContent = "couldn't count (" + ((e && e.message) || "error") + ")";
+}
+
+function ctxCatColor(id) { return "var(--ctx-" + id + ")"; }
+
+function renderContext(rep) {
+  const total = rep.total_tokens || 0;
+  const win = (rep.window && rep.window.tokens) || 0;
+  const src = (rep.window && rep.window.source) || "unknown";
+  const btnN = $("#ctx-toggle .ctx-btn-n");
+  if (btnN) btnN.textContent = fmtTok(total) + (win ? " · " + ctxPct(total, win) : "");
+  const tb = $("#ctx-toggle");
+  if (tb) tb.title = "Context: about " + total.toLocaleString() + " tokens" +
+    (win ? " of " + win.toLocaleString() + (src === "compaction" ? " (the compaction point)" : "") : "") +
+    " — what the next turn puts in front of the model. Click for the breakdown.";
+  if (!ctxPanelOpen()) return;
+
+  const cats = (rep.categories || []).filter(c => c.tokens > 0);
+  const whole = Math.max(win, total);
+  const free = win > total ? win - total : 0;
+
+  /* Header: the total against the whole. */
+  const tot = $("#ctx-total");
+  if (tot) tot.innerHTML = "<b>" + fmtTok(total) + "</b>" +
+    (win ? ' <span class="ctx-of">of ' + fmtTok(win) + " tokens · " + ctxPct(total, win) +
+           (src === "compaction" ? " of the compaction point" : "") + "</span>"
+         : ' <span class="ctx-of">tokens</span>');
+
+  /* The bar: one block per part, then the free space. */
+  const bar = $("#ctx-bar");
+  if (bar) {
+    const parts = cats.map(c =>
+      '<div class="ctx-seg" data-tip="' + escapeHtml(c.label + ": " + c.tokens.toLocaleString() +
+        " tokens" + (whole ? " (" + ctxPct(c.tokens, whole) + ")" : "")) +
+      '" style="flex-grow:' + c.tokens + ';background:' + ctxCatColor(c.id) + '"></div>');
+    if (free > 0)
+      parts.push('<div class="ctx-seg free" data-tip="' + escapeHtml("Free: " +
+        free.toLocaleString() + " tokens (" + ctxPct(free, whole) + ")") +
+        '" style="flex-grow:' + free + '"></div>');
+    bar.innerHTML = parts.join("");
+    bar.setAttribute("aria-label", "Context: " + cats.map(c => c.label + " " +
+      c.tokens.toLocaleString() + " tokens").join(", ") +
+      (free ? ", free " + free.toLocaleString() + " tokens" : ""));
+    /* Where compaction starts, when the bar is a real window bigger than it. */
+    const wrap = bar.parentElement;
+    wrap.querySelectorAll(".ctx-mark").forEach(x => x.remove());
+    const cmp = rep.compaction || {};
+    if (src !== "compaction" && cmp.enabled && cmp.threshold_tokens > 0 &&
+        cmp.threshold_tokens < whole) {
+      const mk = document.createElement("div");
+      mk.className = "ctx-mark";
+      mk.style.left = (cmp.threshold_tokens * 100 / whole) + "%";
+      wrap.appendChild(mk);
+    }
+  }
+
+  /* Legend: the names, figures and shares the bar does not print. */
+  const leg = $("#ctx-legend");
+  if (leg) {
+    const rows = cats.map(c =>
+      '<li><span class="ctx-sw" style="background:' + ctxCatColor(c.id) + '"></span>' +
+      '<span class="nm">' + escapeHtml(c.label) + '</span><span class="n">' +
+      c.tokens.toLocaleString() + '</span><span class="p">' + ctxPct(c.tokens, whole) + '</span></li>');
+    if (free > 0)
+      rows.push('<li><span class="ctx-sw free"></span><span class="nm">Free space</span>' +
+        '<span class="n">' + free.toLocaleString() + '</span><span class="p">' +
+        ctxPct(free, whole) + '</span></li>');
+    leg.innerHTML = rows.join("");
+  }
+
+  /* What the bar is drawn against, and how far compaction is. */
+  const note = $("#ctx-note");
+  if (note) {
+    const cmp = rep.compaction || {};
+    const ticked = !!(bar && bar.parentElement.querySelector(".ctx-mark"));
+    let t = "";
+    if (src === "compaction")
+      t = "No context window is set for this model, so the bar is drawn against the " +
+          "compaction point (<b>" + fmtTok(win) + "</b>). Put the model's window in the box above " +
+          "(or <code>context_window</code> in config.json) to see all of it. ";
+    else if (src === "unknown")
+      t = "No context window is set for this model and compaction is off. ";
+    if (cmp.enabled)
+      t += "PasClaw summarises older messages once the system prompt and messages pass <b>" +
+           fmtTok(cmp.threshold_tokens) + "</b>" + (ticked ? " (the tick on the bar)" : "") +
+           ": <b>" + fmtTok(cmp.counted_tokens) + "</b> counted now, " +
+           (cmp.remaining_tokens > 0 ? "<b>" + fmtTok(cmp.remaining_tokens) + "</b> to go."
+                                     : "<b>the next turn compacts</b>.") +
+           " Tool schemas do not count toward it.";
+    note.innerHTML = t;
+  }
+
+  renderContextDetails(rep);
+}
+
+function renderContextDetails(rep) {
+  const row = (sw, name, n, extra) =>
+    '<div class="ctx-row">' + (sw ? '<span class="ctx-sw" style="background:' + sw + '"></span>' : "") +
+    (extra || "") + '<span class="nm">' + escapeHtml(name) + '</span><span class="n">' +
+    Number(n).toLocaleString() + '</span></div>';
+
+  /* System prompt, section by section; open one to read it. Keep the
+     sections the reader opened open across recounts. */
+  const sys = rep.system || {}, sysEl = $("#ctx-sys");
+  const sn = $("#ctx-sys-n");
+  if (sn) sn.textContent = (sys.tokens || 0).toLocaleString() +
+    (sys.source === "caller" ? " · yours" : "");
+  if (sysEl) {
+    const open = new Set([...sysEl.querySelectorAll("details.ctx-sec[open]")].map(d => d.dataset.id));
+    const secs = sys.sections || [];
+    sysEl.innerHTML = '<div class="ctx-rows">' + (sys.source === "caller"
+      ? '<div class="ctx-sub">Your system prompt replaces PasClaw’s</div>' : "") +
+      secs.map((x, i) => {
+        const id = x.id + ":" + i;
+        return '<details class="ctx-sec" data-id="' + escapeHtml(id) + '"' +
+          (open.has(id) ? " open" : "") + '><summary>' +
+          row(ctxCatColor(x.group || "system"), x.title || x.id, x.tokens) + '</summary>' +
+          (typeof x.text === "string" ? "<pre>" + escapeHtml(x.text) + "</pre>" : "") + '</details>';
+      }).join("") + '</div>';
+  }
+
+  /* Tools: built-in, then each MCP server; biggest schemas first. */
+  const tl = rep.tools || {}, toolsEl = $("#ctx-tools");
+  const tn = $("#ctx-tools-n");
+  if (tn) tn.textContent = tl.enabled
+    ? (tl.tokens || 0).toLocaleString() + " · " + (tl.count || 0) + " sent"
+    : "off for this chat";
+  if (toolsEl) {
+    let h = '<div class="ctx-rows">';
+    if (!tl.enabled) h += '<div class="ctx-sub">No tools are offered on this chat</div>';
+    const groups = {};
+    (tl.items || []).forEach(t => { (groups[t.server || ""] = groups[t.server || ""] || []).push(t); });
+    Object.keys(groups).sort((a, b) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))
+      .forEach(g => {
+        const items = groups[g].sort((a, b) => b.tokens - a.tokens);
+        const sum = items.reduce((n, t) => n + t.tokens, 0);
+        h += '<div class="ctx-sub">' + (g ? "MCP · " + escapeHtml(g) : "Built-in") + " · " +
+          items.length + " · " + sum.toLocaleString() + "</div>";
+        h += items.map(t => row(ctxCatColor(g ? "mcp" : "tools"), t.name, t.tokens)).join("");
+      });
+    if (tl.deferred > 0)
+      h += '<div class="ctx-sub">' + tl.deferred + " more behind tool_search</div>" +
+        '<div class="ctx-note">Their schemas are sent only once the model searches for them; ' +
+        "until then each costs its name in the system prompt: " +
+        escapeHtml((tl.deferred_names || []).join(", ")) + "</div>";
+    toolsEl.innerHTML = h + "</div>";
+  }
+
+  /* Messages: by role, then the biggest. */
+  const ms = rep.messages || {}, msgsEl = $("#ctx-msgs");
+  const mn = $("#ctx-msgs-n");
+  if (mn) mn.textContent = (ms.tokens || 0).toLocaleString() + " · " + (ms.count || 0);
+  if (msgsEl) {
+    let h = '<div class="ctx-rows">';
+    if (ms.from_session > 0)
+      h += '<div class="ctx-sub">' + ms.from_session + " stored on the server</div>";
+    const by = ms.by_role || {};
+    ["user", "assistant", "tool"].forEach(r => {
+      const x = by[r];
+      if (x && x.count) h += row(null, r + " · " + x.count, x.tokens);
+    });
+    const big = (ms.largest || []).filter(x => x.tokens > 0);
+    if (big.length) {
+      h += '<div class="ctx-sub">Largest</div>';
+      h += big.map(x => row(null, x.preview || "(empty)", x.tokens,
+        '<span class="ctx-role">' + escapeHtml(x.role) + "</span>")).join("");
+    }
+    if (!ms.count) h += '<div class="ctx-sub">No messages yet</div>';
+    msgsEl.innerHTML = h + "</div>";
+  }
+}
+
+function openContextPanel() {
+  const p = $("#ctx-panel"), t = $("#ctx-toggle");
+  if (!p) return;
+  p.hidden = false;
+  if (t) t.classList.add("on");
+  const total = $("#ctx-total");
+  if (total && !ctxLast) total.textContent = "counting…";
+  ctxRefresh();
+}
+
+function initContext() {
+  const p = $("#ctx-panel"), t = $("#ctx-toggle");
+  if (t) t.addEventListener("click", () => {
+    if (p && !p.hidden) { p.hidden = true; t.classList.remove("on"); }
+    else openContextPanel();
+  });
+  const rf = $("#ctx-refresh");
+  if (rf) rf.addEventListener("click", ctxRefresh);
+  const wi = $("#ctx-window");
+  const showWin = () => { if (wi) wi.value = ctxWindows()[ctxModelKey()] || ""; };
+  showWin();
+  if (wi) wi.addEventListener("change", () => {
+    const all = ctxWindows(), v = parseInt(wi.value, 10);
+    if (v > 0) all[ctxModelKey()] = v; else delete all[ctxModelKey()];
+    try { localStorage.setItem(CTX_WIN_KEY, JSON.stringify(all)); } catch {}
+    ctxRefresh();
+  });
+  const sel = $("#model-sel");
+  if (sel) sel.addEventListener("change", () => { showWin(); ctxRefreshSoon(); });
+  const sys = $("#p-system");
+  if (sys) sys.addEventListener("input", ctxRefreshSoon);
+
+  /* Hover: each block's name, tokens and share. */
+  const bar = $("#ctx-bar");
+  let tip = null;
+  if (bar) {
+    bar.addEventListener("mousemove", e => {
+      const seg = e.target.closest(".ctx-seg");
+      if (!seg) { if (tip) tip.hidden = true; return; }
+      if (!tip) { tip = document.createElement("div"); tip.className = "ctx-tip"; document.body.appendChild(tip); }
+      tip.textContent = seg.dataset.tip || "";
+      tip.hidden = false;
+      const x = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+      tip.style.left = Math.max(8, x) + "px";
+      tip.style.top = (e.clientY + 14) + "px";
+    });
+    bar.addEventListener("mouseleave", () => { if (tip) tip.hidden = true; });
+  }
+  ctxRefreshSoon();
+}
+
 /* ===== Boot ===== */
 initTheme();
 initMode();
 initToolDetails();
 loadModels();
 initParams();
+initContext();
 // Restore the tab named in the URL hash (deep link / reload / bookmark).
 // No hash leaves the markup default (Chat) active untouched.
 if (location.hash.slice(1)) showTab(location.hash.slice(1));

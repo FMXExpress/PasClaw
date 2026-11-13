@@ -823,6 +823,7 @@ The gateway routes implemented in `src/pkg/gateway/` are:
 | `/v1/version` | `GET` | Version and build metadata. |
 | `/v1/status` | `GET` | Default provider/model plus provider, MCP, cron, skill, and tool counts. |
 | `/v1/tools` | `GET` | Registered tool descriptors. |
+| `/v1/context` | `POST` | Token-estimated breakdown of what the next chat turn sends the model (system prompt sections, tool schemas, messages); the web UI's Context panel. See [docs/gateway.md](docs/gateway.md#v1context--the-context-breakdown). |
 | `/v1/mcp` | `GET` | Configured MCP servers (`name`, `cmd`, `args`, `enabled`). |
 | `/v1/cron` | `GET` | Cron entries (`id`, `spec`, `skill`, `args`, `channel_*`, `enabled`). |
 | `/v1/skills` | `GET` | Installed skills (`name`, `description`, `kind`, `path`, `dir`). |

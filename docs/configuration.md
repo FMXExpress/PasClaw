@@ -250,6 +250,7 @@ There is no escape sequence for a literal `${UPPER}` string in a config value. W
 | `compaction.retain_budget_tokens` | `20000` | Recent history kept verbatim, by token budget. |
 | `compaction.recent_turns` | `8` | Floor: never keep fewer than this many recent messages. |
 | `compaction.summary_budget` | `800` | Token budget the summariser is told to stay under. |
+| `context_window` | `0` | The model's context window in tokens, for the context breakdown (`/v1/context`, the web UI's Context panel). `0` = not known: the breakdown is drawn against `compaction.threshold_tokens` instead. Display only. |
 | `allow_senders` | `[]` | Identity allowlist for inbound channel messages. See [Channels](./channels.md). |
 
 ## Sandbox

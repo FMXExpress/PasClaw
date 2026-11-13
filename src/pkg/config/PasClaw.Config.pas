@@ -861,6 +861,13 @@ type
        configured 0 keeps PasClaw on the built-in default so a future
        bump to the constant flows through without operator action. *)
     RelayWaitTimeoutMs: Integer;
+    (* The model's context window in tokens, for the gateway's context
+       breakdown (/v1/context, the web UI's Context panel). PasClaw has
+       no per-model table to look it up in, so 0 (the default) draws the
+       breakdown against the compaction threshold instead -- the point
+       the loop summarises the history, which is the limit PasClaw itself
+       acts on. Display only: nothing else reads it. *)
+    ContextWindow: Integer;
     (* On-by-default: when True, memory_search uses a hybrid keyword
        (FTS5 BM25) + vector (sqlite-vec ANN) index over
        workspace/memory/ files, fused via Reciprocal Rank Fusion.
@@ -1460,6 +1467,7 @@ begin
   DesktopToolsEnabled  := False; { off by default -- see the field comment: the desktop works without it. }
   AgentToolsEnabled    := False; { off by default -- standing agents are an opt-in autonomy step. }
   TeamsClaimLeaseMinutes := 120;
+  ContextWindow        := 0;     { 0 = unknown; the context breakdown uses the compaction threshold }
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
   MCPCompactResults := True;  { on by default: the conversion is refused unless the result is rectangular, all-scalar and genuinely shorter, so the failure mode is "no change" rather than a mangled result. Flip off if a server's rows must reach the model as literal JSON. }
   { Compaction defaults MUST match DefaultCompactOptions in
@@ -1837,6 +1845,8 @@ begin
       through and a fresh config stays tidy. }
     if RelayWaitTimeoutMs > 0 then
       Root.PutInt('relay_wait_timeout_ms', RelayWaitTimeoutMs);
+    if ContextWindow > 0 then
+      Root.PutInt('context_window', ContextWindow);
     { RenderMarkdown defaults to True; emit only when operator
       explicitly disabled it so they can flip it back via config.json
       and we round-trip correctly. }
@@ -2523,6 +2533,8 @@ begin
     AgentToolsEnabled   := Root.GetBool('agent_tools_enabled',   AgentToolsEnabled);
     RelayWaitTimeoutMs  := Integer(Root.GetInt('relay_wait_timeout_ms',
                                                 RelayWaitTimeoutMs));
+    ContextWindow       := Integer(Root.GetInt('context_window', ContextWindow));
+    if ContextWindow < 0 then ContextWindow := 0;
     MCPProgressiveDisclosure := Root.GetBool('mcp_progressive_disclosure',
                                               MCPProgressiveDisclosure);
     BuiltinProgressiveDisclosure := Root.GetBool('builtin_progressive_disclosure',
