@@ -9655,11 +9655,10 @@ begin
         on E: Exception do
         begin
           LogWarn('responses: ChatStream raised: %s', [E.Message]);
-          Resp.Content      := '';
-          SetLength(Resp.ToolCalls, 0);
+          { The whole record: Resp was never assigned, and its cache
+            counters go to the stats bucket below with the rest. }
+          Resp := Default(TLLMResponse);
           Resp.FinishReason := 'error';
-          Resp.Usage.InputTokens  := 0;
-          Resp.Usage.OutputTokens := 0;
           StreamErr := 'provider ChatStream raised: ' + E.Message;
           Failed    := True;
         end;
@@ -10280,6 +10279,9 @@ begin
         Exit;
       end;
 
+      { Cleared first: the handler below reports PassthroughResp.Usage
+        when the call raised before assigning it. }
+      PassthroughResp := Default(TLLMResponse);
       try
         { Empty-turn retry on the passthrough path -- same
           semantics as the tool-loop site, just delivered through

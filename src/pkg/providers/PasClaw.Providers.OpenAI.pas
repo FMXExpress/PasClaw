@@ -324,6 +324,10 @@ var
 begin
   Resp.Content := '';
   SetLength(Resp.ToolCalls, 0);
+  { Every counter, not only the ones this body happens to carry: a reply
+    with no `usage`, or one without prompt_tokens_details, must read as
+    zero and not as whatever Resp held before. }
+  Resp.Usage := Default(TUsageInfo);
   if Trim(Body) = '' then Exit;
   Obj := TJsonObject.Parse(Body);
   if Obj = nil then Exit;
@@ -415,6 +419,13 @@ var
   Resp: THTTPResult;
   Headers: TArray<THeaderPair>;
 begin
+  (* A function's record result is not cleared for it: the plain fields
+     (the token counters, the status) hold whatever the caller's memory
+     held. Everything below sets only what the reply carries, so a failed
+     call, or a reply with no cache figures, handed those leftovers back
+     as usage -- and the gateway and the CLI added them to the stored
+     totals, in the billions. Start from an empty response. *)
+  Result := Default(TLLMResponse);
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + FChatPath;
   { A caller can force server tools off for one call (the reranker sets this so
@@ -436,9 +447,7 @@ begin
     as soon as the body lands; the timeout is a ceiling, not a wait. }
   Resp := PostJSON(URL, Body, Headers, 600);
 
-  Result.Content := '';
   Result.StatusCode := Resp.StatusCode;
-  SetLength(Result.ToolCalls, 0);
   if (Resp.StatusCode >= 200) and (Resp.StatusCode < 300) then
     ParseOAIResponse(Resp.Body, Result)
   else

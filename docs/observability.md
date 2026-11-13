@@ -125,6 +125,10 @@ Per turn, accumulated into the session JSON's `meta.stats` block:
 
 `by_provider` / `by_model` rollups sum across every session in `$PASCLAW_HOME/workspace/sessions/`.
 
+The token counters are what the provider reported, nothing else: a turn the provider refused, or a reply that carried no usage, adds no tokens (it still counts as a turn), and the cache counters move only when the provider sent cache figures.
+
+Earlier builds could add leftover memory to these counters on a failed turn, or on any reply without cache figures — totals in the billions, or negative. Totals already saved are not corrected. To start clean, delete the gateway buckets, `$PASCLAW_HOME/workspace/sessions/_gateway_*.json`: they hold counters only, no conversation. A CLI or TUI session keeps its own counters in the `meta.stats` block of its session file.
+
 ### Gateway endpoint buckets
 
 The gateway's own stateless API endpoints (`/v1/chat`, `/v1/chat/completions`, `/v1/responses`) accumulate into per-endpoint synthetic session files (`_gateway_v1_chat.json`, `_gateway_v1_chat_completions.json`, `_gateway_v1_responses.json`) so calls driven through the web UI chat or any other OpenAI/Anthropic-compatible client also show up in `/v1/stats`. Each endpoint gets one bucket regardless of model — `Meta.Model` tracks the most recent request's model, so the `by_model` rollup reflects the latest call rather than per-call breakdown for those buckets. Concurrent gateway requests serialise the bucket update through a single critical section.

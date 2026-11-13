@@ -611,6 +611,11 @@ var
   RoundResp: TLLMResponse;
   Continuations, i: Integer;
 begin
+  (* A function's record result is not cleared for it, and the loop below
+     ADDS each round's usage to Result.Usage: left as it came, the sum
+     started from whatever the caller's memory held, and a refused call
+     returned that memory as its usage. Start from an empty response. *)
+  Result := Default(TLLMResponse);
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1/messages';
   { A caller can force server tools off for one call (the reranker sets this so
@@ -634,10 +639,6 @@ begin
     byte-identical to before. }
   Headers[2] := MakeHeader('anthropic-dangerous-direct-browser-access', 'true');
   {$ENDIF}
-
-  Result.Content := '';
-  Result.StatusCode := 0;
-  SetLength(Result.ToolCalls, 0);
 
   Continuations := 0;
   while True do
