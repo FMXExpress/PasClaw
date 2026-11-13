@@ -4149,9 +4149,17 @@ function fmtBytes(n) {
   return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + " " + units[i];
 }
 
+/* Only the newest request draws. The tab polls, and Reset totals asks
+   again the moment it is done: a poll sent just before the reset can
+   answer after that, with the totals from before it, and would put them
+   back on screen until the next poll. */
+let statsSeq = 0;
+
 async function refreshStats() {
+  const seq = ++statsSeq;
   try {
     const j = await (await gwFetch("/v1/stats")).json();
+    if (seq !== statsSeq) return;
     const hint = $("#stats-hint");
     if (!j.stats_collection_enabled) {
       hint.innerHTML =
@@ -4199,6 +4207,7 @@ async function refreshStats() {
         mTbody.appendChild(tr);
       });
   } catch (e) {
+    if (seq !== statsSeq) return;
     $("#stats-hint").textContent = "stats fetch failed: " + e;
   }
 }

@@ -28,6 +28,17 @@ An id that doesn't yet exist starts a fresh session at that id — handy for scr
 pasclaw agent --session daily-2026-06-01 -m "what's on for today?"
 ```
 
+With `-m`, `--session` makes the command one turn on that session, the same turn the interactive prompt would run:
+
+- The model gets the conversation so far, then the new message.
+- The message, any tool calls and results, and the reply are added to the saved transcript. Nothing already in it is replaced.
+- The session's own prompt is used (after a compaction that is where the summary lives), and the turn works in the directory the session works in.
+- A turn the provider refuses keeps the conversation and the question; the provider's error is printed, not saved as a reply.
+
+```sh
+pasclaw agent --session daily-2026-06-01 -m "and what did I say about the release?"
+```
+
 ## Slash commands (interactive)
 
 | Command | Effect |
@@ -208,6 +219,7 @@ Index lives at `workspace/sessions/.search.db`, lazily rebuilt from the JSON tra
 - `pasclaw agent` (no args) — fresh id, persists.
 - `pasclaw agent -m "..."` (one-shot `-m`) — does NOT persist. Single turns aren't worth a session file.
 - `pasclaw agent --session <id>` — resume or create at that id.
+- `pasclaw agent --session <id> -m "..."` — one turn on that session: resumes or creates it, sends the conversation so far, saves the turn.
 - `pasclaw tui` — Delphi build reads `ListSessions` for the session pane and resumes the newest by default; pass `--session <id>` to pick a different one. FPC build of `tui` keeps history in-memory only.
 
 ## See also

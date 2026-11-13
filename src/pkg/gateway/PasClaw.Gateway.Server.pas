@@ -612,6 +612,27 @@ procedure AccumulateGatewayStatsRaw(const Cfg: TConfig;
                                     ToolCallsDispatched: Int64;
                                     TruncatedBytesSaved: Int64);
 
+(* The cached /v1/stats answer, kept for a few seconds so the Stats tab's
+   polling does not walk the sessions directory every time.
+
+   StatsCacheGet: True and the body while it is still fresh. Otherwise
+   False and Gen, which names the cache as it is at this moment; the
+   caller adds the totals up and hands Gen back to StatsCachePut.
+
+   StatsCachePut keeps Body for the next few seconds -- unless the cache
+   was dropped after that Gen was taken, in which case Body was put
+   together from totals that have since been reset and is not kept (the
+   result says which). Without that check a /v1/stats request already
+   reading the sessions when POST /v1/stats/reset ran stored its
+   pre-reset answer after the reset had cleared the cache, and the old
+   totals were served for another five seconds.
+
+   StatsCacheDrop forgets the cached body and makes every Gen handed out
+   so far stale. Exposed for the regression test. *)
+function StatsCacheGet(out Body: string; out Gen: Int64): Boolean;
+function StatsCachePut(Gen: Int64; const Body: string): Boolean;
+procedure StatsCacheDrop;
+
 (* True when Path is a secret-bearing file the operator-facing /v1/fs
    browse must neither list nor serve. config.json holds cleartext
    provider api_keys, the gateway bearer token, mcp env, and the
@@ -771,6 +792,10 @@ var
   GStatsCacheUntil:    TDateTime = 0;
   GStatsCacheBody:     string    = '';
   GStatsCacheTtlSecs:  Integer   = 5;
+  { Goes up every time the cache is dropped (StatsCacheDrop): an answer
+    put together before a drop is recognised by the number it started
+    under and not stored. Guarded by GStatsCacheLock with the other two. }
+  GStatsCacheGen:      Int64     = 0;
   GStatsCacheLock:     TCriticalSection = nil;
 
   { Mutex around the per-endpoint stats sessions
@@ -4122,6 +4147,46 @@ begin
   end;
 end;
 
+function StatsCacheGet(out Body: string; out Gen: Int64): Boolean;
+begin
+  Body := '';
+  GStatsCacheLock.Enter;
+  try
+    Gen    := GStatsCacheGen;
+    Result := Now < GStatsCacheUntil;
+    if Result then Body := GStatsCacheBody;
+  finally
+    GStatsCacheLock.Leave;
+  end;
+end;
+
+function StatsCachePut(Gen: Int64; const Body: string): Boolean;
+begin
+  GStatsCacheLock.Enter;
+  try
+    Result := Gen = GStatsCacheGen;
+    if Result then
+    begin
+      GStatsCacheBody  := Body;
+      GStatsCacheUntil := IncSecond(Now, GStatsCacheTtlSecs);
+    end;
+  finally
+    GStatsCacheLock.Leave;
+  end;
+end;
+
+procedure StatsCacheDrop;
+begin
+  GStatsCacheLock.Enter;
+  try
+    Inc(GStatsCacheGen);
+    GStatsCacheUntil := 0;
+    GStatsCacheBody  := '';
+  finally
+    GStatsCacheLock.Leave;
+  end;
+end;
+
 procedure TGatewayServer.HandleStats(AResp: TIdHTTPResponseInfo);
 { Aggregate per-session stats across every session under
   workspace/sessions/ plus a few rollups (by provider, by model)
@@ -4144,7 +4209,7 @@ var
   Root, ProviderObj, ModelObj: TJsonObject;
   ProviderArr, ModelArr: TJsonArray;
   CachedBody: string;
-  CacheHit:   Boolean;
+  CacheGen:   Int64;
   Body:       string;
 
   procedure BumpMap(M: TStringList; const K: string; Delta: Int64);
@@ -4164,20 +4229,9 @@ var
 
 begin
   { Serve a still-fresh cached body. Snapshot under the lock, then write
-    outside it -- WriteJSON must not run while holding the mutex. }
-  CacheHit := False;
-  CachedBody := '';
-  GStatsCacheLock.Enter;
-  try
-    if Now < GStatsCacheUntil then
-    begin
-      CachedBody := GStatsCacheBody;
-      CacheHit   := True;
-    end;
-  finally
-    GStatsCacheLock.Leave;
-  end;
-  if CacheHit then
+    outside it -- WriteJSON must not run while holding the mutex. CacheGen
+    names the cache as it is now, for the store at the end. }
+  if StatsCacheGet(CachedBody, CacheGen) then
   begin
     WriteJSON(AResp, 200, CachedBody);
     Exit;
@@ -4265,13 +4319,9 @@ begin
       end;
 
       Body := Root.ToJSON;
-      GStatsCacheLock.Enter;
-      try
-        GStatsCacheBody  := Body;
-        GStatsCacheUntil := IncSecond(Now, GStatsCacheTtlSecs);
-      finally
-        GStatsCacheLock.Leave;
-      end;
+      { Not kept when a reset dropped the cache while the sessions were
+        being read: these totals are from before it. }
+      StatsCachePut(CacheGen, Body);
       WriteJSON(AResp, 200, Body);
     finally
       Root.Free;
@@ -4355,14 +4405,9 @@ begin
     GGatewayStatsLock.Leave;
   end;
 
-  { The cached /v1/stats body is from before: the page asks again at once. }
-  GStatsCacheLock.Enter;
-  try
-    GStatsCacheUntil := 0;
-    GStatsCacheBody  := '';
-  finally
-    GStatsCacheLock.Leave;
-  end;
+  { The cached /v1/stats body is from before, and so is any answer a
+    request is putting together right now: the page asks again at once. }
+  StatsCacheDrop;
 
   LogInfo('stats reset: %d session(s) cleared, %d bucket(s) removed, %d skipped',
           [Cleared, Buckets, Skipped]);
