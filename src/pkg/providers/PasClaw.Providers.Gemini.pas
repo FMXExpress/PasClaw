@@ -828,6 +828,11 @@ var
   Resp: THTTPResult;
   Headers: array of THeaderPair;
 begin
+  (* A function's record result is not cleared for it: without this a
+     refused call returned the caller's leftover memory as its token
+     counts, and a good one as its cache counts (ParseResponse sets the
+     input and output counts only). Start from an empty response. *)
+  Result := Default(TLLMResponse);
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1beta/models/' + UseModel + ':generateContent';
   { A caller can force server tools off for one call (e.g. the reranker, which
@@ -844,9 +849,7 @@ begin
   LogDebug('gemini POST %s (model=%s, body=%d bytes)', [URL, UseModel, Length(Body)]);
   Resp := PostJSON(URL, Body, Headers, 120);
 
-  Result.Content := '';
   Result.StatusCode := Resp.StatusCode;
-  SetLength(Result.ToolCalls, 0);
   if (Resp.StatusCode >= 200) and (Resp.StatusCode < 300) then
   begin
     ParseResponse(Resp.Body, Result);
