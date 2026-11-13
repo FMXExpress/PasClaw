@@ -50,6 +50,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/logs` | GET | SSE tail of the gateway log buffer (1000-entry ring); recent buffer dumps first, then live. |
 | `/v1/models` | GET | OpenAI-compatible model list containing the configured default model. |
 | `/v1/stats` | GET | 5-second-cached aggregate of per-session counters (opt-in via `stats_collection_enabled`). |
+| `/v1/stats/reset` | POST | Set every saved counter back to zero; conversations are kept. The Stats tab's **Reset totals** button. |
 | `/v1/chat` | POST | PasClaw JSON chat endpoint accepting `{"message":"..."}`. With `verification.scenarios` configured the response carries `verification: {ok, rounds, passed, failed, summary}`, the result of the held-out checks PasClaw ran after the model's final answer. |
 | `/v1/chat/completions` | POST | OpenAI Chat Completions-compatible. Streams with `stream: true`. With `verification.scenarios` configured, an answer whose held-out checks still fail ends with `[verification: … -- this answer is NOT verified …]`, streamed or not, and a non-streaming reply also carries the `verification` object. When the provider refuses (bad key, unreachable, rate limit after retries) the answer is an error, not the provider's text dressed as a reply: HTTP 502 `{"error": {"message", "type": "provider_error", "upstream_status"}}`, or with `stream: true` an OpenAI error frame then `[DONE]`. A named session keeps the user's message and gains no assistant turn for it. |
 | `/v1/responses` | POST | OpenAI Responses-compatible. String or message-array `input`. Streams with `stream: true`. Held-out verification is reported as on `/v1/chat/completions` when PasClaw runs the tool loop (no client-supplied `tools`). |
@@ -71,7 +72,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | **Skills** | List installed skills. |
 | **Logs** | Live tail via SSE from the gateway's in-process ring buffer. |
 | **Settings** | Read-only config view (provider API keys masked). |
-| **Stats** | Auto-refreshing token + tool-call + truncation-savings cards + `by_provider` / `by_model` rollups (when `stats_collection_enabled`). |
+| **Stats** | Auto-refreshing token + tool-call + truncation-savings cards + `by_provider` / `by_model` rollups (when `stats_collection_enabled`). **Reset totals** puts every counter back to zero. |
 
 ## OpenAI-compatible client
 
@@ -297,6 +298,22 @@ Returns a 5-second-cached aggregate of per-session counters when `stats_collecti
 ```
 
 Gateway-side stateless API calls (`/v1/chat`, `/v1/chat/completions`, `/v1/responses`) accumulate into per-endpoint synthetic session files (`_gateway_v1_chat.json`, `_gateway_v1_chat_completions.json`, `_gateway_v1_responses.json`) so calls driven through the web UI chat or any other OpenAI/Anthropic-compatible client also show up. Each endpoint gets one bucket regardless of model — `Meta.Model` tracks the most recent request's model. Concurrent gateway requests serialise the bucket update through a single critical section.
+
+### `POST /v1/stats/reset`
+
+Sets every saved counter back to zero. No request body.
+
+```json
+{ "ok": true, "sessions_reset": 3, "buckets_removed": 2, "sessions_skipped": 0 }
+```
+
+- The gateway's endpoint buckets hold counters only and are deleted; the next request through an endpoint starts its bucket again.
+- A conversation keeps everything but its counters: transcript, title, dates and transcript log are untouched. One with nothing counted is not rewritten.
+- A conversation with a turn running on the gateway is skipped and counted in `sessions_skipped`; reset again once it is idle.
+- `/v1/stats` answers with the new totals at once: the cached answer is dropped.
+- A session open in another process (a TUI, say) writes the counters it holds in memory back with its next save.
+
+`prompt_cache_warm_pings` counts since the gateway started and is not reset. The route sits behind the gateway token like the rest of `/v1/*`, and a token-less gateway refuses it from another site's page.
 
 Default off: per-session JSONs of flag-off operators are byte-identical to the pre-feature schema.
 

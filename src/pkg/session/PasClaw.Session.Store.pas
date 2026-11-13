@@ -138,6 +138,8 @@ type
   TSession = class
   private
     FExists: Boolean;
+    { The session-file JSON for this handle as it stands: what Save writes. }
+    function RecordJSON: string;
   public
     Meta:     TSessionMeta;
     Messages: TMessageArray;
@@ -359,6 +361,38 @@ function ListSessions(IncludeBuckets: Boolean = False): TSessionMetaArray;
 function IsGatewayBucketSessionId(const Id: string): Boolean;
 
 function DeleteSession(const Id: string): Boolean;
+
+{ True when every counter in S is zero. }
+function SessionStatsEmpty(const S: TSessionStats): Boolean;
+
+type
+  { Called by ResetSessionStats after the new record is written beside the
+    session file and before it replaces it. For tests, which use it to
+    change the file at exactly that moment. }
+  TResetStatsProbe = procedure;
+
+(* Zero one session's saved counters and leave the rest of it alone.
+
+   The record on disk is rewritten with an empty stats block. Messages,
+   tool details, working state, the transcript log and updated_at stay as
+   they were, and a session that never recorded where it works is not
+   stamped with the caller's workspace, as Save would stamp it. Nothing is
+   written for a session whose counters are already zero.
+
+   The file may belong to a conversation another process has open -- a
+   TUI, a `pasclaw agent` turn -- and there is no lock across processes. So
+   the new record replaces the file only if the file still holds exactly
+   what was read; when it does not, the whole thing starts over from the
+   new contents. That narrows the moment in which another process's save
+   could be overwritten to the time between that check and the rename; it
+   cannot close it. In-process callers that run turns on the session
+   serialise with SessionTurnLock themselves.
+
+   True when the counters were cleared. False when there was nothing to
+   clear, the session does not exist or does not parse, or the file kept
+   changing. *)
+function ResetSessionStats(const Id: string;
+                           BeforeReplace: TResetStatsProbe = nil): Boolean;
 
 (* Sort a TSessionMetaArray in place, newest-first by UpdatedAt with
    CreatedAt and Id as deterministic tiebreakers. Exposed for tests
@@ -1443,22 +1477,12 @@ begin
   end;
 end;
 
-procedure TSession.Save;
+function TSession.RecordJSON: string;
 var
   Root, MetaObj, MsgObj: TJsonObject;
   Arr: TJsonArray;
   i: Integer;
-  S: TStringList;
-  Path, TmpPath: string;
 begin
-  Path := SessionPath(Meta.Id);
-  if Path = '' then
-    raise EArgumentException.CreateFmt('Session.Save: unsafe id %s', [Meta.Id]);
-  { First save stamps where the session works. The sandbox workspace is
-    the directory the tools resolve against, which is the one a resume
-    should return to; '' before ConfigureSandbox (embedders) stays ''. }
-  if Meta.Location = '' then Meta.Location := CurrentWorkspace;
-  EnsureSessionsDir;
   Root := TJsonObject.Create;
   try
     MetaObj := TJsonObject.Create;
@@ -1504,35 +1528,56 @@ begin
         Root.PutRaw('tool_details', ToolDetail);
     end;
 
-    { Atomic write: tmp file + rename. A crash partway through
-      SaveToFile would otherwise leave a half-written JSON that Load
-      can't parse, defeating the "your conversation survives Ctrl-C"
-      promise. POSIX rename(2) is atomic and overwrites; Windows
-      MoveFile requires the destination not exist -- delete first.
-      Codex P2 on PR #117. }
-    TmpPath := Path + '.tmp';
-    (* WriteFileText, not TStringList.SaveToFile. Without an encoding
-       argument, Delphi's TStrings.SaveToFile writes TEncoding.Default --
-       the system ANSI codepage on Windows -- so every non-ASCII
-       character in a transcript became '?' (or GBK bytes the UTF-8
-       loader then mangled) on disk. FPC wrote the UTF-8 bytes through
-       untouched, which is why the bug only showed on the Delphi build.
-       The append-only transcript log below already encoded UTF-8
-       explicitly; this is the same fix for the main record. Bug report:
-       CJK typed in the TUI not showing in the session log. *)
-    WriteFileText(TmpPath, Root.ToJSON);
-    {$IFDEF MSWINDOWS}
-    if FileExists(Path) then SysUtils.DeleteFile(Path);
-    {$ENDIF}
-    if not RenameFile(TmpPath, Path) then
-    begin
-      SysUtils.DeleteFile(TmpPath);
-      raise Exception.CreateFmt('Session.Save: rename %s -> %s failed', [TmpPath, Path]);
-    end;
-    FExists := True;
+    Result := Root.ToJSON;
   finally
     Root.Free;
   end;
+end;
+
+{ TmpPath takes Path's place. POSIX rename(2) is atomic and overwrites;
+  Windows MoveFile requires the destination not exist -- delete first. }
+procedure ReplaceSessionFile(const TmpPath, Path: string);
+begin
+  {$IFDEF MSWINDOWS}
+  if FileExists(Path) then SysUtils.DeleteFile(Path);
+  {$ENDIF}
+  if not RenameFile(TmpPath, Path) then
+  begin
+    SysUtils.DeleteFile(TmpPath);
+    raise Exception.CreateFmt('session file: rename %s -> %s failed', [TmpPath, Path]);
+  end;
+end;
+
+procedure TSession.Save;
+var
+  Path, TmpPath: string;
+begin
+  Path := SessionPath(Meta.Id);
+  if Path = '' then
+    raise EArgumentException.CreateFmt('Session.Save: unsafe id %s', [Meta.Id]);
+  { First save stamps where the session works. The sandbox workspace is
+    the directory the tools resolve against, which is the one a resume
+    should return to; '' before ConfigureSandbox (embedders) stays ''. }
+  if Meta.Location = '' then Meta.Location := CurrentWorkspace;
+  EnsureSessionsDir;
+
+  { Atomic write: tmp file + rename. A crash partway through
+    SaveToFile would otherwise leave a half-written JSON that Load
+    can't parse, defeating the "your conversation survives Ctrl-C"
+    promise. Codex P2 on PR #117. }
+  TmpPath := Path + '.tmp';
+  (* WriteFileText, not TStringList.SaveToFile. Without an encoding
+     argument, Delphi's TStrings.SaveToFile writes TEncoding.Default --
+     the system ANSI codepage on Windows -- so every non-ASCII
+     character in a transcript became '?' (or GBK bytes the UTF-8
+     loader then mangled) on disk. FPC wrote the UTF-8 bytes through
+     untouched, which is why the bug only showed on the Delphi build.
+     The append-only transcript log below already encoded UTF-8
+     explicitly; this is the same fix for the main record. Bug report:
+     CJK typed in the TUI not showing in the session log. *)
+  WriteFileText(TmpPath, RecordJSON);
+  ReplaceSessionFile(TmpPath, Path);
+  FExists := True;
 end;
 
 procedure TSession.Load(const AId: string);
@@ -1780,6 +1825,57 @@ begin
       SysUtils.DeleteFile(LogP);
     LogInfo('session %s deleted', [Id]);
   end;
+end;
+
+function SessionStatsEmpty(const S: TSessionStats): Boolean;
+begin
+  Result := (S.InputTokens = 0) and (S.OutputTokens = 0) and
+            (S.CacheReadTokens = 0) and (S.CacheCreatedTokens = 0) and
+            (S.Turns = 0) and (S.ToolCalls = 0) and
+            (S.TruncationBytesSaved = 0);
+end;
+
+function ResetSessionStats(const Id: string;
+                           BeforeReplace: TResetStatsProbe = nil): Boolean;
+const
+  MaxTries = 5;
+var
+  Path, TmpPath, Before: string;
+  S: TSession;
+  Attempt: Integer;
+begin
+  Result := False;
+  Path := SessionPath(Id);
+  if (Path = '') or not FileExists(Path) then Exit;
+  { Not Save's "<file>.tmp": a process saving this session right now is
+    writing that one. }
+  TmpPath := Path + '.reset.tmp';
+  for Attempt := 1 to MaxTries do
+  begin
+    Before := ReadFileText(Path);
+    S := TSession.Create;
+    try
+      { As Load starts: nothing of the handle's own but the id. }
+      S.Meta := Default(TSessionMeta);
+      S.Meta.Id := Id;
+      if not S.LoadFromText(Before) then Exit;
+      if SessionStatsEmpty(S.Meta.Stats) then Exit;
+      S.Meta.Stats := Default(TSessionStats);
+      WriteFileText(TmpPath, S.RecordJSON);
+    finally
+      S.Free;
+    end;
+    if Assigned(BeforeReplace) then BeforeReplace();
+    { The slow part is done. Is the file still the one that was read? }
+    if FileExists(Path) and (ReadFileText(Path) = Before) then
+    begin
+      ReplaceSessionFile(TmpPath, Path);
+      Exit(True);
+    end;
+    SysUtils.DeleteFile(TmpPath);
+    if not FileExists(Path) then Exit;   { deleted meanwhile: nothing to clear }
+  end;
+  LogWarn('session %s: stats not reset -- the file kept changing', [Id]);
 end;
 
 initialization

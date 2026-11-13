@@ -378,6 +378,7 @@ type
       False (and keeps the current provider) if the new primary won't build. }
     function ApplyProviderConfig(NewCfg: TConfig): Boolean;
     procedure HandleStats(AResp: TIdHTTPResponseInfo);
+    procedure HandleStatsReset(AResp: TIdHTTPResponseInfo);
     { Durable chat sessions, shared with the TUI / `pasclaw session`
       via PasClaw.Session.Store -- web chats land in the same
       $PASCLAW_HOME/workspace/sessions/*.json files and are resumable
@@ -2151,6 +2152,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/config')  then HandleConfig(AResponse)
     else if (ARequest.Command = 'PUT')  and (Doc = '/v1/config')  then HandleConfigWrite(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/stats')   then HandleStats(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/stats/reset') then HandleStatsReset(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/sessions') then HandleSessionsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions') then HandleSessionCreate(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions/import') then HandleSessionsImport(ARequest, AResponse)
@@ -4277,6 +4279,102 @@ begin
   finally
     ByProvider.Free;
     ByModel.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleStatsReset(AResp: TIdHTTPResponseInfo);
+(* POST /v1/stats/reset -- put every saved counter /v1/stats adds up back to
+   zero. The Stats tab's Reset button.
+
+   Totals only ever grow, so numbers that are wrong -- builds before the
+   provider usage fix added leftover memory to them, in the billions --
+   stay wrong for good, and a fresh measurement has nowhere to start from.
+
+   Two kinds of file hold the counters:
+
+     - the gateway's endpoint buckets (ids starting _gateway_): counters and nothing
+       else, so they are deleted; the next request through an endpoint
+       makes its bucket again from zero;
+     - conversations, which carry a stats block beside their transcript:
+       the block is emptied and the rest of the file left alone
+       (ResetSessionStats). A session with nothing counted is not touched.
+
+   A conversation with a turn running in this process is skipped, not
+   waited for: the turn holds the session's lock for as long as the model
+   takes, and would write the counters it loaded back anyway. The reply
+   says how many were skipped so the page can say so.
+
+   GGatewayStatsLock for the whole pass: it is the lock a finishing turn
+   takes to add to a bucket (load, add, save), which must not straddle the
+   delete, and it keeps two resets from running at once. The turn locks
+   are only ever tried under it, never waited on, so the order cannot
+   deadlock.
+
+   Counters another process holds in memory -- a TUI with a session open --
+   come back with its next save; nothing here can reach them. *)
+var
+  Sessions: TSessionMetaArray;
+  i, Cleared, Buckets, Skipped: Integer;
+  TurnLock: TCriticalSection;
+  Root: TJsonObject;
+begin
+  Cleared := 0; Buckets := 0; Skipped := 0;
+  GGatewayStatsLock.Enter;
+  try
+    Sessions := ListSessions(True);
+    for i := 0 to High(Sessions) do
+    begin
+      if IsGatewayBucketSessionId(Sessions[i].Id) then
+      begin
+        if DeleteSession(Sessions[i].Id) then Inc(Buckets);
+        Continue;
+      end;
+      if SessionStatsEmpty(Sessions[i].Stats) then Continue;
+      TurnLock := SessionTurnLock(Sessions[i].Id);
+      if not TurnLock.TryEnter then
+      begin
+        Inc(Skipped);
+        Continue;
+      end;
+      try
+        try
+          if ResetSessionStats(Sessions[i].Id) then Inc(Cleared)
+          else Inc(Skipped);
+        except
+          on E: Exception do
+          begin
+            LogWarn('stats reset: session %s: %s', [Sessions[i].Id, E.Message]);
+            Inc(Skipped);
+          end;
+        end;
+      finally
+        TurnLock.Leave;
+      end;
+    end;
+  finally
+    GGatewayStatsLock.Leave;
+  end;
+
+  { The cached /v1/stats body is from before: the page asks again at once. }
+  GStatsCacheLock.Enter;
+  try
+    GStatsCacheUntil := 0;
+    GStatsCacheBody  := '';
+  finally
+    GStatsCacheLock.Leave;
+  end;
+
+  LogInfo('stats reset: %d session(s) cleared, %d bucket(s) removed, %d skipped',
+          [Cleared, Buckets, Skipped]);
+  Root := TJsonObject.Create;
+  try
+    Root.PutBool('ok',               True);
+    Root.PutInt ('sessions_reset',   Cleared);
+    Root.PutInt ('buckets_removed',  Buckets);
+    Root.PutInt ('sessions_skipped', Skipped);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
   end;
 end;
 

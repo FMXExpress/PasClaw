@@ -226,6 +226,8 @@ begin
              '/v1/logs is NOT exempt -- log ring buffer can leak per-tool args');
   AssertTrue(not IsExemptRoute('GET',  '/v1/stats'),
              '/v1/stats is NOT exempt');
+  AssertTrue(not IsExemptRoute('POST', '/v1/stats/reset'),
+             '/v1/stats/reset is NOT exempt -- it erases the saved totals');
   AssertTrue(not IsExemptRoute('GET',  '/v1/config'),
              '/v1/config is NOT exempt -- carries masked API keys and bot tokens');
   AssertTrue(not IsExemptRoute('GET',  '/v1/healthbeat'),

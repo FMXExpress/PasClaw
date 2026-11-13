@@ -447,8 +447,14 @@
     font-variant-numeric:tabular-nums}
   .stats-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
   .stats-table-wrap h3{margin:.2rem 0 .5rem;font-size:13px;font-weight:600;color:var(--text)}
-  #stats-hint{padding:0 0 .9rem;font-size:13px;line-height:1.5}
+  /* The hint, then what the last reset did, then Reset at the far end. */
+  .stats-bar{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.4rem .9rem;padding:0 0 .9rem}
+  #stats-hint{flex:1 1 18rem;font-size:13px;line-height:1.5;padding-top:.2rem}
   #stats-hint:empty{display:none}
+  #stats-note{font-size:13px;line-height:1.5;padding-top:.2rem;color:var(--text)}
+  #stats-note.err{color:var(--danger)}
+  #stats-note:empty{display:none}
+  #stats-reset{margin-left:auto}
 
   /* ===== Relay tab =====
      Reuses .stat-card for the status numbers; adds a config row (URL and
@@ -1034,7 +1040,12 @@
            agent loop. Empty / "stats collection off" state is rendered
            inline so a fresh-onboarded operator sees actionable
            guidance instead of zeros. -->
-      <div id="stats-hint" class="meta"></div>
+      <div class="stats-bar">
+        <div id="stats-hint" class="meta"></div>
+        <span id="stats-note" role="status"></span>
+        <button class="icon-btn" id="stats-reset" type="button"
+                title="Set every saved total back to zero. Conversations are kept.">Reset totals</button>
+      </div>
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-label">Sessions</div>
@@ -4191,6 +4202,47 @@ async function refreshStats() {
     $("#stats-hint").textContent = "stats fetch failed: " + e;
   }
 }
+
+/* Reset: every saved counter back to zero (POST /v1/stats/reset). Totals
+   only ever grow, so wrong ones stay wrong and a fresh measurement has
+   nowhere to start; this is the way out. Conversations are not touched and
+   the confirm says so, because the totals cannot be brought back. A
+   session with a turn running on the gateway keeps its counters -- the
+   reply says how many did, and the note passes that on. */
+let statsNoteTimer = null;
+
+function statsNote(text, isError) {
+  const el = $("#stats-note");
+  el.textContent = text;
+  el.classList.toggle("err", !!isError);
+  if (statsNoteTimer) clearTimeout(statsNoteTimer);
+  statsNoteTimer = text ? setTimeout(() => { el.textContent = ""; }, 12000) : null;
+}
+
+async function resetStats() {
+  if (!confirm("Reset all saved totals to zero?\n\n" +
+               "Tokens, turns, tool calls and bytes saved go back to 0 for every session. " +
+               "Conversations are kept. This cannot be undone.")) return;
+  const btn = $("#stats-reset");
+  btn.disabled = true;
+  try {
+    const r = await gwFetch("/v1/stats/reset", { method: "POST" });
+    if (!r.ok) throw new Error("the gateway answered " + r.status);
+    const j = await r.json();
+    const skipped = Number(j.sessions_skipped) || 0;
+    statsNote(skipped
+      ? "Totals reset, except " + skipped + (skipped === 1 ? " session that is" : " sessions that are") +
+        " in use right now. Reset again once " + (skipped === 1 ? "it is" : "they are") + " idle."
+      : "Totals reset.");
+    await refreshStats();
+  } catch (e) {
+    statsNote("Reset failed: " + (e && e.message ? e.message : e), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("#stats-reset").addEventListener("click", resetStats);
 
 /* ===== Per-chat parameters + system-prompt presets =====
    LM-Studio-style controls applied to outgoing /v1/chat/completions

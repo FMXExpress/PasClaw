@@ -11,6 +11,16 @@ program session_stats_tests;
     - TConfig.StatsCollectionEnabled round-trips through the
       config JSON (default off; "stats_collection_enabled": true
       survives a Save / Load cycle)
+    - ResetSessionStats (the Stats tab's Reset button) empties the
+      counters and nothing else: the transcript with its tool calls,
+      the tool-detail blob, the title, updated_at and the transcript
+      log stay; a session that never recorded where it works is not
+      stamped with the caller's workspace; nothing is written when
+      there is nothing to clear, for a missing session or for a file
+      that does not parse
+    - ...and a save that lands while the reset is under way is not
+      overwritten: the reset starts over from the new contents, and
+      gives up, leaving the file alone, when it keeps changing
 
   Doesn't touch /v1/stats -- that's a thin aggregator over the
   data exercised here, and the per-session round-trip is the
@@ -25,7 +35,9 @@ program session_stats_tests;
 uses
   SysUtils,
   PasClaw.Config,
+  PasClaw.Utils,
   PasClaw.Providers.Types,
+  PasClaw.Tools.Sandbox,
   PasClaw.Session.Store;
 
 procedure Fail_(const Msg: string);
@@ -360,6 +372,217 @@ begin
   try DeleteFile(SessionPath(Id)); except end;
 end;
 
+{ ------------------------------------------------- ResetSessionStats -- }
+
+const
+  { Non-ASCII as UTF-8 bytes, the way the store holds text: a literal
+    would be compared through whatever code page the test runs in. }
+  SEED_TITLE = 'B' + #$C3#$BC + 'cher';                               { U+00FC }
+  SEED_ASK   = 'h' + #$C3#$A9 + 'llo, read notes.txt ' + #$E6#$97#$A5; { U+00E9, U+65E5 }
+
+function SeedSession(const Id: string): string;
+{ A conversation with everything a reset must leave alone, and counters.
+  Returns the file's text. }
+var
+  S: TSession;
+  TC: TToolCall;
+begin
+  S := TSession.Create(Id);
+  try
+    S.Meta.Title     := SEED_TITLE;
+    S.Meta.Provider  := 'anthropic-test';
+    S.Meta.Model     := 'model-test';
+    S.Meta.UpdatedAt := 1700000000;
+    S.Meta.WorkingState.LastShell := 'make test';
+    SetLength(S.Messages, 3);
+    S.Messages[0] := MakeMessage(mrUser, SEED_ASK);
+    S.Messages[1] := MakeMessage(mrAssistant, 'reading');
+    TC := Default(TToolCall);
+    TC.Id := 'call_1'; TC.Kind := 'function';
+    TC.Func.Name := 'read_file'; TC.Func.Arguments := '{"path":"notes.txt"}';
+    SetLength(S.Messages[1].ToolCalls, 1);
+    S.Messages[1].ToolCalls[0] := TC;
+    S.Messages[2] := MakeMessage(mrTool, 'the number is 4127');
+    S.Messages[2].ToolCallId := 'call_1';
+    S.ToolDetail := '[{"i":1,"args":"{}"},{"i":2,"result":"4127"}]';
+    S.Meta.Stats.InputTokens          := -3690150476;   { the kind of total a reset is for }
+    S.Meta.Stats.OutputTokens         := 163871;
+    S.Meta.Stats.CacheReadTokens      := -1373772880;
+    S.Meta.Stats.CacheCreatedTokens   := 163790;
+    S.Meta.Stats.Turns                := 4;
+    S.Meta.Stats.ToolCalls            := 1;
+    S.Meta.Stats.TruncationBytesSaved := 2048;
+    S.Save;
+  finally
+    S.Free;
+  end;
+  Result := ReadFileText(SessionPath(Id));
+end;
+
+procedure AssertConversationKept(const Id, Where: string);
+var
+  S: TSession;
+begin
+  S := TSession.Create(Id);
+  try
+    AssertTrue(S.MetaExists, Where + ': the session still loads');
+    AssertTrue(S.Meta.Title = SEED_TITLE, Where + ': title');
+    AssertTrue(S.Meta.Provider = 'anthropic-test', Where + ': provider');
+    AssertTrue(S.Meta.Model = 'model-test', Where + ': model');
+    AssertEqInt(S.Meta.UpdatedAt, 1700000000, Where + ': updated_at');
+    AssertTrue(S.Meta.WorkingState.LastShell = 'make test', Where + ': working state');
+    AssertTrue(Length(S.Messages) >= 3, Where + ': the first three messages are there');
+    AssertTrue(S.Messages[0].Content = SEED_ASK, Where + ': user message');
+    AssertEqInt(Length(S.Messages[1].ToolCalls), 1, Where + ': the tool call');
+    AssertTrue(S.Messages[1].ToolCalls[0].Func.Arguments = '{"path":"notes.txt"}',
+               Where + ': the tool call arguments');
+    AssertTrue(S.Messages[2].ToolCallId = 'call_1', Where + ': the tool result pairing');
+    AssertContains(S.ToolDetail, '"result"', Where + ': the tool-detail blob');
+  finally
+    S.Free;
+  end;
+end;
+
+procedure RemoveSession(const Id: string);
+begin
+  try DeleteSession(Id); except end;
+  try DeleteFile(SessionPath(Id) + '.tmp'); except end;
+  try DeleteFile(SessionPath(Id) + '.reset.tmp'); except end;
+end;
+
+procedure TestResetClearsCountersOnly;
+var
+  Id, Before, After, LogBefore, Again: string;
+  S: TSession;
+  Msgs: TMessageArray;
+  Policy: TSandboxPolicy;
+begin
+  Id := 'stats-reset-test-' + IntToStr(Random(MaxInt));
+  { Saved before any workspace is set, so it has no location -- as a
+    session from before locations were recorded has none. }
+  Before := SeedSession(Id);
+  AssertNotContains(Before, '"location"', 'premise: the seeded session has no location');
+  AssertContains(Before, '"stats"', 'premise: the seeded session has counters');
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, SEED_ASK);
+  AssertTrue(AppendSessionLog(Id, Msgs) > 0, 'premise: a transcript log was written');
+  LogBefore := ReadFileText(SessionLogPath(Id));
+
+  { From here the process works somewhere: a Save would now stamp it. }
+  Policy := Default(TSandboxPolicy);
+  ConfigureSandbox(Policy, GetCurrentDir);
+  AssertTrue(CurrentWorkspace <> '', 'premise: a workspace is set');
+
+  AssertTrue(ResetSessionStats(Id), 'reset reports the counters cleared');
+  After := ReadFileText(SessionPath(Id));
+  S := TSession.Create(Id);
+  try
+    AssertTrue(SessionStatsEmpty(S.Meta.Stats), 'every counter is zero after a reset');
+    AssertTrue(S.Meta.Location = '', 'reset did not stamp a location: "' + S.Meta.Location + '"');
+    AssertEqInt(Length(S.Messages), 3, 'reset kept exactly the messages');
+  finally
+    S.Free;
+  end;
+  AssertNotContains(After, '"stats"', 'no stats block is left');
+  AssertNotContains(After, '"location"', 'no location was written');
+  AssertConversationKept(Id, 'after reset');
+  AssertTrue(ReadFileText(SessionLogPath(Id)) = LogBefore, 'the transcript log is untouched');
+  AssertTrue(not FileExists(SessionPath(Id) + '.reset.tmp'), 'no temporary file is left');
+
+  { Nothing to clear: not rewritten. }
+  AssertTrue(not ResetSessionStats(Id), 'a second reset has nothing to clear');
+  Again := ReadFileText(SessionPath(Id));
+  AssertTrue(Again = After, 'a reset with nothing to clear leaves the file as it was');
+
+  { What Save does in the same place, so the check above means something. }
+  S := TSession.Create(Id);
+  try
+    S.Save;
+    AssertTrue(S.Meta.Location <> '', 'premise: an ordinary Save stamps the location here');
+  finally
+    S.Free;
+  end;
+
+  AssertTrue(not ResetSessionStats('stats-reset-no-such-' + IntToStr(Random(MaxInt))),
+             'a missing session is not reset');
+  AssertTrue(not ResetSessionStats('../escape'), 'an unsafe id is not reset');
+  RemoveSession(Id);
+
+  { A file that is not a session is left exactly as it is. }
+  Id := 'stats-reset-junk-' + IntToStr(Random(MaxInt));
+  WriteFileText(SessionPath(Id), '{"meta": {"stats": {"turns": 3');
+  AssertTrue(not ResetSessionStats(Id), 'a file that does not parse is not reset');
+  AssertTrue(ReadFileText(SessionPath(Id)) = '{"meta": {"stats": {"turns": 3',
+             'a file that does not parse is not rewritten');
+  RemoveSession(Id);
+end;
+
+var
+  GProbeId: string;
+  GProbeCalls: Integer;
+  GProbeEvery: Boolean;
+
+{ Another process finishing a turn on the session, at the worst moment:
+  the reset has read the file and written its replacement beside it. }
+procedure SaveATurnMeanwhile;
+var
+  S: TSession;
+begin
+  Inc(GProbeCalls);
+  if (GProbeCalls > 1) and not GProbeEvery then Exit;
+  S := TSession.Create(GProbeId);
+  try
+    SetLength(S.Messages, Length(S.Messages) + 1);
+    S.Messages[High(S.Messages)] :=
+      MakeMessage(mrAssistant, 'written meanwhile ' + IntToStr(GProbeCalls));
+    Inc(S.Meta.Stats.Turns);
+    S.Save;
+  finally
+    S.Free;
+  end;
+end;
+
+procedure TestResetDoesNotOverwriteASave;
+var
+  Id: string;
+  S: TSession;
+begin
+  { One save lands mid-reset: the reset starts over and keeps it. }
+  Id := 'stats-reset-race-' + IntToStr(Random(MaxInt));
+  SeedSession(Id);
+  GProbeId := Id; GProbeCalls := 0; GProbeEvery := False;
+  AssertTrue(ResetSessionStats(Id, SaveATurnMeanwhile), 'reset succeeds after starting over');
+  AssertEqInt(GProbeCalls, 2, 'the reset started over once');
+  S := TSession.Create(Id);
+  try
+    AssertEqInt(Length(S.Messages), 4, 'the message saved meanwhile is still there');
+    AssertTrue(S.Messages[3].Content = 'written meanwhile 1', 'the message saved meanwhile');
+    AssertTrue(SessionStatsEmpty(S.Meta.Stats), 'and the counters are zero');
+  finally
+    S.Free;
+  end;
+  AssertConversationKept(Id, 'after a save mid-reset');
+  AssertTrue(not FileExists(SessionPath(Id) + '.reset.tmp'), 'no temporary file is left');
+  RemoveSession(Id);
+
+  { The file changes every time: the reset gives up and leaves it alone. }
+  Id := 'stats-reset-busy-' + IntToStr(Random(MaxInt));
+  SeedSession(Id);
+  GProbeId := Id; GProbeCalls := 0; GProbeEvery := True;
+  AssertTrue(not ResetSessionStats(Id, SaveATurnMeanwhile),
+             'a file that keeps changing is not reset');
+  AssertTrue(GProbeCalls > 1, 'the reset tried more than once');
+  S := TSession.Create(Id);
+  try
+    AssertEqInt(Length(S.Messages), 3 + GProbeCalls, 'every save made meanwhile is there');
+    AssertEqInt(S.Meta.Stats.Turns, 4 + GProbeCalls, 'the counters are as the last save left them');
+  finally
+    S.Free;
+  end;
+  AssertTrue(not FileExists(SessionPath(Id) + '.reset.tmp'), 'no temporary file is left');
+  RemoveSession(Id);
+end;
+
 begin
   Randomize;
   TestProfileRoundTrip;
@@ -370,5 +593,8 @@ begin
   TestAccumulateThenSavePersistsCounters;
   TestAccumulateRoutesToOriginatingSession;
   TestStatsCollectionEnabledRoundTrip;
+  { Last: it sets a workspace, which earlier tests assume is unset. }
+  TestResetDoesNotOverwriteASave;
+  TestResetClearsCountersOnly;
   WriteLn('session_stats_tests: OK');
 end.
