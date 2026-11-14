@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PasClaw Settings</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="options">
+  <main>
+    <header class="page-head">
+      <img src="icons/icon128.png" width="48" height="48" alt="">
+      <div>
+        <h1>PasClaw settings</h1>
+        <p class="lede">Connect the side panel to your <code>pasclaw gateway</code>, <code>pasclaw serve</code> or Docker container.</p>
+      </div>
+    </header>
+
+    <form id="form">
+      <section class="card">
+        <div class="card-head">
+          <h2>Connection</h2>
+          <p>Where the extension sends your messages.</p>
+        </div>
+        <div class="field">
+          <label class="lbl" for="gatewayUrl">Gateway URL</label>
+          <input id="gatewayUrl" class="input mono" type="url" placeholder="http://127.0.0.1:8088" required spellcheck="false">
+          <p class="hint"><code>localhost</code> and <code>127.0.0.1</code> work right away. For any other host, Chrome asks you once for access.</p>
+        </div>
+        <div class="field">
+          <label class="lbl" for="token">Gateway token <span class="mut">· optional</span></label>
+          <div class="input-group">
+            <input id="token" class="input mono" type="password" placeholder="PASCLAW_GATEWAY_TOKEN" autocomplete="off" spellcheck="false">
+            <button type="button" id="show" class="btn">Show</button>
+          </div>
+          <p class="hint">Needed when the gateway sets <code>PASCLAW_GATEWAY_TOKEN</code>, and recommended for any gateway that isn't on this machine. Stored only in this browser profile.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Chat</h2>
+          <p>How conversations and page context behave.</p>
+        </div>
+        <div class="field">
+          <div class="switch-row">
+            <div>
+              <label class="lbl" for="serverHistory">Keep conversations on the gateway</label>
+              <p class="hint" style="margin-top:0">Only new messages are sent. Chats show up in <code>pasclaw session list</code> and can be continued with <code>pasclaw resume</code>. Turn off for gateways older than <code>session_context</code>.</p>
+            </div>
+            <span class="switch"><input id="serverHistory" type="checkbox" role="switch"><span></span></span>
+          </div>
+        </div>
+        <div class="field">
+          <label class="lbl" for="pageCharLimit">Page text limit</label>
+          <input id="pageCharLimit" class="input" type="number" min="1000" max="200000" step="1000" style="max-width:180px">
+          <p class="hint">The most characters of page text attached to one message. Long pages cost tokens.</p>
+        </div>
+      </section>
+
+      <div class="actions-bar">
+        <button type="button" id="test" class="btn">Test connection</button>
+        <button type="submit" id="save" class="btn primary">Save</button>
+      </div>
+      <div id="result" role="status" aria-live="polite"></div>
+    </form>
+
+    <p class="foot">PasClaw for Chrome · Open the panel with <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd></p>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

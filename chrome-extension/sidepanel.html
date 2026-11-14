@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PasClaw</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="panel">
+  <header class="bar">
+    <div class="brand">
+      <img src="icons/icon32.png" width="20" height="20" alt="">
+      <span class="wordmark">PasClaw</span>
+    </div>
+    <button id="status" class="status" type="button" title="Checking the gateway…">
+      <span class="dot"></span><span id="status-text">Connecting</span>
+    </button>
+    <span class="spacer"></span>
+    <nav class="seg" role="tablist" aria-label="View">
+      <button role="tab" id="tab-chat" class="active" aria-selected="true">Chat</button>
+      <button role="tab" id="tab-web" aria-selected="false">Web UI</button>
+    </nav>
+    <button id="btn-new" class="icon-btn" type="button" title="New chat" aria-label="New chat">
+      <svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h8"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+    </button>
+    <button id="btn-settings" class="icon-btn" type="button" title="Settings" aria-label="Settings">
+      <svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </header>
+
+  <section id="view-chat" class="view">
+    <div id="log" class="log" aria-live="polite">
+      <div id="empty" class="empty">
+        <img class="empty-mark" src="icons/icon128.png" width="56" height="56" alt="">
+        <h1>What can I help with?</h1>
+        <p>PasClaw runs on your gateway with your tools, memory and skills. Attach this tab with <strong>Page</strong>, or right-click any text and choose <em>Ask PasClaw</em>.</p>
+        <div class="suggestions">
+          <button type="button" class="suggestion" data-prompt="Summarize this page in five bullet points." data-page="1">
+            <span class="s-title">Summarize this page</span><span class="s-sub">Key points from the open tab</span>
+          </button>
+          <button type="button" class="suggestion" data-prompt="What are the strongest claims on this page, and how well are they supported?" data-page="1">
+            <span class="s-title">Fact-check this page</span><span class="s-sub">Claims and their evidence</span>
+          </button>
+          <button type="button" class="suggestion" data-prompt="What did I save to memory recently? Give me a short digest.">
+            <span class="s-title">Memory digest</span><span class="s-sub">What you saved recently</span>
+          </button>
+          <button type="button" class="suggestion" data-prompt="List my scheduled cron jobs and when each one runs next.">
+            <span class="s-title">My schedule</span><span class="s-sub">Cron jobs and next runs</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <form id="composer" class="composer" autocomplete="off">
+      <div class="ctx-row" id="ctx-row" hidden>
+        <span class="ctx-chip" id="ctx-chip">
+          <span class="ctx-icon" id="ctx-icon"></span>
+          <span id="page-info" class="page-info"></span>
+          <button type="button" id="btn-ctx-clear" class="ctx-x" title="Don't attach" aria-label="Don't attach the page"></button>
+        </span>
+        <button type="button" id="btn-grant" class="link-btn" hidden>Allow access to this site</button>
+      </div>
+      <div class="input-box">
+        <textarea id="input" rows="1" placeholder="Ask PasClaw…" aria-label="Message"></textarea>
+        <div class="input-tools">
+          <button type="button" id="btn-page" class="tool-btn" aria-pressed="false" title="Attach the active tab to your next message">
+            <span id="page-btn-icon"></span><span>Page</span>
+          </button>
+          <label class="select-wrap" title="Build: full PasClaw agent. Plan: plans without changing anything. Browse: PasClaw operates this tab, asking before each action.">
+            <select id="mode" aria-label="Mode">
+              <option value="build">Build</option>
+              <option value="plan">Plan</option>
+              <option value="browse">Browse</option>
+            </select>
+          </label>
+          <label class="select-wrap grow" title="Model">
+            <select id="model" aria-label="Model"><option value="">Default model</option></select>
+          </label>
+          <button type="submit" id="btn-send" class="send" title="Send (Enter)" aria-label="Send"></button>
+        </div>
+      </div>
+      <div class="foot-hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</div>
+    </form>
+  </section>
+
+  <section id="view-web" class="view" hidden>
+    <div class="web-bar">
+      <span class="url mono" id="web-url"></span>
+      <button id="btn-reload" class="icon-btn" type="button" title="Reload" aria-label="Reload">
+        <svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7L20 9"/><path d="M20 4v5h-5"/></svg>
+      </button>
+      <button id="btn-open-tab" class="icon-btn" type="button" title="Open in a tab" aria-label="Open in a tab">
+        <svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+      </button>
+    </div>
+    <iframe id="webui" title="PasClaw web UI"></iframe>
+  </section>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
