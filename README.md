@@ -900,7 +900,7 @@ The gateway routes implemented in `src/pkg/gateway/` are:
 | `/v1/memory` | `GET` | Files in `workspace/memory/` with sizes. |
 | `/v1/memory/<name>` | `GET` | Contents of one memory file (rejects path-traversal). |
 | `/v1/config` | `GET` | Full config with `providers[].api_key` masked to `•••`. |
-| `/v1/fs?path=…` | `GET` | Directory listing (entries + sizes + dir-flag); defaults to `$PASCLAW_HOME`. |
+| `/v1/fs?path=…` | `GET` | Directory listing (entries + sizes + dir flag); defaults to `$PASCLAW_HOME/workspace`. A relative `path` here and on the routes below means the agent's workspace, as it does for the file tools, so the chat's Files menu gets the file `write_file("out.txt")` wrote; the listing reports its `path`, `workspace_root` and `cwd_root` absolute. |
 | `/v1/fs/read?path=…` | `GET` | File contents capped at 256 KB; `truncated` flag on response. |
 | `/v1/logs` | `GET` | SSE tail of the gateway log buffer (1000-entry ring); recent buffer dumps first, then live. |
 | `/v1/chat` | `POST` | PasClaw JSON chat endpoint accepting `{"message":"..."}`. |

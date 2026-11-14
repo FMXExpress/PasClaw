@@ -151,6 +151,11 @@
   .session-list li:hover{background:var(--surface-2);color:var(--text)}
   .session-list li.muted:hover{background:none;color:var(--text-3)}
   .session-list li.active{background:var(--surface-3);color:var(--text)}
+  /* A chat with a turn running in it, open or not: a pulsing accent dot
+     before its title. The li's title says it in words. */
+  .session-list li.running>span:first-child::before{content:"";display:inline-block;
+    width:6px;height:6px;margin-right:.45rem;border-radius:50%;vertical-align:.1em;
+    background:var(--accent);animation:typingPulse 1.4s ease-in-out infinite}
   .session-list li .del,.session-list li .dl{flex:none;display:none;align-items:center;justify-content:center;
     width:1.25rem;height:1.25rem;border-radius:4px;color:var(--text-3);order:2}
   .session-list li .dl{order:1}
@@ -1419,7 +1424,9 @@ async function gwFetch(url, opts) {
      a try so an early call degrades to "no session header" instead. */
   var sess = null;
   try { if (activeSessionId) sess = activeSessionId; } catch (_) { sess = null; }
-  if (sess) headers.set("X-PasClaw-Session", sess);
+  /* Unless the caller named one: a turn is sent under its own chat's id,
+     which is not always the chat on screen by the time it goes. */
+  if (sess && !headers.has("X-PasClaw-Session")) headers.set("X-PasClaw-Session", sess);
   let r;
   try {
     r = await fetch(url, Object.assign({}, opts, { headers }));
@@ -1615,17 +1622,23 @@ async function refreshSessions() {
 function newSession() {
   /* Client-only until the first turn is saved -- avoids littering the
      store with empty sessions. The id is minted server-side by the
-     first persist (POST). */
+     first persist (POST). A turn running in the chat being left goes on
+     in the background. */
   activeSessionId = null;
   activeTurns = [];
   clearLog();
   m.value = ""; autosizeMsg();
   loadParamsForActive();   // seed the new chat from the most-recent params
+  syncStreaming();
   renderSessions();
   m.focus();
 }
 
 async function deleteSession(id) {
+  /* A turn still running in it stops, and is neither recorded nor saved:
+     saving it would bring the chat straight back. */
+  const run = runForSession(id);
+  if (run) { run.discard = true; run.abort.abort(); }
   try { await gwFetch("/v1/sessions/" + encodeURIComponent(id), { method: "DELETE" }); }
   catch { /* fall through to refresh; a failed delete just stays listed */ }
   dropSessionParams(id);
@@ -1662,6 +1675,11 @@ function renderSessions() {
     const li = document.createElement("li");
     if (s.id === activeSessionId) li.className = "active";
     if (s.updated_at) li.title = new Date(s.updated_at * 1000).toLocaleString();
+    const live = runForSession(s.id);
+    if (live && !live.done) {
+      li.classList.add("running");
+      li.title = "A turn is running" + (li.title ? " · " + li.title : "");
+    }
     const span = document.createElement("span");
     span.textContent = title;
     const del = document.createElement("span");
@@ -1687,17 +1705,31 @@ function renderSessions() {
 function renderActive() {
   clearLog();
   activeTurns.forEach((t, i) => renderTurn(t.role, t.text, i));
+  const run = runForTurns(activeTurns);
+  if (run) attachLiveBubble(run);
   /* Another conversation (or a cleared one): its context differs. */
   if (typeof ctxRefreshSoon === "function") ctxRefreshSoon();
 }
 
-/* Switch to a stored session: pull its transcript and show it. */
+/* Switch to a stored session: pull its transcript and show it. Allowed
+   while a turn runs -- in this chat or another: a chat with a turn in
+   flight (or still being saved) is shown from that turn's own copy, which
+   is ahead of the server's, and its reply goes on streaming into it. */
 async function activateSession(id) {
-  if (streaming) return;
   activeSessionId = id;
+  const run = runForSession(id);
+  if (run) {
+    activeTurns = run.turns;
+    loadParamsForActive();
+    renderActive();          // draws the turns and re-attaches the live bubble
+    syncStreaming();
+    renderSessions();
+    return;
+  }
+  activeTurns = [];
+  syncStreaming();
   renderSessions();
   clearLog();
-  activeTurns = [];
   let loaded = [];
   try {
     const j = await (await gwFetch("/v1/sessions/" + encodeURIComponent(id))).json();
@@ -1725,8 +1757,8 @@ async function activateSession(id) {
   renderActive();
 }
 
-function recordTurn(role, text, tools) {
-  activeTurns.push({ role, text, tools });
+function recordTurn(role, text, tools, turns) {
+  (turns || activeTurns).push({ role, text, tools });
 }
 
 /* Persist the open conversation. Creates the session on first save
@@ -1740,32 +1772,48 @@ function recordTurn(role, text, tools) {
    terminal resume. The server refuses such a PUT with 409; we honour
    that by forking into a fresh web-owned session (POST) instead of
    clobbering the original. */
-async function createSession(body) {
+/* POST a new session; its id, or "" when the server gave none. */
+async function createSessionId(body) {
   const r = await gwFetch("/v1/sessions", {
     method: "POST", headers: { "content-type": "application/json" }, body });
   const j = await r.json();
-  if (j && j.id) {
-    activeSessionId = j.id;
-    /* Capture the new chat's current params (seeded from the most-recent
-       set, possibly edited) under its freshly minted id so they stay with
-       this conversation. */
-    persistChatParams();
-  }
+  return (j && j.id) || "";
+}
+/* The chat `turns` now has server id `id`: when that chat is the open one,
+   it takes the id, and its current params (seeded from the most-recent
+   set, possibly edited) are stored under it so they stay with it. */
+function adoptSessionId(turns, id) {
+  if (!id || activeTurns !== turns || activeSessionId === id) return;
+  activeSessionId = id;
+  persistChatParams();
+  renderSessions();
 }
 /* Ensure a server session exists (mint one if this is a fresh chat) so the
    first turn is session-scoped. Seeds it with whatever turns are recorded so
-   far -- the post-turn persistActive then overwrites with the full exchange. */
+   far -- the post-turn save then overwrites with the full exchange. Returns
+   the id, or null when none could be made. */
 async function ensureSession() {
-  if (activeSessionId) return;
-  const msgs = activeTurns
+  if (activeSessionId) return activeSessionId;
+  const turns = activeTurns;
+  const msgs = turns
     .filter(t => t.role === "u" || t.role === "a")
     .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
-  try { await createSession(JSON.stringify({ messages: msgs })); } catch {}
+  let id = "";
+  try { id = await createSessionId(JSON.stringify({ messages: msgs })); } catch {}
+  adoptSessionId(turns, id);
+  return id || null;
 }
 async function persistActive() {
-  const kept = activeTurns.filter(t => t.role === "u" || t.role === "a");
+  const turns = activeTurns;
+  adoptSessionId(turns, await persistTurns(activeSessionId, turns));
+}
+/* Save one chat's turns under `sid` (or as a new session when it has none
+   yet); returns the id it is saved under, which is new after a create or a
+   fork, and `sid` when nothing could be saved. */
+async function persistTurns(sid, turns) {
+  const kept = turns.filter(t => t.role === "u" || t.role === "a");
   const msgs = kept.map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
-  if (msgs.length === 0 && !activeSessionId) return;
+  if (msgs.length === 0 && !sid) return sid;
   /* Ride the full tool-call detail (args/results) alongside the transcript as
      an opaque, index-aligned array so reloaded turns keep full card bodies.
      The server stores/returns it verbatim; it never re-enters the model's
@@ -1774,20 +1822,21 @@ async function persistActive() {
   const payload = { messages: msgs };
   if (details.some(d => d)) payload.tool_details = details;
   const body = JSON.stringify(payload);
+  let id = sid;
   try {
-    if (!activeSessionId) {
-      await createSession(body);
+    if (!id) {
+      id = await createSessionId(body);
     } else {
-      const r = await gwFetch("/v1/sessions/" + encodeURIComponent(activeSessionId), {
+      const r = await gwFetch("/v1/sessions/" + encodeURIComponent(id), {
         method: "PUT", headers: { "content-type": "application/json" }, body });
       if (r.status === 409) {
         /* Don't clobber an agent transcript -- fork to a new session. */
-        activeSessionId = null;
-        await createSession(body);
+        id = await createSessionId(body);
       }
     }
     await refreshSessions();   // pick up server-derived title + new ordering
   } catch { /* keep going; next turn will retry the write */ }
+  return id || sid;
 }
 
 $("#session-new").addEventListener("click", () => { newSession(); closeSidebarIfOverlay(); });
@@ -1820,10 +1869,35 @@ const f = $("#f"), m = $("#m"), b = $("#b");
 const TYPING_HTML =
   '<span class="typing"><span></span><span></span><span></span></span>';
 
-let streaming = false;       // an assistant turn is being received
-let currentAbort = null;     // AbortController for the in-flight stream
+let streaming = false;       // the OPEN chat has a turn being received
 
-function clearLog() { log.innerHTML = ""; }
+/* Turns in flight. A turn belongs to the chat it was asked in, not to
+   whichever chat is on screen: it keeps streaming, and its reply is
+   recorded and saved into its own chat, while the operator reads or writes
+   in another one -- the gateway runs turns of different sessions at once
+   (its turn locks are per session). Each run is
+     { sid, turns, abort, text, tools, error, bub, done, discard, raf }
+   where `turns` is its chat's own array (the very object activeTurns is
+   while that chat is open, which is how "this chat is on screen" is told),
+   `bub` the live bubble, or null while the chat is not on screen, and
+   `done` set once the stream has ended and the turn is being saved. */
+const runs = new Set();
+function runForTurns(turns) {
+  for (const r of runs) if (r.turns === turns && !r.done) return r;
+  return null;
+}
+function runForSession(id) {
+  if (!id) return null;
+  for (const r of runs) if (r.sid === id) return r;
+  return null;
+}
+
+/* Clearing the transcript detaches every live bubble; renderActive puts
+   back the one for the chat it draws. */
+function clearLog() {
+  log.innerHTML = "";
+  for (const r of runs) r.bub = null;
+}
 
 /* Bare row used for the live-streaming assistant bubble (plain text, no
    actions). Finalised turns are (re)drawn by renderTurn after the stream
@@ -1982,19 +2056,23 @@ function editTurn(index) {
   m.focus();
 }
 
-function setStreaming(on) {
-  streaming = on;
-  b.textContent = on ? "Stop" : "Send";
+/* `streaming` and the Send / Stop button describe the OPEN chat: whether
+   a turn is running in it. Called whenever that can change -- a turn
+   starts or ends, or another chat is opened. */
+function syncStreaming() {
+  const was = streaming;
+  streaming = !!runForTurns(activeTurns);
+  b.textContent = streaming ? "Stop" : "Send";
   b.disabled = false;
   /* A finished turn changed the conversation: recount the context. */
-  if (!on && typeof ctxRefreshSoon === "function") ctxRefreshSoon();
+  if (was && !streaming && typeof ctxRefreshSoon === "function") ctxRefreshSoon();
 }
 
 /* The body of the next /v1/chat/completions request, minus `stream`.
    One function so the Context panel (/v1/context) counts exactly what the
    next turn will send. */
-function chatRequestBody() {
-  let history = activeTurns.filter(t => t.role === "u" || t.role === "a")
+function chatRequestBody(turns) {
+  let history = (turns || activeTurns).filter(t => t.role === "u" || t.role === "a")
                           .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
   const body = {};
   /* Model from the header picker, if the operator chose one. Empty value
@@ -2014,68 +2092,86 @@ function chatRequestBody() {
   return body;
 }
 
-/* Stream one assistant reply for the active session's current history.
-   The user turn is expected to already be recorded + rendered. */
+/* Live render of a run: draw the streaming turn with the SAME expandable
+   tool cards the finished turn gets, instead of the flat ⏺/⎿ marker text.
+   renderAssistantHTML parses the marker lines in the text into cards and
+   fills their bodies from the paired side-channel detail -- so a call shows
+   its args immediately and the result drops in when it arrives. Throttled
+   to one paint per animation frame so a fast token stream can't thrash the
+   DOM, and the open/closed state of each card is preserved so expanding one
+   mid-stream doesn't snap shut on the next delta. Nothing is drawn while
+   the run's chat is not on screen (no bubble). */
+function paintRun(run) {
+  run.raf = false;
+  const bub = run.bub;
+  /* Cards are parsed from the ⏺ marker lines, which live in the text, so
+     there's nothing to draw until some content has arrived. */
+  if (!bub || !run.text) return;
+  const openIdx = new Set();
+  bub.querySelectorAll("details.tool-card").forEach((d, i) => { if (d.open) openIdx.add(i); });
+  bub.classList.add("md");
+  bub.innerHTML = renderAssistantHTML(run.text, pairToolDetails(run.tools));
+  bub.querySelectorAll("details.tool-card").forEach((d, i) => { if (openIdx.has(i)) d.open = true; });
+  wireCopyButtons(bub);
+  log.scrollTop = log.scrollHeight;
+}
+function scheduleRunPaint(run) {
+  if (run.raf || !run.bub) return;
+  run.raf = true;
+  requestAnimationFrame(() => paintRun(run));
+}
+/* The live bubble of a run whose chat is being drawn: what has streamed so
+   far, or the typing dots. */
+function attachLiveBubble(run) {
+  run.bub = addLine("a", "");
+  if (run.text) paintRun(run);
+  else run.bub.innerHTML = TYPING_HTML;
+}
+
+/* Stream one assistant reply for the open chat's current history. The user
+   turn is expected to already be recorded + rendered. From here on the run
+   belongs to that chat: the operator may open another one meanwhile, and
+   the reply is still recorded and saved into this one. */
 async function streamAssistant() {
+  const turns = activeTurns;
+  const hadId = !!activeSessionId;
   /* Mint the server session BEFORE the request so the very first turn carries
      X-PasClaw-Session and is checkpoint-scoped to this chat (not the workspace
      fallback). No-op once a session id exists. */
-  await ensureSession();
-  const bub = addLine("a", "");
-  bub.innerHTML = TYPING_HTML;
-  setStreaming(true);
-  currentAbort = new AbortController();
-  let assistantText = "";
-  /* Why the turn failed, when it did. Kept apart from assistantText: an
-     error is not something the assistant said, and recorded as its reply
-     it would go back to the model on every later turn. */
-  let streamError = "";
-  const streamToolDetails = [];   // full call/result detail from the SSE comment side-channel
-
-  /* Live render: draw the streaming turn with the SAME expandable tool
-     cards the finished turn gets, instead of the flat ⏺/⎿ marker text.
-     renderAssistantHTML parses the marker lines in assistantText into cards
-     and fills their bodies from the paired side-channel detail -- so a call
-     shows its args immediately and the result drops in when it arrives.
-     Throttled to one paint per animation frame so a fast token stream can't
-     thrash the DOM, and the open/closed state of each card is preserved so
-     expanding one mid-stream doesn't snap shut on the next delta. */
-  let rafPending = false;
-  const paintStream = () => {
-    rafPending = false;
-    /* Cards are parsed from the ⏺ marker lines, which live in assistantText,
-       so there's nothing to draw until some content has arrived. */
-    if (!assistantText) return;
-    const openIdx = new Set();
-    bub.querySelectorAll("details.tool-card").forEach((d, i) => { if (d.open) openIdx.add(i); });
-    bub.classList.add("md");
-    bub.innerHTML = renderAssistantHTML(assistantText, pairToolDetails(streamToolDetails));
-    bub.querySelectorAll("details.tool-card").forEach((d, i) => { if (openIdx.has(i)) d.open = true; });
-    wireCopyButtons(bub);
-    log.scrollTop = log.scrollHeight;
-  };
-  const scheduleStreamPaint = () => {
-    if (rafPending) return;
-    rafPending = true;
-    requestAnimationFrame(paintStream);
-  };
+  const sid = await ensureSession();
+  const run = { sid, turns, abort: new AbortController(), text: "", tools: [],
+                error: "", bub: null, done: false, discard: false, raf: false };
+  runs.add(run);
+  /* Usually still on screen; the operator may have moved on while the
+     session was being made. */
+  if (activeTurns === turns) attachLiveBubble(run);
+  syncStreaming();
+  /* A chat made just now joins the list, marked as running, so it can be
+     opened again from there while the turn goes on. */
+  if (!hadId && sid) refreshSessions(); else renderSessions();
 
   /* Use /v1/chat/completions with stream:true so tool calls + results
      surface as content deltas (the gateway emits ⏺/⎿ markers per
-     PasClaw.Gateway.ToolView). */
-  const body = Object.assign({ stream: true }, chatRequestBody());
+     PasClaw.Gateway.ToolView). Built from this chat's own turns and sent
+     under its own session id, whatever is open by the time it goes. */
+  const body = Object.assign({ stream: true }, chatRequestBody(turns));
+  const headers = { "content-type": "application/json", "accept": "text/event-stream" };
+  if (sid) headers["X-PasClaw-Session"] = sid;
 
   try {
     const r = await gwFetch("/v1/chat/completions", {
       method: "POST",
-      headers: { "content-type": "application/json", "accept": "text/event-stream" },
+      headers,
       body: JSON.stringify(body),
-      signal: currentAbort.signal
+      signal: run.abort.signal
     });
     if (!r.ok) {
       let detail = "";
       try { const j = await r.json(); detail = (j && j.error && j.error.message) || ""; } catch {}
-      streamError = `(http ${r.status})` + (detail ? " " + detail : "");
+      /* Why the turn failed. Kept apart from the text: an error is not
+         something the assistant said, and recorded as its reply it would
+         go back to the model on every later turn. */
+      run.error = `(http ${r.status})` + (detail ? " " + detail : "");
       return;
     }
     const reader = r.body.getReader();
@@ -2094,7 +2190,7 @@ async function streamAssistant() {
         if (line.startsWith(":")) {
           const c = line.slice(1).trim();
           if (c.startsWith("pasclaw-tool ")) {
-            try { streamToolDetails.push(JSON.parse(c.slice("pasclaw-tool ".length))); scheduleStreamPaint(); } catch {}
+            try { run.tools.push(JSON.parse(c.slice("pasclaw-tool ".length))); scheduleRunPaint(run); } catch {}
           }
           continue;
         }
@@ -2106,13 +2202,13 @@ async function streamAssistant() {
           /* The gateway's error frame (OpenAI shape): the provider refused,
              or the loop failed. Not content. */
           if (j.error) {
-            streamError = (j.error.message || "the request failed") + "";
+            run.error = (j.error.message || "the request failed") + "";
             continue;
           }
           const delta = (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || "";
           if (delta) {
-            assistantText += delta;
-            scheduleStreamPaint();   // live cards + markdown, throttled to one paint/frame
+            run.text += delta;
+            scheduleRunPaint(run);   // live cards + markdown, throttled to one paint/frame
           }
         } catch { /* ignore parse errors on SSE comments */ }
       }
@@ -2120,35 +2216,45 @@ async function streamAssistant() {
   } catch (err) {
     /* User-initiated Stop arrives as AbortError -- keep whatever streamed
        so far rather than surfacing it as an error. */
-    if (err && err.name !== "AbortError") streamError = String(err);
+    if (err && err.name !== "AbortError") run.error = String(err);
   } finally {
-    setStreaming(false);
-    currentAbort = null;
-    if (assistantText) {
-      /* Record + redraw so the finished turn renders as markdown with
-         copy/regenerate actions at the right index. Tool detail (full
-         args/result) rides along so the cards expand to the real thing;
-         it's live-only -- a reloaded turn falls back to the streamed
-         summary lines embedded in the content. When the turn failed part
-         way, this is the tool activity that really happened before it. */
-      recordTurn("a", assistantText, pairToolDetails(streamToolDetails));
+    run.done = true;
+    const shown = activeTurns === turns;   // its chat is the one on screen
+    if (!run.discard) {
+      if (run.text) {
+        /* Record + redraw so the finished turn renders as markdown with
+           copy/regenerate actions at the right index. Tool detail (full
+           args/result) rides along so the cards expand to the real thing;
+           it's live-only -- a reloaded turn falls back to the streamed
+           summary lines embedded in the content. When the turn failed part
+           way, this is the tool activity that really happened before it. */
+        recordTurn("a", run.text, pairToolDetails(run.tools), turns);
+      }
+      /* A failure is its own "e" turn: shown, with a retry, but never sent
+         to the model (chatRequestBody keeps user/assistant turns only) and
+         never saved (persistTurns likewise). */
+      if (run.error) recordTurn("e", run.error, undefined, turns);
     }
-    /* A failure is its own "e" turn: shown, with a retry, but never sent
-       to the model (chatRequestBody keeps user/assistant turns only) and
-       never saved (persistActive likewise). */
-    if (streamError) recordTurn("e", streamError);
-    if (assistantText || streamError) {
-      renderActive();
-    } else if (bub.querySelector(".typing")) {
-      /* Stream closed with no content and wasn't an error -- clear the dots. */
-      bub.textContent = "(no response)";
+    if (shown) {
+      if (run.text || run.error) {
+        renderActive();
+      } else if (run.bub && run.bub.querySelector(".typing")) {
+        /* Stream closed with no content and wasn't an error -- clear the dots. */
+        run.bub.textContent = "(no response)";
+      }
     }
+    syncStreaming();
+    renderSessions();
     /* Persist whatever we have, even when the assistant produced nothing
        (HTTP error / network failure / Stop before the first token). The
-       user turn is already in activeTurns from submitUser, and must
-       survive a reload rather than being lost with the failed reply. */
-    if (activeTurns.length) persistActive();
-    m.focus();
+       user turn is already in this chat's turns from submitUser, and must
+       survive a reload rather than being lost with the failed reply. The
+       run stays listed until the save is done, so reopening the chat
+       meanwhile shows this copy, not the server's older one. */
+    if (!run.discard && turns.length) adoptSessionId(turns, await persistTurns(sid, turns));
+    runs.delete(run);
+    renderSessions();
+    if (shown && activeTurns === turns) m.focus();
   }
 }
 
@@ -2937,7 +3043,7 @@ m.addEventListener("paste", e => {
 f.addEventListener("submit", e => {
   e.preventDefault();
   /* While a reply is streaming the primary button acts as Stop. */
-  if (streaming) { if (currentAbort) currentAbort.abort(); return; }
+  if (streaming) { const run = runForTurns(activeTurns); if (run) run.abort.abort(); return; }
   const typed = m.value.trim();
   if (!typed && !chatAttachments.length) return;
   if (!chatAttachments.length && handleSlash(typed)) return;

@@ -5337,6 +5337,30 @@ begin
   if HasSuffix(Base, '.pem') or HasSuffix(Base, '.key') then Exit(True);
 end;
 
+(* The `path` a /v1/fs request names, as the file tools would read it.
+
+   The web UI's chat Files list hands back the tool call's own argument, and
+   a model writes `write_file("out.txt")`, relative: the tool resolved that
+   against the workspace (ResolveWorkspacePath). These routes took it as it
+   came, so ExpandFileName read it against wherever the gateway was launched,
+   CanReadPathHTTP found that outside the workspace, and the download was a
+   403 for a file that was right there -- or, with the gateway launched in
+   the workspace's parent, a different file of the same name. Resolving the
+   same way the tool did means the same file; the boundary check that
+   follows is unchanged, so `../` still cannot leave the workspace. An empty
+   path stays empty (HandleFSList has its own default).
+
+   That makes a relative path mean the workspace, so nothing the gateway
+   hands out may be relative to anything else: HandleFSList reports its
+   directory and roots absolute, because every client builds the next
+   request from them, and with a relative PASCLAW_HOME they used to come out
+   relative to the launch directory. *)
+function FsRequestPath(ARequest: TIdHTTPRequestInfo): string;
+begin
+  Result := ARequest.Params.Values['path'];
+  if Trim(Result) <> '' then Result := ResolveWorkspacePath(Result);
+end;
+
 procedure TGatewayServer.HandleFSList(ARequest: TIdHTTPRequestInfo;
                                        AResp: TIdHTTPResponseInfo);
 var
@@ -5351,9 +5375,9 @@ begin
     offer a switch to) it even on a fresh web-only / Docker boot where no
     agent has run yet to create it. Best-effort; a failure just means the
     workspace button won't appear. }
-  WsRoot := JoinPath(GetHome, ActiveWorkspaceName);
+  WsRoot := ExpandFileName(JoinPath(GetHome, ActiveWorkspaceName));
   ForceDirectories(WsRoot);
-  Path := ARequest.Params.Values['path'];
+  Path := FsRequestPath(ARequest);
   if Path = '' then
   begin
     (* Default landing directory for a no-param `GET /v1/fs`.
@@ -5396,6 +5420,7 @@ begin
     if not (DirectoryExists(Path) and CanReadPathHTTP(Path, Reason)) then
       Path := CurrentWorkspace;
     if Path = '' then Path := GetHome;
+    Path := ExpandFileName(Path);
   end;
   { Route through the same sandbox CanReadPath check that fs_read
     uses. PR #88 Codex P1: the original "reject `..`" check let
@@ -5427,6 +5452,7 @@ begin
     else
       Root.PutStr('workspace_root', '');
     CwdRoot := CurrentWorkspace;
+    if CwdRoot <> '' then CwdRoot := ExpandFileName(CwdRoot);
     if (CwdRoot <> '') and DirectoryExists(CwdRoot)
        and CanReadPathHTTP(CwdRoot, Reason) then
       Root.PutStr('cwd_root', CwdRoot)
@@ -5519,7 +5545,7 @@ var
   ToRead, FullSize: Int64;
   Bytes: TBytes;
 begin
-  Path := ARequest.Params.Values['path'];
+  Path := FsRequestPath(ARequest);
   if Path = '' then
   begin
     WriteJSON(AResp, 400, '{"error":"bad path"}');
@@ -5612,7 +5638,7 @@ var
   Path, Reason, FName: string;
   Strm: TFileStream;
 begin
-  Path := ARequest.Params.Values['path'];
+  Path := FsRequestPath(ARequest);
   if Path = '' then
   begin
     WriteJSON(AResp, 400, '{"error":"bad path"}');
@@ -5674,7 +5700,7 @@ var
   Mem: TMemoryStream;
   Offset, Len, Total: Int64;
 begin
-  Path := ARequest.Params.Values['path'];
+  Path := FsRequestPath(ARequest);
   if Path = '' then
   begin
     WriteJSON(AResp, 400, '{"error":"bad path"}');

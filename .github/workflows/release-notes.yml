@@ -1,0 +1,58 @@
+name: Release notes
+
+# Sets a published Release's description from docs/releases/<tag>.md.
+#
+# The notes are written and reviewed in a pull request like any other file;
+# this workflow only copies the merged file onto the Release. Run it from
+# Actions -> Release notes -> Run workflow, with the tag (e.g. v0.1.5), after
+# the notes file is on the default branch. Running it again replaces the
+# description with the file as it is now, so a correction is a PR and a re-run.
+#
+# It touches nothing but the description: assets, the tag and the title stay
+# as they are.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag whose description to set from docs/releases/<tag>.md (e.g. v0.1.5)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set the Release description
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # The tag names a file and a release; take nothing else.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$TAG' is not a release tag like v0.1.5"
+            exit 1
+          fi
+          notes="docs/releases/$TAG.md"
+          if [ ! -s "$notes" ]; then
+            echo "::error::$notes is missing or empty on $(git rev-parse --short HEAD); merge the notes first"
+            exit 1
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName >/dev/null
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes"
+          # Read it back: the description on the Release must be the file
+          # (line endings aside: GitHub may hand a body back with CRLF).
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > /tmp/published.md
+          norm() { tr -d '\r' < "$1" | sed -e '$a\'; }
+          if ! diff -q <(norm "$notes") <(norm /tmp/published.md) >/dev/null; then
+            echo "::error::the Release description does not match $notes after the edit"
+            diff <(norm "$notes") <(norm /tmp/published.md) | head -20
+            exit 1
+          fi
+          echo "Release $TAG description set from $notes ($(wc -l < "$notes") lines)"
