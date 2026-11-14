@@ -160,7 +160,9 @@ export function pcSnapshot(query, maxChars) {
     const img = el.querySelector && el.querySelector("img[alt]");
     const text = clean(el.innerText || el.textContent);
     if (text) return text;
-    return el.getAttribute("title") || el.getAttribute("placeholder") || (img && img.alt) || el.getAttribute("name") || el.value || "";
+    /* Never fall back to a password field's value: it would reach the model. */
+    const value = el.tagName === "INPUT" && el.type === "password" ? "" : el.value;
+    return el.getAttribute("title") || el.getAttribute("placeholder") || (img && img.alt) || el.getAttribute("name") || value || "";
   };
   const roleOf = (el) => {
     const r = el.getAttribute("role");

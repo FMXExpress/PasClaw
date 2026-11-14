@@ -33,8 +33,19 @@ function saveChat() {
   return chrome.storage.local.set({ [CHAT_KEY]: chat });
 }
 
+/* A running reply or Browse task writes its result into `chat` when it
+   finishes, so wait for it before starting a new chat -- otherwise the old
+   task's turns and Browse history land in the fresh one. */
+let task = null;
+function trackTask() {
+  let done;
+  task = new Promise((r) => (done = r));
+  return () => { task = null; done(); };
+}
+
 async function newChat() {
   if (abort) abort.abort();
+  if (task) await task;
   chat = { sessionId: newSessionId(), title: "", turns: [], browseItems: [] };
   await saveChat();
   renderAll();
@@ -334,6 +345,7 @@ async function stream() {
   let text = "";
   let error = "";
   let raf = 0;
+  const finished = trackTask();
   const paint = () => {
     raf = 0;
     if (!text) return;
@@ -401,6 +413,7 @@ async function stream() {
     if (error) pushTurn({ role: "e", text: error });
     if (!text && !error) pushTurn({ role: "e", text: "Stopped before PasClaw replied." });
     $("#input").focus();
+    finished();
   }
 }
 
@@ -456,7 +469,8 @@ function askApproval(container, call, tab, siteAllowed) {
     if (call.name === "navigate" && call.args.url !== "back") {
       try { navTo = new URL(call.args.url, tab.url).href; } catch { navTo = String(call.args.url || ""); }
     }
-    if (!navTo && siteAllowed.has(originOf(tab.url))) return resolve(true);
+    /* Navigation always asks, "back" included: it can leave the allowed site. */
+    if (call.name !== "navigate" && siteAllowed.has(originOf(tab.url))) return resolve(true);
 
     const card = el("div", "approve");
     const what = call.name === "navigate"
@@ -483,7 +497,7 @@ function askApproval(container, call, tab, siteAllowed) {
     if (warns.length) { const w = card.querySelector(".ap-warn"); w.hidden = false; w.innerHTML = icons.alert + "<span></span>"; w.querySelector("span").textContent = warns.join(" "); }
     const siteBtn = card.querySelector(".ap-site");
     siteBtn.textContent = "Allow on " + site;
-    if (navTo) siteBtn.hidden = true;
+    if (call.name === "navigate") siteBtn.hidden = true;
 
     const done = (ok, label) => {
       card.classList.add("answered", ok ? "yes" : "no");
@@ -549,6 +563,7 @@ async function submitBrowse(text) {
   log.append(box);
   scrollDown(true);
   abort = new AbortController();
+  const finished = trackTask();
   setStreaming(true);
   await showBanner(tab.id, true);
 
@@ -615,6 +630,7 @@ async function submitBrowse(text) {
     await saveChat();
     refreshPageInfo();
     $("#input").focus();
+    finished();
   }
 }
 
