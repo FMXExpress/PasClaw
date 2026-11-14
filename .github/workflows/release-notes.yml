@@ -46,10 +46,12 @@ jobs:
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName >/dev/null
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes"
-          # Read it back: the description on the Release must be the file
-          # (line endings aside: GitHub may hand a body back with CRLF).
+          # Read it back: the description on the Release must be the file.
+          # Line endings and trailing newlines aside: GitHub may hand a body
+          # back with CRLF, and --jq prints the string and then a newline of
+          # its own, so a file ending in one newline reads back ending in two.
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > /tmp/published.md
-          norm() { tr -d '\r' < "$1" | sed -e '$a\'; }
+          norm() { printf '%s\n' "$(tr -d '\r' < "$1")"; }
           if ! diff -q <(norm "$notes") <(norm /tmp/published.md) >/dev/null; then
             echo "::error::the Release description does not match $notes after the edit"
             diff <(norm "$notes") <(norm /tmp/published.md) | head -20
