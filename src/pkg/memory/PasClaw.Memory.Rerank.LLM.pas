@@ -49,6 +49,9 @@ function LLMRerankUsage(const AProvider: ILLMProvider; const AModel, AQuery: str
 
 implementation
 
+uses
+  PasClaw.Utils;
+
 const
   DEFAULT_DOC_CHAR_CAP = 600;   { trim each candidate in the prompt to bound tokens }
 
@@ -68,8 +71,10 @@ begin
   for I := 0 to High(ADocs) do
   begin
     Doc := ADocs[I];
+    { Utf8SafeTruncate, not Copy: a byte cut through a multi-byte character
+      leaves invalid UTF-8 in the prompt. }
     if (ADocCharCap > 0) and (Length(Doc) > ADocCharCap) then
-      Doc := Copy(Doc, 1, ADocCharCap) + ' ...';
+      Doc := Utf8SafeTruncate(Doc, ADocCharCap) + ' ...';
     { collapse newlines so each candidate is one line the model can't confuse
       with the numbering. }
     Doc := StringReplace(Doc, sLineBreak, ' ', [rfReplaceAll]);

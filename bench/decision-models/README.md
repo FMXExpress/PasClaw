@@ -17,7 +17,8 @@ pasclaw decision-model bench rerank --dataset my.jsonl   # your own
 
 **Corpus.** `passages.py` splits the user-facing pages under `docs/` into
 passages of 250–1200 characters, one heading's paragraphs at a time — 697
-passages from 32 pages. Plan documents, the changelog and the README are
+passages from 32 pages, read from the docs at commit `c85592f` (`DOCS_REF`
+in `build_rerank.py`), so the corpus does not move when the docs do. Plan documents, the changelog and the README are
 left out: they restate other pages, so a question would have several right
 answers.
 
@@ -32,8 +33,9 @@ not give the answer away.
 **Pools.** `build_rerank.py` ranks all 697 passages for each question with
 BM25 and keeps the top ten, in BM25's order: the cheap first stage a
 reranker runs behind. When BM25 did not rank the answer that high, it
-takes the last slot. Passages are cut to 800 characters. BM25 puts the
-answer first for 29 of the 60, in its top ten for 49, and misses 11.
+takes a slot at the end. Passages are cut to 800 characters. BM25 puts a
+correct passage first for 30 of the 60, in its top ten for 52, and misses
+8.
 
 The set is self-contained — the passage text is in it — so its SHA-256
 (recorded with every bench run) does not move when the docs change.
@@ -59,17 +61,24 @@ first relevant candidate) for the first stage, the baseline reranker and
 the decision model, with p50/p95 latency and tokens. A call that fails
 counts with the first-stage order, as it would in production. The verdict
 is on MRR: the decision model passes when it beats the baseline by the
-margin (default 0.02).
+margin (default 0.02) and the 5th percentile of a paired bootstrap of the
+per-question gain is above zero — so a gain one or two questions carry
+does not pass.
 
 **Caveats.**
 
 - The questions were written by the same author who chose the passages,
   against PasClaw's own documentation. That is one domain and one writer.
   A team's own data is the better test: export a set in the format above.
-- Labels mark the passage the question was written for. Another passage
-  in the pool can answer it too; where a system's top answer was not the
-  labelled one, that passage was read, and the label extended only when
-  it answers the question (see Results).
+- Labels started as the passage each question was written for. Another
+  passage can answer it too, so after the first live run every passage a
+  system ranked first that was not labelled was read, and added to the
+  question's labels only when it answers the question outright. Nine
+  were (q12, q14, q22, q23, q24, q28, q43, q44, q50 — five first picked by
+  the chat reranker, two by the decision model, two by both); a partial
+  answer (q12's desktop passage) and an unrelated one (q53's) were not.
+  The audit looks only where a system disagreed with the labels, so a
+  passage neither system picked is never reviewed.
 - Sixty questions separate large differences, not small ones: one
   question is worth up to 0.017 MRR.
 

@@ -64,9 +64,15 @@ decision model, prints both, and records the run in
   record only counts against the reranker it was measured against. Change
   the default provider's model and the point goes back to it until you
   bench again.
-- The verdict is on MRR (mean reciprocal rank of the first right answer):
-  the decision model passes when it beats the baseline by `--margin`
-  (default 0.02). Hit@1, Hit@3, latency and tokens are printed beside it.
+- The verdict is on MRR (mean reciprocal rank of the first right answer),
+  and takes two things: the decision model beats the baseline by
+  `--margin` (default 0.02), **and** the gain is not noise — the 5th
+  percentile of a paired bootstrap of the per-question gain is above zero.
+  The second condition exists because the first can be carried by one or
+  two questions: the first live run below cleared the margin while each
+  reranker was better on 5 and 4 questions of 60. The bench prints the
+  paired wins, losses and ties and the lower bound. Hit@1, Hit@3, latency
+  and tokens are printed beside it, not voted on.
 - A failed call counts with the first-stage order, as it would in
   production. An unreliable backend pays for it in the metric.
 - A newer run of the same backend, model and baseline replaces the older

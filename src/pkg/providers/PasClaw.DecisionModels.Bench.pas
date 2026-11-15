@@ -18,9 +18,14 @@
   the metric rather than dropping them.
 
   The verdict is on MRR (mean reciprocal rank of the first relevant
-  candidate): the candidate passes when its MRR beats the baseline's by
-  at least the margin. Hit@1 / Hit@3, latency and tokens are reported
-  beside it, not voted on.
+  candidate), and it takes two things: the candidate's MRR beats the
+  baseline's by at least the margin, AND the gain is not noise -- the
+  5th percentile of a paired bootstrap of the per-question gain is above
+  zero. The second half is there because the first can be carried by one
+  or two questions: on the first live run Gemini Decision 1 beat a chat
+  reranker by 0.021 MRR while each was better on 5 and 4 questions, a coin
+  flip. Hit@1 / Hit@3, latency and tokens are reported beside it, not
+  voted on.
 *)
 unit PasClaw.DecisionModels.Bench;
 
@@ -68,7 +73,15 @@ function StatsPercentileMs(const S: TRankStats; P: Double): Int64;
 { One system's numbers as a JSON object (for the bench record). }
 function StatsToJSON(const S: TRankStats): string;
 
-function RerankVerdict(CandidateMRR, BaselineMRR, Margin: Double): Boolean;
+{ The 5th-percentile (Quantile 0.05) mean of Diffs over Resamples paired
+  bootstrap resamples, with a fixed-seed generator so a run is
+  reproducible. 0 for no diffs. }
+function PairedBootstrapLow(const Diffs: array of Double; Resamples: Integer;
+  Seed: Cardinal; Quantile: Double): Double;
+
+{ Pass: the candidate's MRR beats the baseline's by Margin, and the
+  bootstrap lower bound of the per-question gain is above zero. }
+function RerankVerdict(CandidateMRR, BaselineMRR, Margin, GainLow: Double): Boolean;
 
 implementation
 
@@ -292,11 +305,55 @@ begin
   end;
 end;
 
-function RerankVerdict(CandidateMRR, BaselineMRR, Margin: Double): Boolean;
+function PairedBootstrapLow(const Diffs: array of Double; Resamples: Integer;
+  Seed: Cardinal; Quantile: Double): Double;
+var
+  Means: array of Double;
+  r, i, j, n, Idx: Integer;
+  Sum, T: Double;
+  State: Cardinal;
+begin
+  Result := 0;
+  n := Length(Diffs);
+  if (n = 0) or (Resamples <= 0) then Exit;
+  SetLength(Means, Resamples);
+  State := Seed;
+  for r := 0 to Resamples - 1 do
+  begin
+    Sum := 0;
+    for i := 0 to n - 1 do
+    begin
+      { xorshift32: the same stream on every platform and compiler }
+      State := State xor (State shl 13);
+      State := State xor (State shr 17);
+      State := State xor (State shl 5);
+      Idx := Integer(State mod Cardinal(n));
+      Sum := Sum + Diffs[Idx];
+    end;
+    Means[r] := Sum / n;
+  end;
+  for i := 1 to High(Means) do
+  begin
+    T := Means[i];
+    j := i - 1;
+    while (j >= 0) and (Means[j] > T) do
+    begin
+      Means[j + 1] := Means[j];
+      Dec(j);
+    end;
+    Means[j + 1] := T;
+  end;
+  Idx := Trunc(Quantile * Resamples);
+  if Idx < 0 then Idx := 0;
+  if Idx > High(Means) then Idx := High(Means);
+  Result := Means[Idx];
+end;
+
+function RerankVerdict(CandidateMRR, BaselineMRR, Margin, GainLow: Double): Boolean;
 begin
   { A tiny epsilon so "beat by exactly the margin" is a pass, not lost to
     floating-point noise. }
-  Result := CandidateMRR + 1e-9 >= BaselineMRR + Margin;
+  Result := (CandidateMRR + 1e-9 >= BaselineMRR + Margin) and (GainLow > 0);
 end;
 
 end.

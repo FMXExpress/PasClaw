@@ -37,7 +37,9 @@ uses
   PasClaw.JSON,
   PasClaw.Config,
   PasClaw.DecisionModels,
-  PasClaw.DecisionModels.Gate;
+  PasClaw.DecisionModels.Gate,
+  PasClaw.DecisionModels.Bench,
+  PasClaw.Memory.Rerank.Decision;
 
 procedure Fail_(const Msg: string); begin WriteLn('FAIL: ' + Msg); Halt(1); end;
 procedure AssertTrue(Cond: Boolean; const Msg: string); begin if not Cond then Fail_(Msg); end;
@@ -383,8 +385,63 @@ begin
   Ok('config: decisions loads, saves and round-trips; its api_key is masked and restored');
 end;
 
+{ The first live bench lost two questions to a request body Google
+  refused as invalid JSON: an 800-byte cut through a multi-byte character. }
+procedure TestRerankQuestionsUTF8;
+var
+  Doc: string;
+  Qs: TDecisionQuestions;
+  i: Integer;
+begin
+  Doc := StringOfChar('a', DECISION_RERANK_DOC_CAP - 1) + #$E2#$80#$94 + ' tail';  { an em dash across the cap }
+  Qs := DecisionRerankQuestions([Doc, 'short ' + #$E2#$86#$92 + ' arrow']);
+  for i := 0 to High(Qs) do
+    AssertTrue(BytesAreValidUTF8(BytesOf(Qs[i].Instructions)),
+      'rerank question ' + IntToStr(i) + ' is valid UTF-8');
+  AssertTrue(BytesAreValidUTF8(BytesOf(BuildDecisionBody(Backend(dbGoogle, ''), 'Question: q', Qs))),
+    'and so is the request body');
+  AssertLacks(Qs[0].Instructions, ' tail', 'the passage is still cut at the cap');
+  Ok('rerank questions cut passages on a character boundary: the body stays valid UTF-8');
+end;
+
+{ The verdict needs the margin AND a paired lower bound above zero. The
+  first live run's per-question gains (decision model vs a chat reranker,
+  60 questions: better on 5, worse on 4, 51 ties) cleared the margin --
+  0.021 MRR -- and are exactly the case the lower bound is for. }
+procedure TestVerdict;
+var
+  Live, AllWin: array of Double;
+  i: Integer;
+  Low, Mean: Double;
+begin
+  SetLength(Live, 60);
+  for i := 0 to 59 do Live[i] := 0;
+  Live[0] := 1/3 - 1/2;  Live[1] := 1 - 1/2;  Live[2] := 1 - 1/2;  Live[3] := 1 - 1/2;
+  Live[4] := 1 - 1/2;    Live[5] := 1/2 - 1;  Live[6] := 1/3 - 1;  Live[7] := 1/3 - 1/2;
+  Live[8] := 1 - 1/4;
+  Mean := 0;
+  for i := 0 to 59 do Mean := Mean + Live[i];
+  Mean := Mean / 60;
+  AssertTrue(Mean >= 0.02, 'premise: the live gains clear the 0.02 margin');
+  Low := PairedBootstrapLow(Live, 2000, 20261115, 0.05);
+  AssertTrue(Low <= 0, Format('a 5-4 split is not evidence: lower bound %.3f must be <= 0', [Low]));
+  AssertTrue(not RerankVerdict(0.950, 0.929, 0.02, Low), 'so the verdict is NOT PASSED despite the margin');
+  AssertTrue(PairedBootstrapLow(Live, 2000, 20261115, 0.05) = Low, 'and the bootstrap is reproducible');
+
+  SetLength(AllWin, 60);
+  for i := 0 to 59 do if i < 12 then AllWin[i] := 0.5 else AllWin[i] := 0;
+  Low := PairedBootstrapLow(AllWin, 2000, 20261115, 0.05);
+  AssertTrue(Low > 0, Format('better on 12, worse on none: lower bound %.3f > 0', [Low]));
+  AssertTrue(RerankVerdict(0.95, 0.85, 0.02, Low), 'passes');
+  AssertTrue(not RerankVerdict(0.86, 0.85, 0.02, Low), 'but not under the margin');
+  AssertTrue(PairedBootstrapLow([], 2000, 1, 0.05) = 0, 'no questions: 0, no pass');
+  Ok('verdict: the margin and a paired bootstrap lower bound above zero -- a 5-4 split does not pass');
+end;
+
 begin
   TestURLs;
+  TestVerdict;
+  TestRerankQuestionsUTF8;
   TestBodies;
   TestParseLive;
   TestResolve;

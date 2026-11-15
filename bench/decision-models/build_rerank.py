@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Build bench/decision-models/rerank-docs.jsonl from the docs and the questions.
 
-Each question in rerank-queries.json names the passage(s) that answer it.
+Each question in rerank-queries.json names the passage(s) that answer it
+(the one it was written for, plus any another system's top pick turned out
+to answer too -- see README.md, Labels).
 Its candidate pool is the top POOL passages for the question by BM25 over
 every passage (passages.py) -- the cheap first stage a reranker runs
 behind -- in BM25 order. A correct passage BM25 did not rank that high
 takes the last slot, and the line records where BM25 put it, so the set
 says how much reordering a reranker has to do.
 
-The output is self-contained (the passage text is in it), so the set and
-its hash stay the same when the docs change; rebuild on purpose.
+The passages come from the docs at a fixed commit (DOCS_REF), not the
+working tree, so the corpus is the same however the docs move; the output
+is self-contained (the passage text is in it) and its hash changes only
+when the questions, labels or DOCS_REF do. Rebuild on purpose.
 
 usage: build_rerank.py [repo-root]   (writes next to this script)
 """
@@ -24,6 +28,7 @@ from passages import passages  # noqa: E402
 
 POOL = 10
 CAP = 800
+DOCS_REF = "c85592f"   # main before decision models: 697 passages from 32 pages
 STOP = set("a an and are as at be by can do does for from how i if in is it its of on or "
            "the this to what when where which why with my me you your that so not".split())
 
@@ -35,7 +40,7 @@ def toks(s):
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else "."
     here = os.path.dirname(os.path.abspath(__file__))
-    ps = passages(root)
+    ps = passages(root, DOCS_REF)
     byid = {p["id"]: p for p in ps}
     qs = json.load(open(os.path.join(here, "rerank-queries.json"), encoding="utf-8"))
     for q in qs:
@@ -72,9 +77,16 @@ def main():
         order = sorted(range(N), key=lambda i: (-bm25(qt, i), ps[i]["id"]))
         rank_of = {ps[i]["id"]: r for r, i in enumerate(order)}
         pool = [ps[i]["id"] for i in order[:POOL]]
+        # A correct passage the first stage missed takes a slot at the end,
+        # each its own: fill from the last slot back, never over another
+        # correct passage.
+        slot = POOL - 1
         for r in q["relevant"]:
             if r not in pool:
-                pool[-1] = r  # the first stage missed it: it takes the last slot
+                while pool[slot] in q["relevant"]:
+                    slot -= 1
+                pool[slot] = r
+                slot -= 1
         bm25_rank = min(rank_of[r] for r in q["relevant"]) + 1
         ranks.append(bm25_rank)
         out.append({

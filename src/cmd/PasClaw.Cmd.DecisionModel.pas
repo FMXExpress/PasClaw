@@ -70,7 +70,8 @@ begin
   PrintLn('                     and for auto, local when provisioned, else llm)');
   PrintLn('  --provider NAME    the chat provider for the llm baseline (default: default_provider)');
   PrintLn('  --model MODEL      its model (default: the provider''s)');
-  PrintLn('  --margin M         MRR the backend must gain to pass (default 0.02)');
+  PrintLn('  --margin M         MRR the backend must gain to pass (default 0.02); the');
+  PrintLn('                     gain''s paired-bootstrap 95% lower bound must also be > 0');
   PrintLn('  --limit N          only the first N questions (a smoke run; not recorded)');
   PrintLn('  --pace MS          wait MS milliseconds between questions, to stay under a');
   PrintLn('                     free tier''s requests-per-minute (e.g. 4500 for 15/min)');
@@ -192,6 +193,9 @@ var
   Line: TJsonObject;
   Rec: TDecisionBenchRecord;
   Detail: TJsonObject;
+  Gains: array of Double;
+  Wins, Losses, Ties, RB, RC: Integer;
+  GainLow: Double;
 begin
   Result := 1;
   BackendName := '';
@@ -206,6 +210,10 @@ begin
   Retries := 4;
   BaseRetries := 0;
   CandRetries := 0;
+  Wins := 0;
+  Losses := 0;
+  Ties := 0;
+  Gains := nil;
   NoSave := False;
   i := Start;
   while i <= High(Argv) do
@@ -352,6 +360,13 @@ begin
       end;
       AddOutcome(Cand, OrderC, Cases[i].Relevant, Elapsed, not OkC, InTok, 0);
 
+      { Paired: the same question, both systems. }
+      RB := FirstRelevantRank(OrderB, Cases[i].Relevant);
+      RC := FirstRelevantRank(OrderC, Cases[i].Relevant);
+      SetLength(Gains, Length(Gains) + 1);
+      Gains[High(Gains)] := 1.0 / RC - 1.0 / RB;
+      if RC < RB then Inc(Wins) else if RC > RB then Inc(Losses) else Inc(Ties);
+
       if Out_ <> nil then
       begin
         Line := TJsonObject.Create;
@@ -395,10 +410,20 @@ begin
     if Cand.Errors > 0 then
       PrintLn('  WARNING: ' + IntToStr(Cand.Errors) + ' decision model call(s) failed and count with ' +
               'the first-stage order');
-    Pass := RerankVerdict(StatsMRR(Cand), StatsMRR(Base), Margin);
+    GainLow := PairedBootstrapLow(Gains, 2000, 20261115, 0.05);
+    PrintLn('  paired: ' + B.Name + ' ranked the answer higher on ' + IntToStr(Wins) +
+            ', the baseline on ' + IntToStr(Losses) + ', tied on ' + IntToStr(Ties) +
+            '; MRR gain ' + F3(StatsMRR(Cand) - StatsMRR(Base)) +
+            ', 95% lower bound ' + F3(GainLow));
+    Pass := RerankVerdict(StatsMRR(Cand), StatsMRR(Base), Margin, GainLow);
     if Pass then
       PrintLn('  PASS: ' + CandName + ' beat ' + BaselineName + ' by ' +
-              F3(StatsMRR(Cand) - StatsMRR(Base)) + ' MRR (needs +' + F3(Margin) + ')')
+              F3(StatsMRR(Cand) - StatsMRR(Base)) + ' MRR (needs +' + F3(Margin) +
+              '), and the gain''s lower bound is above zero')
+    else if StatsMRR(Cand) + 1e-9 >= StatsMRR(Base) + Margin then
+      PrintLn('  NOT PASSED: ' + CandName + ' MRR ' + F3(StatsMRR(Cand)) + ' vs ' +
+              BaselineName + ' ' + F3(StatsMRR(Base)) + ' clears the margin, but the gain''s ' +
+              '95% lower bound is ' + F3(GainLow) + ': it could be noise')
     else
       PrintLn('  NOT PASSED: ' + CandName + ' MRR ' + F3(StatsMRR(Cand)) + ' vs ' +
               BaselineName + ' ' + F3(StatsMRR(Base)) + ' (needs +' + F3(Margin) + ')');
@@ -437,6 +462,10 @@ begin
         Detail.PutRaw('baseline', StatsToJSON(Base));
         Detail.PutRaw('candidate', StatsToJSON(Cand));
         Detail.PutInt('baseline_retries', BaseRetries);
+        Detail.PutInt('paired_wins', Wins);
+        Detail.PutInt('paired_losses', Losses);
+        Detail.PutInt('paired_ties', Ties);
+        Detail.PutFloat('gain_low95', GainLow);
         Detail.PutInt('candidate_retries', CandRetries);
         Rec.DetailJSON := Detail.ToJSON;
       finally

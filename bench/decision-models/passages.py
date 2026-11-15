@@ -10,6 +10,7 @@ pages, so a question would have several right answers.
 import glob
 import os
 import re
+import subprocess
 
 MIN, MAX = 250, 1200
 SKIP = re.compile(r"(-plan\.md$|^plan\.md$|^changelog\.md$|^studio-|-design\.md$)")
@@ -19,15 +20,30 @@ def slug(s):
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:48] or "top"
 
 
-def passages(root):
+def doc_files(root, ref):
+    """(name, text) for docs/*.md -- from the working tree, or, with ref,
+    from that commit, so the corpus does not move when the docs do."""
+    if not ref:
+        for path in sorted(glob.glob(os.path.join(root, "docs", "*.md"))):
+            yield os.path.basename(path), open(path, encoding="utf-8").read()
+        return
+    names = subprocess.run(["git", "-C", root, "ls-tree", "--name-only", ref, "docs/"],
+                           capture_output=True, text=True, check=True).stdout.split()
+    for n in sorted(names):
+        if n.endswith(".md") and n.count("/") == 1:
+            text = subprocess.run(["git", "-C", root, "show", "%s:%s" % (ref, n)],
+                                  capture_output=True, check=True).stdout.decode("utf-8")
+            yield os.path.basename(n), text
+
+
+def passages(root, ref=None):
     out = []
-    for path in sorted(glob.glob(os.path.join(root, "docs", "*.md"))):
-        name = os.path.basename(path)
+    for name, text in doc_files(root, ref):
         if SKIP.search(name):
             continue
         rel = "docs/" + name
         heading, paras, in_code = "top", [], False
-        lines = open(path, encoding="utf-8").read().split("\n")
+        lines = text.split("\n")
 
         def flush():
             buf, n = [], 0

@@ -49,6 +49,7 @@ function DecisionRerankQuestions(const ADocs: array of string): TDecisionQuestio
 implementation
 
 uses
+  PasClaw.Utils,
   PasClaw.Memory.Rerank.Serve;
 
 function RerankBaselineName(UseLocal: Boolean; const Prov: ILLMProvider;
@@ -85,9 +86,11 @@ begin
   SetLength(Result, Length(ADocs));
   for i := 0 to High(ADocs) do
   begin
-    Doc := ADocs[i];
-    if Length(Doc) > DECISION_RERANK_DOC_CAP then
-      Doc := Copy(Doc, 1, DECISION_RERANK_DOC_CAP);
+    { Utf8SafeTruncate, not Copy: under FPC a string is bytes, and a cut
+      through a multi-byte character makes the request body invalid UTF-8,
+      which the vendor refuses outright (the first live bench lost two
+      questions to it). }
+    Doc := Utf8SafeTruncate(ADocs[i], DECISION_RERANK_DOC_CAP);
     Result[i] := ScoreQuestion('p' + IntToStr(i),
       'How well does this passage answer the question?' + #10#10 +
       'Passage:' + #10 + Doc,
