@@ -140,7 +140,30 @@ from BM25 by a long way and cannot separate them from each other. The
 decision model answered about 30% faster with nothing generated, and read
 1.7× the input tokens (each question repeats the four level descriptions).
 
-*The same bench against the local cross-encoder (`bge-reranker-base`) is in progress; its row goes here when it finishes.*
+**Against the local cross-encoder** (`--baseline local`: `bge-reranker-base`,
+int8, on this container's CPU — what `/v1/rerank` uses on an install with
+`rerank_backend: local`, or `auto` with the model provisioned):
+
+| | Hit@1 | Hit@3 | MRR | p50 / p95 ms | input / output tokens | failed calls |
+|---|---|---|---|---|---|---|
+| `local:bge-reranker-base` | 56.7% | 81.7% | 0.707 | 533 / 670 | – | 0 |
+| `gemini-decision-1` | 98.3% | 100.0% | 0.992 | 635 / 762 | 159,917 / 0 | 0 |
+
+Paired: the decision model ranked the answer higher on 26 questions,
+lower on 1, tied on 33. Gain 0.285 MRR, 95% lower bound 0.204. **Passed.**
+On such an install `status` then reads
+
+```
+rerank    ON   rerank uses gemini-decision (gemini-decision-1): beat local:bge-reranker-base (mrr 0.992 vs 0.707, n=60, better on 26 / worse on 1 / tied 33, gain 95% lower bound 0.204, …)
+```
+
+and `/v1/rerank` answers with `"model": "decision:gemini-decision:gemini-decision-1"`
+— checked live against a gateway with this config. The cross-encoder
+barely improves on BM25 for these pages (markdown with code and tables);
+the decision model is far better at it, for the price of the query and
+passages going to Google where the local reranker kept them on the host.
+The gate measures the first part; the second is the operator's call,
+made by selecting the backend.
 
 **How this run got here.** The first live run is the reason the verdict
 has two halves and the set has its current labels:
@@ -168,8 +191,11 @@ set (BM25 first stage, then `gemini-decision-1`, original labels):
 **What this does and does not say.** On PasClaw's documentation, with
 questions one person wrote, Gemini Decision 1 reranks about as well as a
 small Gemini chat model — not measurably better — faster and with no
-output, at more input. It says nothing about other data: that is what
-`--dataset` is for, and the gate reads whatever set the run used.
+output, at more input; and far better than the local cross-encoder. So the
+same backend stays off at one install and goes on at another, which is the
+point of benching against the reranker each install actually uses. None
+of it says anything about other data: that is what `--dataset` is for,
+and the gate reads whatever set the run used.
 
 ## Privacy and limits
 
