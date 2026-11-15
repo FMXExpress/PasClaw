@@ -447,6 +447,70 @@ begin
   Ok('verdict: the margin and a paired bootstrap lower bound above zero -- a 5-4 split does not pass');
 end;
 
+type
+  { Saves passing records as fast as it can: the bench finishing while the
+    gateway serves /v1/rerank (Codex P2 on #647). }
+  TRecordWriter = class(TThread)
+  public
+    Saves: Integer;
+    procedure Execute; override;
+  end;
+
+procedure TRecordWriter.Execute;
+var
+  i: Integer;
+  Err: string;
+begin
+  for i := 1 to Saves do
+    SaveDecisionBenchRecord(Run('gd', 'gemini-decision-1', 'llm', 0.9 + i * 1e-6, 0.79, True), Err);
+end;
+
+procedure TestGateUnderConcurrentSave;
+var
+  C: TConfig;
+  B: TDecisionBackend;
+  Why, Err: string;
+  W: TRecordWriter;
+  Reads, Shut, Raised: Integer;
+  FirstWhy: string;
+begin
+  DeleteFile(DecisionBenchPath('rerank'));
+  AssertTrue(SaveDecisionBenchRecord(Run('gd', 'gemini-decision-1', 'llm', 0.9, 0.79, True), Err), Err);
+  C := Cfg('{"decision_models":{"backends":[{"name":"gd","kind":"google","api_key":"k"}],"points":{"rerank":"gd"}}}');
+  W := TRecordWriter.Create(True);
+  try
+    W.Saves := 1500;
+    Reads := 0; Shut := 0; Raised := 0; FirstWhy := '';
+    W.Start;
+    while not W.Finished do
+    begin
+      Inc(Reads);
+      try
+        if not DecisionGate(C, 'rerank', 'llm:test', B, Why) then
+        begin
+          Inc(Shut);
+          if FirstWhy = '' then FirstWhy := Why;
+        end;
+      except
+        on E: Exception do
+        begin
+          Inc(Raised);
+          if FirstWhy = '' then FirstWhy := 'raised: ' + E.Message;
+        end;
+      end;
+    end;
+    W.WaitFor;
+  finally
+    W.Free;
+    C.Free;
+  end;
+  AssertTrue(Reads > 100, Format('premise: the reader overlapped the writer (%d reads)', [Reads]));
+  AssertTrue(Raised = 0, Format('the gate raised %d of %d reads during saves: %s', [Raised, Reads, FirstWhy]));
+  AssertTrue(Shut = 0, Format('the gate shut on %d of %d reads during saves of passing runs: %s', [Shut, Reads, FirstWhy]));
+  AssertTrue(not FileExists(DecisionBenchPath('rerank') + '.tmp'), 'no temp file left behind');
+  Ok(Format('the gate stays open and never raises across %d reads during 1500 saves', [Reads]));
+end;
+
 begin
   TestURLs;
   TestVerdict;
@@ -455,6 +519,7 @@ begin
   TestParseLive;
   TestResolve;
   TestGate;
+  TestGateUnderConcurrentSave;
   TestConfig;
   WriteLn('decision_models_tests: OK');
 end.

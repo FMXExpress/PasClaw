@@ -17,6 +17,12 @@
   Records live in <home>/decision-models/bench/<point>.json, one per
   backend + model + baseline, newest replacing older. A failing run is
   recorded too: it is the answer to "why isn't this on?".
+
+  The gateway reads the file on every /v1/rerank while a bench may be
+  writing it, so the gate never raises: a record it cannot read is no
+  record, the gate is shut, and the request gets its own reranker. A save
+  swaps the new file in with one atomic rename, so a reader finds the old
+  record or the new one, never neither.
 *)
 unit PasClaw.DecisionModels.Gate;
 
@@ -67,13 +73,22 @@ function SaveDecisionBenchRecord(const R: TDecisionBenchRecord; out Err: string)
   either decision_models.require_bench is off or the latest run of that
   backend and model against Baseline (the exact name the bench records,
   e.g. llm:gemini/gemini-3.5-flash-lite) passed. Why says which, either
-  way, in one line. }
+  way, in one line. Never raises: anything unexpected is a shut gate. }
 function DecisionGate(const Cfg: TConfig; const Point, Baseline: string;
   out B: TDecisionBackend; out Why: string): Boolean;
+
+{ Put Src in Dest's place in one step, replacing Dest: POSIX rename(2),
+  Windows MoveFileEx(MOVEFILE_REPLACE_EXISTING). A concurrent reader of
+  Dest sees the old file or the new one, never no file -- which a
+  delete-then-rename would show it. }
+function ReplaceFileAtomic(const Src, Dest: string): Boolean;
 
 implementation
 
 uses
+  {$IFDEF FPC}{$IFDEF UNIX}BaseUnix,{$ENDIF}{$ENDIF}
+  {$IFNDEF FPC}{$IFDEF POSIX}Posix.Stdio,{$ENDIF}{$ENDIF}
+  {$IFDEF MSWINDOWS}{$IFDEF FPC}Windows,{$ELSE}Winapi.Windows,{$ENDIF}{$ENDIF}
   Classes,
   PasClaw.JSON,
   PasClaw.Utils;
@@ -236,6 +251,20 @@ begin
   end;
 end;
 
+function ReplaceFileAtomic(const Src, Dest: string): Boolean;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := MoveFileEx(PChar(Src), PChar(Dest),
+                       MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH);
+  {$ELSE}
+    {$IFDEF FPC}
+  Result := FpRename(Src, Dest) = 0;
+    {$ELSE}
+  Result := Posix.Stdio.rename(PAnsiChar(UTF8Encode(Src)), PAnsiChar(UTF8Encode(Dest))) = 0;
+    {$ENDIF}
+  {$ENDIF}
+end;
+
 function LoadDecisionBenchRecords(const Point: string): TDecisionBenchRecords;
 var
   Path, Body: string;
@@ -246,7 +275,13 @@ begin
   Result := nil;
   Path := DecisionBenchPath(Point);
   if not FileExists(Path) then Exit;
-  Body := ReadFileText(Path);
+  { The file can be replaced between the check and the open; a read that
+    fails is no runs -- the gate shut, the request on its own reranker. }
+  try
+    Body := ReadFileText(Path);
+  except
+    Exit;
+  end;
   Root := nil;
   try
     Root := TJsonObject.Parse(Body);
@@ -310,13 +345,12 @@ begin
     Path := DecisionBenchPath(R.Point);
     try
       ForceDirectories(ExtractFileDir(Path));
-      { A gateway reads this on every rerank: write beside it and move it
-        into place, so a reader never sees half a file. (A reader that
-        did would read no runs -- the gate shut, the safe side.) }
+      { A gateway reads this on every rerank: write beside it and swap it
+        in with one atomic rename. Deleting the old file first would leave
+        a moment with no record at all. }
       WriteFileText(Path + '.tmp', Root.ToJSON);
-      if FileExists(Path) then DeleteFile(Path);
-      if not RenameFile(Path + '.tmp', Path) then
-        raise Exception.Create('rename failed');
+      if not ReplaceFileAtomic(Path + '.tmp', Path) then
+        raise Exception.Create('could not move ' + Path + '.tmp into place');
       Result := True;
     except
       on E: Exception do Err := 'could not write ' + Path + ': ' + E.Message;
@@ -357,7 +391,7 @@ begin
   end;
 end;
 
-function DecisionGate(const Cfg: TConfig; const Point, Baseline: string;
+function GateUnguarded(const Cfg: TConfig; const Point, Baseline: string;
   out B: TDecisionBackend; out Why: string): Boolean;
 var
   Name, Err: string;
@@ -415,6 +449,22 @@ begin
          FmtNum(Runs[Latest].BaselineValue) + ', n=' + IntToStr(Runs[Latest].N) +
          PairedNote(Runs[Latest]) + ', ' + Runs[Latest].At + ')';
   Result := True;
+end;
+
+function DecisionGate(const Cfg: TConfig; const Point, Baseline: string;
+  out B: TDecisionBackend; out Why: string): Boolean;
+begin
+  try
+    Result := GateUnguarded(Cfg, Point, Baseline, B, Why);
+  except
+    on E: Exception do
+    begin
+      Result := False;
+      B := Default(TDecisionBackend);
+      Why := Point + ' stays on ' + Baseline + ': the bench record could not be read (' +
+             E.Message + ')';
+    end;
+  end;
 end;
 
 end.
