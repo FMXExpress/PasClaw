@@ -738,6 +738,9 @@ uses
   PasClaw.Memory.Rerank,        { reranker registry: DEFAULT_RERANKER, RerankerKeys }
   PasClaw.Memory.Rerank.Serve,  { local ONNX cross-encoder for /v1/rerank }
   PasClaw.Memory.Rerank.LLM,    { LLM fallback reranker (asks the chat model) }
+  PasClaw.DecisionModels,       { decision models (Gemini Decision 1, Jev) }
+  PasClaw.DecisionModels.Gate,  { ...used at a point only where a bench showed it helps }
+  PasClaw.Memory.Rerank.Decision,
   PasClaw.Memory.Provision,     { background embed/reranker provisioning for the web Memory dialog }
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
@@ -10810,10 +10813,17 @@ procedure TGatewayServer.HandleRerank(ARequest: TIdHTTPRequestInfo;
   (echo each doc's text into the result). Returns a top-level object with
   model, a results array (each element index + relevance_score, plus a
   document.text when return_documents is set) sorted by relevance
-  descending, and usage. No outbound call -- the query and documents are
-  scored on-host and never leave. }
+  descending, and usage. The local backend scores on-host; the llm backend
+  sends the query and documents to the chat provider; a decision model
+  (decision_models.points.rerank) sends them to its vendor, and is used
+  only when `pasclaw decision-model bench rerank` recorded a run where it
+  beat the backend this request would otherwise get. }
 var
   Body, ReqModel, ModelId, OneDoc, Backend, RespModel, LLMModel: string;
+  GateKind, GateModel, GateWhy, DecErr: string;
+  DecB: TDecisionBackend;
+  DecTok, DecMs: Int64;
+  UsedDecision: Boolean;
   Req, Root, Item, DocObj, Usage: TJsonObject;
   DocsArr, ResArr: TJsonArray;
   Docs: array of string;
@@ -10897,7 +10907,35 @@ begin
       UseLLM := not LocalRerankAvailable(GetHome);
 
     RespModel := '';
+    { A decision model, where a recorded bench showed it beats the reranker
+      this request would otherwise get -- asked about exactly that one,
+      down to the chat model the llm branch below would use (the caller's
+      only on an explicit rerank_backend=llm). Any failure falls through to
+      that reranker, so a vendor outage costs the request nothing but time. }
+    GateModel := '';
     if UseLLM then
+    begin
+      GateKind := 'llm';
+      if Backend = 'llm' then GateModel := ReqModel;
+    end
+    else
+      GateKind := 'local';
+    UsedDecision := False;
+    if DecisionGate(FCfg, 'rerank',
+         RerankBaselineName(not UseLLM, FProvider, GateModel, GetHome), DecB, GateWhy) then
+    begin
+      if DecisionRerank(DecB, Query, Docs, Order, Scores, DecTok, DecMs, DecErr) then
+      begin
+        UsedDecision := True;
+        RespModel := 'decision:' + DecB.Name + ':' + DecB.Model;
+      end
+      else
+        LogWarn('rerank: decision model %s failed (%s); using the %s reranker',
+                [DecB.Name, DecErr, GateKind]);
+    end;
+    if UsedDecision then
+      { ranked above }
+    else if UseLLM then
     begin
       if not LLMRerankAvailable(FProvider) then
       begin
