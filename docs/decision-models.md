@@ -89,8 +89,11 @@ falls back to the baseline reranker and still succeeds.
 
 ```
 Decision points:
-  rerank    off  rerank stays on llm:gemini/gemini-3.5-flash-lite: gemini-decision (gemini-decision-1) has not been benchmarked against it -- run `pasclaw decision-model bench rerank`
+  rerank    off  rerank stays on llm:gemini/gemini-3.5-flash-lite: gemini-decision (gemini-decision-1) did not beat llm:gemini/gemini-3.5-flash-lite (mrr 0.992 vs 0.985, needs +0.020, …)
 ```
+
+That is the real line after the run in [Results](#results): the decision
+model did not earn the point, so the point did not change.
 
 ## How rerank asks
 
@@ -120,7 +123,53 @@ Measured live on 2026-11-15 with the free-tier Gemini API key this was
 built with. See [bench/decision-models/README.md](../bench/decision-models/README.md)
 for how the set was made and its caveats.
 
-The live runs are in progress; this section gets their numbers when they finish.
+**Against the chat reranker `/v1/rerank` uses here** (`rerank_backend: llm`,
+the default provider on `gemini-3.5-flash-lite`), through
+`pasclaw decision-model bench rerank --pace 6000`:
+
+| | Hit@1 | Hit@3 | MRR | p50 / p95 ms | input / output tokens | failed calls |
+|---|---|---|---|---|---|---|
+| first stage (BM25 order) | 50.0% | 76.7% | 0.651 | – | – | – |
+| `llm:gemini/gemini-3.5-flash-lite` | 98.3% | 98.3% | 0.985 | 875 / 1225 | 93,351 / 1,127 | 0 |
+| `gemini-decision-1` | 98.3% | 100.0% | 0.992 | 618 / 725 | 159,917 / 0 | 0 |
+
+Paired: each ranked the answer higher on one question and they tied on
+58. Gain 0.007 MRR, 95% lower bound −0.017. **Not passed** — rerank stays
+on the chat model. Both are at the ceiling of this set: it separates them
+from BM25 by a long way and cannot separate them from each other. The
+decision model answered about 30% faster with nothing generated, and read
+1.7× the input tokens (each question repeats the four level descriptions).
+
+*The same bench against the local cross-encoder (`bge-reranker-base`) is in progress; its row goes here when it finishes.*
+
+**How this run got here.** The first live run is the reason the verdict
+has two halves and the set has its current labels:
+
+- Two of its decision calls failed with HTTP 400 "Invalid JSON payload":
+  passages were cut at 800 *bytes*, through a multi-byte character, and
+  the vendor refuses a body that is not valid UTF-8. Fixed for both
+  rerankers; the runs above have no failed calls.
+- It "passed" by 0.021 MRR against the 0.02 margin while each side was
+  better on 5 and 4 questions — the case the bootstrap bound now stops.
+- Nine of its disagreements with the labels were passages that answer the
+  question outright; they were added (see the
+  [set's README](../bench/decision-models/README.md)). With them, both
+  rerankers rose to the scores above.
+
+**The question design** was chosen with a throwaway prototype on the same
+set (BM25 first stage, then `gemini-decision-1`, original labels):
+
+| design | Hit@1 | MRR | p50 / p95 ms |
+|---|---|---|---|
+| passage in each score question (used) | 91.7% | 0.953 | 507 / 1176 |
+| all passages in the input, one question per number | 91.7% | 0.956 | 525 / 2284 |
+| yes/no "does this passage answer the question?" | 85.0% | 0.919 | 499 / 744 |
+
+**What this does and does not say.** On PasClaw's documentation, with
+questions one person wrote, Gemini Decision 1 reranks about as well as a
+small Gemini chat model — not measurably better — faster and with no
+output, at more input. It says nothing about other data: that is what
+`--dataset` is for, and the gate reads whatever set the run used.
 
 ## Privacy and limits
 

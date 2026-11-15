@@ -283,6 +283,7 @@ var
   C: TConfig;
   B: TDecisionBackend;
   Why, Err: string;
+  Rec: TDecisionBenchRecord;
   Runs: TDecisionBenchRecords;
 begin
   DeleteFile(DecisionBenchPath('rerank'));
@@ -300,6 +301,14 @@ begin
     AssertTrue(SaveDecisionBenchRecord(Run('gd', 'gemini-decision-1', 'llm', 0.80, 0.79, False), Err), Err);
     AssertTrue(not DecisionGate(C, 'rerank', 'llm:test', B, Why), 'a failing run: shut');
     AssertContains(Why, 'did not beat', 'says it did not beat the baseline');
+
+    { Clears the margin, fails the noise test: the reason says so. }
+    Rec := Run('gd', 'gemini-decision-1', 'llm', 0.950, 0.929, False);
+    Rec.DetailJSON := '{"paired_wins":5,"paired_losses":4,"paired_ties":51,"gain_low95":-0.03}';
+    AssertTrue(SaveDecisionBenchRecord(Rec, Err), Err);
+    AssertTrue(not DecisionGate(C, 'rerank', 'llm:test', B, Why), 'margin cleared, noise test failed: shut');
+    AssertContains(Why, 'could be noise', 'and says the gain could be noise');
+    AssertContains(Why, 'better on 5 / worse on 4 / tied 51', 'with the paired counts');
 
     AssertTrue(SaveDecisionBenchRecord(Run('gd', 'gemini-decision-1', 'llm', 0.90, 0.79, True), Err), Err);
     Runs := LoadDecisionBenchRecords('rerank');

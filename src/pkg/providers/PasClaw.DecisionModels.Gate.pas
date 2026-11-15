@@ -331,6 +331,32 @@ begin
   Result := FormatFloat('0.000', V);
 end;
 
+{ ", better on 5 / worse on 4 / tied 51, 95% lower bound -0.030" from a
+  run's detail, or '' when the run predates those fields. }
+function PairedNote(const R: TDecisionBenchRecord): string;
+var
+  D: TJsonObject;
+begin
+  Result := '';
+  if R.DetailJSON = '' then Exit;
+  D := nil;
+  try
+    D := TJsonObject.Parse(R.DetailJSON);
+  except
+    D := nil;
+  end;
+  if D = nil then Exit;
+  try
+    if D.Has('gain_low95') then
+      Result := ', better on ' + IntToStr(D.GetInt('paired_wins', 0)) +
+                ' / worse on ' + IntToStr(D.GetInt('paired_losses', 0)) +
+                ' / tied ' + IntToStr(D.GetInt('paired_ties', 0)) +
+                ', gain 95% lower bound ' + FmtNum(D.GetFloat('gain_low95', 0));
+  finally
+    D.Free;
+  end;
+end;
+
 function DecisionGate(const Cfg: TConfig; const Point, Baseline: string;
   out B: TDecisionBackend; out Why: string): Boolean;
 var
@@ -371,16 +397,23 @@ begin
   end;
   if not Runs[Latest].Pass then
   begin
-    Why := Point + ' stays on ' + Baseline + ': ' + Name + ' (' + B.Model +
-           ') did not beat ' + Runs[Latest].Baseline + ' (' + Runs[Latest].Metric + ' ' +
-           FmtNum(Runs[Latest].CandidateValue) + ' vs ' + FmtNum(Runs[Latest].BaselineValue) +
-           ', needs +' + FmtNum(Runs[Latest].Margin) + ', ' + Runs[Latest].At + ')';
+    if Runs[Latest].CandidateValue + 1e-9 >= Runs[Latest].BaselineValue + Runs[Latest].Margin then
+      Why := Point + ' stays on ' + Baseline + ': ' + Name + ' (' + B.Model +
+             ') cleared the margin over ' + Runs[Latest].Baseline + ' but the gain could be noise (' +
+             Runs[Latest].Metric + ' ' + FmtNum(Runs[Latest].CandidateValue) + ' vs ' +
+             FmtNum(Runs[Latest].BaselineValue) + PairedNote(Runs[Latest]) + ', ' + Runs[Latest].At + ')'
+    else
+      Why := Point + ' stays on ' + Baseline + ': ' + Name + ' (' + B.Model +
+             ') did not beat ' + Runs[Latest].Baseline + ' (' + Runs[Latest].Metric + ' ' +
+             FmtNum(Runs[Latest].CandidateValue) + ' vs ' + FmtNum(Runs[Latest].BaselineValue) +
+             ', needs +' + FmtNum(Runs[Latest].Margin) + PairedNote(Runs[Latest]) + ', ' +
+             Runs[Latest].At + ')';
     Exit;
   end;
   Why := Point + ' uses ' + Name + ' (' + B.Model + '): beat ' + Runs[Latest].Baseline +
          ' (' + Runs[Latest].Metric + ' ' + FmtNum(Runs[Latest].CandidateValue) + ' vs ' +
-         FmtNum(Runs[Latest].BaselineValue) + ', n=' + IntToStr(Runs[Latest].N) + ', ' +
-         Runs[Latest].At + ')';
+         FmtNum(Runs[Latest].BaselineValue) + ', n=' + IntToStr(Runs[Latest].N) +
+         PairedNote(Runs[Latest]) + ', ' + Runs[Latest].At + ')';
   Result := True;
 end;
 
