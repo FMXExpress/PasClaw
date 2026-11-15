@@ -342,6 +342,29 @@ type
     MaxRounds:    Integer;
   end;
 
+  (* A decision backend: a model that answers typed questions with
+     probabilities (Gemini Decision 1, TypeSafe's Jev, OpenJev). See
+     PasClaw.DecisionModels. Kind is "google" or "systemone". Provider names a
+     providers[] entry to take api_base and api_key from (a Gemini
+     provider for kind google); api_base / api_key here override it. *)
+  TDecisionModelBackendConfig = record
+    Name, Kind, Provider, APIBase, APIKey, Model: string;
+  end;
+
+  (* Which backend a decision point uses ("rerank" -> "gemini-decision").
+     Selecting one is not enough on its own: with RequireBench (the
+     default) a point uses it only once `pasclaw decide bench` has
+     recorded a run where it beat what the point does without it. *)
+  TDecisionModelPointConfig = record
+    Point, Backend: string;
+  end;
+
+  TDecisionModelsConfig = record
+    Backends:     array of TDecisionModelBackendConfig;
+    Points:       array of TDecisionModelPointConfig;
+    RequireBench: Boolean;
+  end;
+
   TBackupConfig = record
     Dir:         string;    { '' = <home>/backups }
     KeepDaily:   Integer;   { default 7 }
@@ -1002,6 +1025,7 @@ type
     Maintenance:           TMaintenanceConfig;
     Backup:                TBackupConfig;
     Verification:          TVerificationConfig;
+    DecisionModels:        TDecisionModelsConfig;
     (* Wall-clock bound, in seconds, on every shell_exec / execute_code /
        shell-skill command. Before this there was none: a command that
        never returned hung the turn for good. On expiry the child is
@@ -1515,6 +1539,7 @@ begin
   Backup.IncludeSecrets := True;   { see the field comment: a backup should restore the integrations too }
   Verification.ScenariosDir := '';  { off until the operator points at a scenarios dir }
   Verification.MaxRounds    := 2;
+  DecisionModels.RequireBench := True;  { a backend is used only where a bench showed it helps }
   ShellTimeoutSec        := 600;   { ten minutes; long enough for a build, short enough to notice }
   MCPCodeModeDefault     := True;  { MCP tools are script-callable by default; see TMCPServer.CodeMode }
   BackgroundJobsMax      := 6;     { subagents + background shells, per coordinator }
@@ -1694,8 +1719,8 @@ end;
 
 function TConfig.ToJSON: string;
 var
-  Root, Gw, Tmp, Tmp2, Diag, OtelHdrs, WTmp: TJsonObject;
-  Arr, FallbacksArr, HostsArr: TJsonArray;
+  Root, Gw, Tmp, Tmp2, Diag, OtelHdrs, WTmp, DecItem: TJsonObject;
+  Arr, FallbacksArr, HostsArr, DecArr: TJsonArray;
   i: Integer;
 begin
   Root := TJsonObject.Create;
@@ -2295,6 +2320,40 @@ begin
       end;
     end;
 
+    if (Length(DecisionModels.Backends) > 0) or (Length(DecisionModels.Points) > 0)
+       or not DecisionModels.RequireBench then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        DecArr := TJsonArray.Create;
+        for i := 0 to High(DecisionModels.Backends) do
+        begin
+          DecItem := TJsonObject.Create;
+          DecItem.PutStr('name', DecisionModels.Backends[i].Name);
+          DecItem.PutStr('kind', DecisionModels.Backends[i].Kind);
+          if DecisionModels.Backends[i].Provider <> '' then
+            DecItem.PutStr('provider', DecisionModels.Backends[i].Provider);
+          if DecisionModels.Backends[i].APIBase <> '' then
+            DecItem.PutStr('api_base', DecisionModels.Backends[i].APIBase);
+          if DecisionModels.Backends[i].APIKey <> '' then
+            DecItem.PutStr('api_key', DecisionModels.Backends[i].APIKey);
+          if DecisionModels.Backends[i].Model <> '' then
+            DecItem.PutStr('model', DecisionModels.Backends[i].Model);
+          DecArr.AddObject(DecItem);
+        end;
+        Tmp.PutArray('backends', DecArr);
+        DecItem := TJsonObject.Create;
+        for i := 0 to High(DecisionModels.Points) do
+          DecItem.PutStr(DecisionModels.Points[i].Point, DecisionModels.Points[i].Backend);
+        Tmp.PutObject('points', DecItem);
+        if not DecisionModels.RequireBench then
+          Tmp.PutBool('require_bench', False);
+        Root.PutObject('decision_models', Tmp);
+      finally
+        Tmp.Free;
+      end;
+    end;
+
     Arr := TJsonArray.Create;
     for i := 0 to High(Crons) do
     begin
@@ -2343,6 +2402,64 @@ begin
     Result := Root.ToJSON;
   finally
     Root.Free;
+  end;
+end;
+
+(* decision_models: { backends: [{name, kind, provider, api_base, api_key, model}],
+                      points: {"<point>": "<backend name>"}, require_bench } *)
+procedure LoadDecisionModelsConfig(Obj: TJsonObject; var D: TDecisionModelsConfig);
+var
+  Arr: TJsonArray;
+  It, Pts: TJsonObject;
+  Keys: TStringList;
+  i: Integer;
+  B: TDecisionModelBackendConfig;
+begin
+  D.RequireBench := Obj.GetBool('require_bench', D.RequireBench);
+  Arr := Obj.ChildArray('backends');
+  if Arr <> nil then
+  try
+    SetLength(D.Backends, 0);
+    for i := 0 to Arr.Count - 1 do
+    begin
+      It := Arr.ItemObject(i);
+      if It = nil then Continue;
+      try
+        B := Default(TDecisionModelBackendConfig);
+        B.Name     := Trim(It.GetStr('name', ''));
+        B.Kind     := LowerCase(Trim(It.GetStr('kind', '')));
+        B.Provider := Trim(It.GetStr('provider', ''));
+        B.APIBase  := Trim(It.GetStr('api_base', ''));
+        B.APIKey   := Trim(It.GetStr('api_key', ''));
+        B.Model    := Trim(It.GetStr('model', ''));
+        if B.Name = '' then Continue;
+        SetLength(D.Backends, Length(D.Backends) + 1);
+        D.Backends[High(D.Backends)] := B;
+      finally
+        It.Free;
+      end;
+    end;
+  finally
+    Arr.Free;
+  end;
+  Pts := Obj.ChildObject('points');
+  if Pts <> nil then
+  try
+    SetLength(D.Points, 0);
+    Keys := Pts.Keys;
+    try
+      for i := 0 to Keys.Count - 1 do
+        if Trim(Pts.GetStr(Keys[i], '')) <> '' then
+        begin
+          SetLength(D.Points, Length(D.Points) + 1);
+          D.Points[High(D.Points)].Point   := LowerCase(Trim(Keys[i]));
+          D.Points[High(D.Points)].Backend := Trim(Pts.GetStr(Keys[i], ''));
+        end;
+    finally
+      Keys.Free;
+    end;
+  finally
+    Pts.Free;
   end;
 end;
 
@@ -2615,6 +2732,13 @@ begin
       Verification.ScenariosDir := Trim(Obj.GetStr('scenarios', Verification.ScenariosDir));
       Verification.MaxRounds    := Integer(Obj.GetInt('max_rounds', Verification.MaxRounds));
       if Verification.MaxRounds < 1 then Verification.MaxRounds := 1;
+    finally
+      Obj.Free;
+    end;
+    Obj := Root.ChildObject('decision_models');
+    if Obj <> nil then
+    try
+      LoadDecisionModelsConfig(Obj, DecisionModels);
     finally
       Obj.Free;
     end;
@@ -3481,7 +3605,7 @@ end;
 
 function MaskConfigSecretsJSON(const JSON: string): string;
 var
-  Root, Item: TJsonObject;
+  Root, Item, Item2: TJsonObject;
   Arr: TJsonArray;
   i: Integer;
 begin
@@ -3547,6 +3671,31 @@ begin
     try
       if Item.GetStr('api_key', '') <> '' then
         Item.PutStr('api_key', MaskedSecretPlaceholder);
+    finally
+      Item.Free;
+    end;
+
+    { decision_models.backends[].api_key: a decision model vendor's key. }
+    Item := Root.ChildObject('decision_models');
+    if Item <> nil then
+    try
+      Arr := Item.ChildArray('backends');
+      if Arr <> nil then
+      try
+        for i := 0 to Arr.Count - 1 do
+        begin
+          Item2 := Arr.ItemObject(i);
+          if Item2 = nil then Continue;
+          try
+            if Item2.GetStr('api_key', '') <> '' then
+              Item2.PutStr('api_key', MaskedSecretPlaceholder);
+          finally
+            Item2.Free;
+          end;
+        end;
+      finally
+        Arr.Free;
+      end;
     finally
       Item.Free;
     end;
@@ -3695,6 +3844,34 @@ begin
         end;
       finally
         if EdArr <> nil then EdArr.Free;
+      end;
+
+      { decision_models.backends[].api_key -- matched by backend name. }
+      EdGw := Edited.ChildObject('decision_models');
+      try
+        if EdGw <> nil then
+        begin
+          EdArr := EdGw.ChildArray('backends');
+          try
+            CurGw := nil;
+            CurArr := nil;
+            if Current <> nil then CurGw := Current.ChildObject('decision_models');
+            try
+              if CurGw <> nil then CurArr := CurGw.ChildArray('backends');
+              try
+                RestoreArray(EdArr, CurArr, 'api_key');
+              finally
+                if CurArr <> nil then CurArr.Free;
+              end;
+            finally
+              if CurGw <> nil then CurGw.Free;
+            end;
+          finally
+            if EdArr <> nil then EdArr.Free;
+          end;
+        end;
+      finally
+        if EdGw <> nil then EdGw.Free;
       end;
 
       { gateway.token -- single object. }

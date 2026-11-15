@@ -39,6 +39,14 @@ function LLMRerank(const AProvider: ILLMProvider; const AModel, AQuery: string;
   const ADocs: array of string; ATopN, ADocCharCap: Integer;
   out Order: TArray<Integer>; out Scores: TArray<Single>): Boolean;
 
+{ The same, also reporting the tokens the call used (what the provider
+  reported; 0 when it reported none). For `pasclaw decide bench`, which
+  puts this reranker's cost beside a decision model's. }
+function LLMRerankUsage(const AProvider: ILLMProvider; const AModel, AQuery: string;
+  const ADocs: array of string; ATopN, ADocCharCap: Integer;
+  out Order: TArray<Integer>; out Scores: TArray<Single>;
+  out InputTokens, OutputTokens: Int64): Boolean;
+
 implementation
 
 const
@@ -144,6 +152,17 @@ function LLMRerank(const AProvider: ILLMProvider; const AModel, AQuery: string;
   const ADocs: array of string; ATopN, ADocCharCap: Integer;
   out Order: TArray<Integer>; out Scores: TArray<Single>): Boolean;
 var
+  InTok, OutTok: Int64;
+begin
+  Result := LLMRerankUsage(AProvider, AModel, AQuery, ADocs, ATopN, ADocCharCap,
+                           Order, Scores, InTok, OutTok);
+end;
+
+function LLMRerankUsage(const AProvider: ILLMProvider; const AModel, AQuery: string;
+  const ADocs: array of string; ATopN, ADocCharCap: Integer;
+  out Order: TArray<Integer>; out Scores: TArray<Single>;
+  out InputTokens, OutputTokens: Int64): Boolean;
+var
   Opts: TChatOptions;
   Msgs: TMessageArray;
   NoTools: array of TToolDefinition;
@@ -155,6 +174,8 @@ var
 begin
   Order  := nil;
   Scores := nil;
+  InputTokens := 0;
+  OutputTokens := 0;
   Result := False;
   N := Length(ADocs);
   if N = 0 then Exit;
@@ -203,6 +224,9 @@ begin
     on E: Exception do
       Exit;   { provider raised -> caller keeps the first-stage order }
   end;
+
+  InputTokens  := Resp.Usage.InputTokens;
+  OutputTokens := Resp.Usage.OutputTokens;
 
   { Providers report transport/HTTP failures via StatusCode and stuff the error
     text into Content rather than raising (e.g. "gemini error: status=-1 msg=TLS

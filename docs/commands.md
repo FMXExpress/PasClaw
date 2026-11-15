@@ -512,6 +512,17 @@ pasclaw route report --since 30
 
 Token volume per provider/model over the saved sessions in the window, beside the cheap-tier settings (`background_model`, `fast_model`, the auto-router's easy tier), so the split between the flagship and the small model is visible. A session counts under the last model it used; turns the auto-router sent to the easy tier mid-session are attributed to the session's model, so the cheap share is a floor.
 
+## decision-model
+
+```sh
+pasclaw decision-model status                    # each decision point: on or off, and why
+pasclaw decision-model test gemini-decision      # one small live call to a backend
+pasclaw decision-model bench rerank              # benchmark against today's reranker, record the verdict
+pasclaw decision-model bench rerank --pace 4500 --out ranks.jsonl
+```
+
+Decision models (Gemini Decision 1, Jev, OpenJev) answer typed questions with probabilities instead of text. A backend selected for a decision point in `decision_models` is used there only after `bench` records a run in which it beat the exact implementation the point would otherwise use. `bench rerank` exits 0 when the backend passed, 3 when it ran and did not, 1 when it could not run; `--baseline`, `--provider`, `--model`, `--margin`, `--dataset`, `--limit` and `--no-save` are in `--help`. See [Decision models](./decision-models.md).
+
 ## permissions
 
 ```sh

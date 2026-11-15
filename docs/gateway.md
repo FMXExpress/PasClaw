@@ -39,6 +39,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/status` | GET | Default provider/model + provider, MCP, cron, skill, tool counts. |
 | `/v1/tools` | GET | Registered tool descriptors. |
 | `/v1/context` | POST | What the next `/v1/chat/completions` turn puts in front of the model, by part — system prompt sections, tool schemas (built-in / MCP), messages — as token estimates. Takes the chat request's body. See [below](#v1context--the-context-breakdown). |
+| `/v1/rerank` | POST | Order `documents` by relevance to `query` (`top_n`, `return_documents`; `texts` is accepted for `documents`). `rerank_backend` picks the reranker: `local` (the ONNX cross-encoder, on-host), `llm` (the chat model), `auto` (local when provisioned, else llm). A decision model replaces it only where a recorded bench showed it does better; the response's `model` says which answered. See [Decision models](./decision-models.md). |
 | `/v1/mcp` | GET | Configured MCP servers (`name`, `cmd`, `args`, `enabled`). |
 | `/v1/cron` | GET | Cron entries (`id`, `spec`, `skill`, `args`, `channel_*`, `enabled`). |
 | `/v1/skills` | GET | Installed skills (`name`, `description`, `kind`, `path`, `dir`). |

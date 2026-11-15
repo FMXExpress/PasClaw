@@ -74,6 +74,7 @@ uses
   PasClaw.Cmd.Backup,       (* `pasclaw backup` / `pasclaw restore` *)
   PasClaw.Cmd.Maintain,     (* `pasclaw maintain` -- the nightly pass *)
   PasClaw.Cmd.Route,        (* `pasclaw route report` -- model usage split *)
+  PasClaw.Cmd.DecisionModel, (* `pasclaw decision-model` -- bench + gate for decision models *)
   PasClaw.Cmd.Permissions,  (* `pasclaw permissions list|test` -- the ordered rule list *)
   PasClaw.Cmd.TUI;
 
@@ -147,7 +148,8 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 42);
+  SetLength(Sub, 43);
+  Sub[42] := 'decision-model  Decision models (Gemini Decision 1, Jev): status, test, bench + gate';
   Sub[41] := 'acp          Run as an Agent Client Protocol agent over stdio (Zed and other editors)';
   Sub[40] := 'permissions  List the allow/deny/ask rules, or test what one tool call would get';
   Sub[36] := 'backup       Zip the workspace + redacted config + restore notes; rotate old backups';
@@ -262,6 +264,7 @@ begin
   else if Cmd = 'restore'  then Result := Cmd_Restore_Run(Argv)
   else if Cmd = 'maintain' then Result := Cmd_Maintain_Run(Argv)
   else if Cmd = 'route'    then Result := Cmd_Route_Run(Argv)
+  else if Cmd = 'decision-model' then Result := Cmd_DecisionModel_Run(Argv)
   else if Cmd = 'permissions' then Result := Cmd_Permissions_Run(Argv)
   else if Cmd = 'update'   then Result := Cmd_Update_Run(Argv)
   else if Cmd = 'version'  then Result := Cmd_Version_Run(Argv)
