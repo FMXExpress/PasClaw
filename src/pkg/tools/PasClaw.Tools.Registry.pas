@@ -76,6 +76,8 @@ type
      deleted by any process is there (or gone) on the next call with no
      restart; the source caches. Static tools win a name clash. *)
   TDynamicToolsFn = function: TToolList;
+  { Named, so the field and a copy of it are one type under dcc64. }
+  TDynamicToolsFnArray = array of TDynamicToolsFn;
 
   TToolRegistry = class
   private
@@ -95,7 +97,7 @@ type
       RunTool releases the lock before invoking the handler so a slow
       tool (HTTP MCP call, shell-out) can't block parallel reads. }
     FLock:  TCriticalSection;
-    FDynamic: array of TDynamicToolsFn;
+    FDynamic: TDynamicToolsFnArray;
     function IsRevealedLocked(const Name: string): Boolean;
     function DynamicTools: TToolList;
     procedure RegisterImpl(const T: TTool);
@@ -415,7 +417,7 @@ end;
   lock: they read the disk. }
 function TToolRegistry.DynamicTools: TToolList;
 var
-  Srcs: array of TDynamicToolsFn;
+  Srcs: TDynamicToolsFnArray;
   Got: TToolList;
   i, j, k: Integer;
   Clash: Boolean;

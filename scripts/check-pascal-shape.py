@@ -19,6 +19,17 @@ reader might not:
   `end;` in column 0 -- the close of a routine -- the next line of code
   must start a new declaration in column 0, not an indented statement.
 
+  A dynamic array copied into a variable of another array type: FPC
+  accepts `A := Copy(B)` whenever the element types match; dcc64 needs A and
+  B to be the SAME declared type, and every `array of T` written out in a
+  declaration is a type of its own (E2008 Incompatible types). It shipped
+  twice in one week -- a record field and a local, both `array of Int64`;
+  a class field and a local, both `array of TDynamicToolsFn`. The rule is
+  narrow: the target of `:= Copy(<other>)` is declared in this file as a
+  bare `array of ...` (its nearest declaration above the line), and the
+  source is a different variable. Declare a named type, or TArray<T>,
+  for both.
+
 Two other checks were tried here and removed, because a checker that cries
 wolf is worse than no checker:
 
@@ -146,6 +157,33 @@ def check(path):
                 f'(indented code after a column-0 "end;") -- '
                 f'{line.strip()[:60]}')
         after_end = line == 'end;'
+
+    # 3. `A := Copy(B)` with A declared as a bare `array of T`. Declarations
+    #    are read from the comment-free text: `Name[, Name]: array of T;` on
+    #    its own line (a local, a field). Parameters are open arrays, not
+    #    this, and sit inside parentheses on a routine line, so they never
+    #    match the line-anchored pattern.
+    decls = []   # (line index, name, is_bare_array)
+    for i, line in enumerate(lines):
+        m = re.match(r'^\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*:\s*(.+?);\s*$', line)
+        if not m or re.match(r'^\s*(procedure|function|property|const|var|out)\b', line, re.I):
+            continue
+        bare = bool(re.match(r'array\s+of\b', m.group(2).strip(), re.I))
+        for name in re.split(r'\s*,\s*', m.group(1)):
+            decls.append((i, name.lower(), bare))
+    for i, line in enumerate(lines):
+        m = re.search(r'\b([A-Za-z_]\w*)\s*:=\s*Copy\(\s*([A-Za-z_][\w.^]*)\s*\)', line)
+        if not m:
+            continue
+        target, source = m.group(1).lower(), m.group(2).lower()
+        if source.split('.')[-1] == target:
+            continue
+        above = [d for d in decls if d[1] == target and d[0] < i]
+        if above and above[-1][2]:
+            problems.append(
+                f'{path}:{i + 1}: {m.group(1)} is a bare `array of`, so dcc64 will not '
+                f'take Copy({m.group(2)}) of another declaration (E2008) -- declare '
+                f'both with one named type or TArray<T>')
 
     return problems
 

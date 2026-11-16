@@ -49,7 +49,9 @@ type
     Name: string;
     N, Hit1, Hit3, Errors: Integer;
     SumRR: Double;
-    LatMs: array of Int64;
+    { TArray, not `array of`: dcc64 treats two `array of Int64`
+      declarations as different types (E2008 on Copy into a local). }
+    LatMs: TArray<Int64>;
     InTok, OutTok: Int64;
   end;
 
@@ -258,7 +260,7 @@ end;
 
 function StatsPercentileMs(const S: TRankStats; P: Double): Int64;
 var
-  A: array of Int64;
+  A: TArray<Int64>;
   i, j, Idx: Integer;
   T: Int64;
 begin

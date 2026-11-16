@@ -93,7 +93,9 @@ end;
 
 procedure StoreChanged;
 begin
-  InterlockedIncrement(GStoreGen);
+  { AtomicIncrement is dcc64's intrinsic; its InterlockedIncrement lives in
+    Winapi.Windows, which this unit does not (and on POSIX cannot) use. }
+  {$IFDEF FPC}InterlockedIncrement(GStoreGen);{$ELSE}AtomicIncrement(GStoreGen);{$ENDIF}
 end;
 
 { "pending" is the approval list's route (/v1/workflows/pending): a
@@ -285,12 +287,12 @@ begin
   end;
 end;
 
-function ApprovePendingWorkflow(const Id: string; out Err: string): Boolean;
+function ApprovePendingWorkflow(const Id: string; out Err: string): Boolean; overload;
 begin
   Result := ApprovePendingWorkflow(Id, '', Err);
 end;
 
-function ApprovePendingWorkflow(const Id, ExpectedSha: string; out Err: string): Boolean;
+function ApprovePendingWorkflow(const Id, ExpectedSha: string; out Err: string): Boolean; overload;
 var
   Spec: TWorkflowSpec;
   Errs: string;
