@@ -529,6 +529,11 @@ type
       skip dispatch -- the synthetic result is what gets appended to
       history. }
     Cancelled:  Boolean;
+    { Set True when a gate (plan / space mode, a permission rule, a declined
+      ask) refused the call. ResultText then holds the refusal, Err stays
+      empty -- right for the model, which should read why; a caller that
+      chains results (a workflow) reads this to stop instead. }
+    Refused:    Boolean;
   end;
   PToolCallDispatch = ^TToolCallDispatch;
 
@@ -932,6 +937,11 @@ begin
         case Ans of
           aaAllowOnce: ;
           aaAllowSession: RememberSessionAllow(Cfg.SteeringKey, ToolName, Res);
+          aaNobody:
+            begin
+              Refusal := PermissionAskRefusal(ToolName, Res, True);
+              Result := False;
+            end;
         else
           Refusal := PermissionAskRefusal(ToolName, Res, False);
           Result := False;
@@ -940,13 +950,60 @@ begin
   end;
 end;
 
+(* The gates a call meets before it runs: plan mode, space mode, then the
+   ordered permission rules. False with the refusal -- which reaches the
+   model verbatim as the tool's result -- when one of them says no. Shared
+   by DispatchOneToolCall and the dispatcher's Admit, so a workflow's MCP
+   node meets exactly the gates a direct call does. *)
+function LoopAdmits(const Cfg: TToolLoopConfig; const Name, ArgsJSON: string;
+                    out Refusal: string): Boolean;
+var
+  PlanTool: TTool;
+begin
+  Refusal := '';
+  (* Plan mode dispatch gate (PR #290). Before any preflight or registry
+     lookup, refuse mutating tools when Cfg.Mode = pmPlan. The refusal
+     becomes the tool result the model sees, so the model can plan
+     around the missing capability or report it to the operator. We
+     look up the tool to read its Category; an unknown name falls
+     through to the existing "no such tool" handling so plan mode
+     doesn't change the unknown-tool error message. Plan-mode refusal
+     lands in the result (not an error) so the "switch to build mode"
+     hint reaches the model verbatim. *)
+  if (Cfg.Mode = pmPlan) and (Cfg.Registry <> nil)
+     and Cfg.Registry.Find(Name, PlanTool)
+     and (PlanTool.Category = tcMutating) then
+  begin
+    Refusal := PlanModeRefusal(Name);
+    Exit(False);
+  end;
+  (* SPACE-mode gate: mutating tools are refused until the plan is
+     written. plan_write itself is tcReadOnly (deliberately -- see its
+     unit comment) so the unlock passes this gate, as do all the
+     Search-phase tools. *)
+  if (Cfg.Mode = pmSpace) and (not GSpacePlanDone)
+     and (Cfg.Registry <> nil)
+     and Cfg.Registry.Find(Name, PlanTool)
+     and (PlanTool.Category = tcMutating) then
+  begin
+    Refusal := SpaceModeRefusal(Name);
+    Exit(False);
+  end;
+  (* Ordered permissions (PasClaw.Permissions). After the mode gates,
+     before preflight: policies.json first, then config.json's rules,
+     last match wins. Deny and a declined ask land in the refusal, like
+     the mode refusals, so the explanation reaches the model verbatim. An
+     allow here is only an opinion -- the sandbox denylist and the family
+     switches still run inside the tool. *)
+  Result := PermissionGate(Cfg, Name, ArgsJSON, Refusal);
+end;
+
 procedure DispatchOneToolCall(const Cfg: TToolLoopConfig;
                                var D: TToolCallDispatch);
 var
   RetryArgs, Patch, CanonicalPatch, N1, N2: string;
   ArgsObj: TJsonObject;
   HasUnsup: Boolean;
-  PlanTool: TTool;
   SavedCfg: PToolLoopConfig;
   SavedWs, SavedSid: string;
   SavedGate: Boolean;
@@ -969,48 +1026,15 @@ begin
   D.Err        := '';
   D.ResultText := '';
   RetryArgs    := D.Call.Func.Arguments;
-  (* Plan mode dispatch gate (PR #290). Before any preflight or registry
-     lookup, refuse mutating tools when Cfg.Mode = pmPlan. The refusal
-     becomes the tool result the model sees, so the model can plan
-     around the missing capability or report it to the operator. We
-     look up the tool to read its Category; an unknown name falls
-     through to the existing "no such tool" handling so plan mode
-     doesn't change the unknown-tool error message. *)
-  if (Cfg.Mode = pmPlan) and (Cfg.Registry <> nil)
-     and Cfg.Registry.Find(D.Call.Func.Name, PlanTool)
-     and (PlanTool.Category = tcMutating) then
+  { Mode gates and permission rules (LoopAdmits). A refusal lands in
+    ResultText with Err empty, so the explanation reaches the model
+    verbatim rather than wrapped as "ERROR: ..."; the tool never ran,
+    which is not an error from the loop's point of view. }
+  if not LoopAdmits(Cfg, D.Call.Func.Name, RetryArgs, D.ResultText) then
   begin
-    { Plan-mode refusal lands in ResultText (Err left empty) so the
-      descriptive guidance reaches the model verbatim. If we set Err
-      the loop would wrap the message as "ERROR: <Err>" and the
-      helpful "switch to build mode" hint would never reach the
-      model. The dispatch never actually ran the tool, so this is
-      not an error condition from the loop's perspective. }
-    D.ResultText := PlanModeRefusal(D.Call.Func.Name);
+    D.Refused := True;
     Exit;
   end;
-  (* SPACE-mode gate: mutating tools are refused until the plan is
-     written. plan_write itself is tcReadOnly (deliberately -- see its
-     unit comment) so the unlock passes this gate, as do all the
-     Search-phase tools. Like the plan-mode refusal above, the message
-     lands in ResultText with Err empty so the unlock recipe reaches
-     the model verbatim. *)
-  if (Cfg.Mode = pmSpace) and (not GSpacePlanDone)
-     and (Cfg.Registry <> nil)
-     and Cfg.Registry.Find(D.Call.Func.Name, PlanTool)
-     and (PlanTool.Category = tcMutating) then
-  begin
-    D.ResultText := SpaceModeRefusal(D.Call.Func.Name);
-    Exit;
-  end;
-  (* Ordered permissions (PasClaw.Permissions). After the mode gates,
-     before preflight: policies.json first, then config.json's rules,
-     last match wins. Deny and a declined ask land in ResultText with
-     Err empty, like the mode refusals, so the explanation reaches the
-     model verbatim. An allow here is only an opinion -- the sandbox
-     denylist and the family switches still run inside the tool. *)
-  if not PermissionGate(Cfg, D.Call.Func.Name, RetryArgs, D.ResultText) then
-    Exit;
   { Through the gate: what it asked was answered yes. The tool reads this
     to tell a gated call from one that never met the gate (restored in
     the finally -- a tool that dispatches others nests). }
@@ -1860,12 +1884,17 @@ type
      applied: the per-turn read dedup and the JSON condenser -- those are
      about what rides in the model's history, and a script's intermediate
      result does not. *)
-  TLoopDispatcher = class(TInterfacedObject, IToolDispatcher)
+  TLoopDispatcher = class(TInterfacedObject, IToolDispatcher, IToolGate)
   private
     FCfg: TToolLoopConfig;
   public
     constructor Create(const ACfg: TToolLoopConfig);
     function Dispatch(const Name, ArgsJSON: string; out ErrMsg: string): string;
+    { IToolGate: the same gates, for a caller that makes the call itself. }
+    function Admit(const Name, ArgsJSON: string; out Refusal: string): Boolean;
+    procedure Finish(const Name, ArgsJSON: string; var ResultText, ErrMsg: string);
+    function DispatchChecked(const Name, ArgsJSON: string; out Refused: Boolean;
+                             out ErrMsg: string): string;
   end;
 
 constructor TLoopDispatcher.Create(const ACfg: TToolLoopConfig);
@@ -1900,6 +1929,109 @@ begin
   Result := MaybeFlagPromptware(D.ResultText, 'tool output (' + Name + ', via script)');
   if (FCfg.ToolOutputCap > 0) and (Length(Result) > FCfg.ToolOutputCap) then
     Result := StashAndMaybeTruncate(Result, FCfg.ToolOutputCap, Truncated);
+end;
+
+function TLoopDispatcher.DispatchChecked(const Name, ArgsJSON: string;
+  out Refused: Boolean; out ErrMsg: string): string;
+var
+  D: TToolCallDispatch;
+begin
+  Result := '';
+  ErrMsg := '';
+  D := Default(TToolCallDispatch);
+  D.Call.Id := 'rpc';
+  D.Call.Func.Name := Name;
+  D.Call.Func.Arguments := ArgsJSON;
+  if Length(FCfg.Hooks) > 0 then
+    HooksBeforeToolCall(FCfg.Hooks, D.Call, D.Cancelled, D.ResultText);
+  if D.Cancelled then
+  begin
+    Refused := True;
+    if D.ResultText = '' then D.ResultText := 'refused: a BeforeToolCall hook cancelled ' + Name;
+    Exit(D.ResultText);
+  end;
+  DispatchOneToolCall(FCfg, D);
+  Refused := D.Refused;
+  if Refused then Exit(D.ResultText);
+  if Length(FCfg.Hooks) > 0 then
+    HooksAfterToolResult(FCfg.Hooks, D.Call, D.ResultText, D.Err);
+  if D.Err <> '' then
+  begin
+    ErrMsg := D.Err;
+    Exit;
+  end;
+  { No output cap here, unlike Dispatch: a workflow step's output is the
+    next step's input (selectors read into it), not text for the model's
+    context, and a truncated JSON result breaks the chain. The workflow's
+    own result is capped like any tool result where it reaches the model. }
+  Result := MaybeFlagPromptware(D.ResultText, 'tool output (' + Name + ', via workflow)');
+end;
+
+function TLoopDispatcher.Admit(const Name, ArgsJSON: string; out Refusal: string): Boolean;
+var
+  Call: TToolCall;
+  Cancelled: Boolean;
+  Synthetic: string;
+begin
+  if not LoopAdmits(FCfg, Name, ArgsJSON, Refusal) then Exit(False);
+  if Length(FCfg.Hooks) > 0 then
+  begin
+    Call := Default(TToolCall);
+    Call.Id := 'rpc';
+    Call.Func.Name := Name;
+    Call.Func.Arguments := ArgsJSON;
+    Cancelled := False;
+    Synthetic := '';
+    HooksBeforeToolCall(FCfg.Hooks, Call, Cancelled, Synthetic);
+    if Cancelled then
+    begin
+      Refusal := Synthetic;
+      if Refusal = '' then Refusal := 'refused: a BeforeToolCall hook cancelled ' + Name;
+      Exit(False);
+    end;
+  end;
+  Result := True;
+end;
+
+procedure TLoopDispatcher.Finish(const Name, ArgsJSON: string; var ResultText, ErrMsg: string);
+var
+  Call: TToolCall;
+begin
+  if Length(FCfg.Hooks) > 0 then
+  begin
+    Call := Default(TToolCall);
+    Call.Id := 'rpc';
+    Call.Func.Name := Name;
+    Call.Func.Arguments := ArgsJSON;
+    HooksAfterToolResult(FCfg.Hooks, Call, ResultText, ErrMsg);
+  end;
+  if ErrMsg = '' then
+    ResultText := MaybeFlagPromptware(ResultText, 'tool output (' + Name + ', via workflow)');
+end;
+
+{ A dispatcher with no loop behind it (THeadlessDispatcherFn): a zeroed
+  config is build mode, no hooks, and no OnAsk -- so the permission rules
+  apply and an `ask` is refused, there being no one to ask. }
+function HeadlessLoopDispatcher(Reg: TObject): IToolDispatcher;
+var
+  Cfg: TToolLoopConfig;
+begin
+  Cfg := Default(TToolLoopConfig);
+  Cfg.Registry := TToolRegistry(Reg);
+  Result := TLoopDispatcher.Create(Cfg);
+end;
+
+{ GAskOperator: the asker of the turn dispatching on this thread. }
+function AskOperatorOnThisThread(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+var
+  Cfg: PToolLoopConfig;
+begin
+  Cfg := GDispatchingCfg;
+  if (Cfg = nil) or not Assigned(Cfg^.OnAsk) then Exit(aaNobody);
+  if SessionAllowed(Cfg^.SteeringKey, ToolName, Resource) then Exit(aaAllowSession);
+  Result := Cfg^.OnAsk(ToolName, ArgsJSON, Resource, Reason);
+  if Result = aaAllowSession then
+    RememberSessionAllow(Cfg^.SteeringKey, ToolName, Resource);
 end;
 
 function CaptureLoopDispatcher: IToolDispatcher;
@@ -3073,8 +3205,12 @@ initialization
   { The tool RPC asks for a gated dispatcher through this hook rather than
     using this unit directly -- PasClaw.Tools.RPC sits below the loop. }
   GCaptureDispatcher := @CaptureLoopDispatcher;
+  GHeadlessDispatcher := @HeadlessLoopDispatcher;
+  GAskOperator := @AskOperatorOnThisThread;
 
 finalization
   GCaptureDispatcher := nil;
+  GHeadlessDispatcher := nil;
+  GAskOperator := nil;
 
 end.

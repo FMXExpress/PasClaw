@@ -116,6 +116,8 @@ curl http://127.0.0.1:8088/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
 ```
 
+Each saved [workflow](./workflows.md) is served here as its own tool, `wf_<id>`, with the workflow's inputs as its schema — read-only when every step is, so a workflow that writes needs `--mcp-allow-write` like any other mutating tool. A workflow saved or approved while the gateway runs is in the next `tools/list`. Its steps meet the gateway's permission rules; an `ask` rule is refused, there being no operator on an MCP call to ask.
+
 ### Allowlist + read-only mode
 
 The gateway can be locked down for exposed MCP. By default the inbound MCP server refuses mutating tools (`fs_write`, `fs_edit_hashline`, `shell_exec`, `execute_code`, `memory_write`); `--mcp-allow-write` opts in to them. There is no per-tool allowlist flag — the allowlist is the read-only / read-write split.

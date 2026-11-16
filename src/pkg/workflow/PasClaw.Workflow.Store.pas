@@ -46,11 +46,64 @@ function SaveWorkflow(const Spec: TWorkflowSpec; out Err: string): Boolean;
 { Delete by id. False (with Err) on unsafe id; True (no error) if already gone. }
 function DeleteWorkflow(const Id: string; out Err: string): Boolean;
 
+(* Approval. A workflow the AGENT saves is staged, not saved: it lands in
+   workflows/.pending/<id>.json and runs (or becomes a tool) only once the
+   operator approves it -- the same contract as an agent-authored skill.
+   The operator's own saves (the web editor, the API) are not staged. *)
+
+{ workflows/.pending -- never listed as a workflow, never a tool. }
+function PendingWorkflowsDir: string;
+{ Stage Spec for approval, replacing an earlier staged version. }
+function StagePendingWorkflow(const Spec: TWorkflowSpec; out Err: string): Boolean;
+function ListPendingWorkflows: TWorkflowSummaryArray;
+function LoadPendingWorkflow(const Id: string; out Spec: TWorkflowSpec; out Err: string): Boolean;
+{ Validate the staged spec again and save it as a workflow; the staged copy
+  is removed. Replaces a saved workflow of the same id. }
+function ApprovePendingWorkflow(const Id: string; out Err: string): Boolean; overload;
+{ The same, refusing when the staged file no longer hashes to ExpectedSha
+  (empty = no check): what is approved is what the operator read, not a
+  version the agent staged over it since. }
+function ApprovePendingWorkflow(const Id, ExpectedSha: string; out Err: string): Boolean; overload;
+{ SHA-256 (hex) of the staged file, '' when there is none. }
+function PendingWorkflowSha(const Id: string): string;
+{ Discard the staged spec. }
+function RejectPendingWorkflow(const Id: string; out Err: string): Boolean;
+{ Is there a saved (approved) workflow with this id? }
+function WorkflowExists(const Id: string): Boolean;
+
+{ Bumped by every save, delete and approval in this process: with the
+  directory listing it tells a cache the store changed, even when a
+  rewrite keeps a file's size and lands in the same second. }
+function WorkflowStoreGeneration: Integer;
+
 implementation
 
 uses
   PasClaw.Workspaces,
-  PasClaw.Utils, PasClaw.Config;
+  PasClaw.Utils, PasClaw.Config,
+  PasClaw.Crypto.HMAC;   { SHA256Bytes }
+
+var
+  GStoreGen: Integer = 0;
+
+function WorkflowStoreGeneration: Integer;
+begin
+  Result := GStoreGen;
+end;
+
+procedure StoreChanged;
+begin
+  { AtomicIncrement is dcc64's intrinsic; its InterlockedIncrement lives in
+    Winapi.Windows, which this unit does not (and on POSIX cannot) use. }
+  {$IFDEF FPC}InterlockedIncrement(GStoreGen);{$ELSE}AtomicIncrement(GStoreGen);{$ENDIF}
+end;
+
+{ "pending" is the approval list's route (/v1/workflows/pending): a
+  workflow saved under that id could never be read back over HTTP. }
+function ReservedWorkflowId(const Id: string): Boolean;
+begin
+  Result := SameText(Id, 'pending');
+end;
 
 function WorkflowsDir: string;
 begin
@@ -136,13 +189,152 @@ begin
   if Trim(Id) = '' then Id := Spec.Name;
   if not IsSafeWorkflowId(Id) then
   begin Err := Format('unsafe workflow id "%s" (use letters, digits, - _ .)', [Id]); Exit; end;
+  if ReservedWorkflowId(Id) then
+  begin Err := Format('"%s" is reserved; name the workflow something else', [Id]); Exit; end;
   try
     ForceDirectories(WorkflowsDir);
     WriteFileText(PathFor(Id), WorkflowToJSON(Spec));
+    StoreChanged;
     Result := True;
   except
     on E: Exception do Err := E.Message;
   end;
+end;
+
+function PendingWorkflowsDir: string;
+begin
+  Result := JoinPath(WorkflowsDir, '.pending');
+end;
+
+function SpecId(const Spec: TWorkflowSpec): string;
+begin
+  Result := Spec.Id;
+  if Trim(Result) = '' then Result := Spec.Name;
+end;
+
+function StagePendingWorkflow(const Spec: TWorkflowSpec; out Err: string): Boolean;
+var
+  Id: string;
+begin
+  Result := False;
+  Err := '';
+  Id := SpecId(Spec);
+  if not IsSafeWorkflowId(Id) then
+  begin Err := Format('unsafe workflow id "%s" (use letters, digits, - _ .)', [Id]); Exit; end;
+  if ReservedWorkflowId(Id) then
+  begin Err := Format('"%s" is reserved; name the workflow something else', [Id]); Exit; end;
+  try
+    ForceDirectories(PendingWorkflowsDir);
+    WriteFileText(JoinPath(PendingWorkflowsDir, Id + '.json'), WorkflowToJSON(Spec));
+    Result := True;
+  except
+    on E: Exception do Err := E.Message;
+  end;
+end;
+
+function ListPendingWorkflows: TWorkflowSummaryArray;
+var
+  Info: TSearchRec;
+  Id, Body, Err: string;
+  Spec: TWorkflowSpec;
+begin
+  SetLength(Result, 0);
+  if not DirectoryExists(PendingWorkflowsDir) then Exit;
+  if FindFirst(JoinPath(PendingWorkflowsDir, '*.json'), faAnyFile, Info) = 0 then
+  try
+    repeat
+      if (Info.Attr and faDirectory) <> 0 then Continue;
+      Id := ChangeFileExt(Info.Name, '');
+      if not IsSafeWorkflowId(Id) then Continue;
+      try Body := ReadFileText(JoinPath(PendingWorkflowsDir, Info.Name)); except Body := ''; end;
+      if (Body = '') or not ParseWorkflow(Body, Spec, Err) then Continue;
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)].Id          := Id;
+      Result[High(Result)].Name        := Spec.Name;
+      Result[High(Result)].Description := Spec.Description;
+      Result[High(Result)].NodeCount   := Length(Spec.Nodes);
+    until FindNext(Info) <> 0;
+  finally
+    FindClose(Info);
+  end;
+end;
+
+function LoadPendingWorkflow(const Id: string; out Spec: TWorkflowSpec; out Err: string): Boolean;
+var
+  Path, Body: string;
+begin
+  Result := False;
+  Err := '';
+  if not IsSafeWorkflowId(Id) then begin Err := 'unsafe workflow id'; Exit; end;
+  Path := JoinPath(PendingWorkflowsDir, Id + '.json');
+  if not FileExists(Path) then begin Err := Format('no workflow "%s" waiting for approval', [Id]); Exit; end;
+  try Body := ReadFileText(Path); except on E: Exception do begin Err := E.Message; Exit; end; end;
+  Result := ParseWorkflow(Body, Spec, Err);
+end;
+
+function PendingWorkflowSha(const Id: string): string;
+var
+  Path: string;
+begin
+  Result := '';
+  if not IsSafeWorkflowId(Id) then Exit;
+  Path := JoinPath(PendingWorkflowsDir, Id + '.json');
+  if not FileExists(Path) then Exit;
+  try
+    Result := BytesToHexLower(SHA256Bytes(StringToBytes(ReadFileText(Path))));
+  except
+    Result := '';
+  end;
+end;
+
+function ApprovePendingWorkflow(const Id: string; out Err: string): Boolean; overload;
+begin
+  Result := ApprovePendingWorkflow(Id, '', Err);
+end;
+
+function ApprovePendingWorkflow(const Id, ExpectedSha: string; out Err: string): Boolean; overload;
+var
+  Spec: TWorkflowSpec;
+  Errs: string;
+begin
+  Result := False;
+  if not LoadPendingWorkflow(Id, Spec, Err) then Exit;
+  if (ExpectedSha <> '') and not SameText(ExpectedSha, PendingWorkflowSha(Id)) then
+  begin
+    Err := Format('the staged "%s" changed since it was read; read it again before approving', [Id]);
+    Exit;
+  end;
+  if not ValidateWorkflow(Spec, nil, Errs) then
+  begin
+    Err := 'invalid workflow:' + sLineBreak + Errs;
+    Exit;
+  end;
+  Spec.Id := Id;
+  if not SaveWorkflow(Spec, Err) then Exit;
+  if not DeleteFile(JoinPath(PendingWorkflowsDir, Id + '.json')) then
+  begin
+    Err := 'saved, but the staged copy could not be removed';
+    Exit;
+  end;
+  Result := True;
+end;
+
+function RejectPendingWorkflow(const Id: string; out Err: string): Boolean;
+var
+  Path: string;
+begin
+  Result := False;
+  Err := '';
+  if not IsSafeWorkflowId(Id) then begin Err := 'unsafe workflow id'; Exit; end;
+  Path := JoinPath(PendingWorkflowsDir, Id + '.json');
+  if not FileExists(Path) then begin Err := Format('no workflow "%s" waiting for approval', [Id]); Exit; end;
+  if not DeleteFile(Path) then begin Err := 'delete failed'; Exit; end;
+  Result := True;
+end;
+
+function WorkflowExists(const Id: string): Boolean;
+begin
+  Result := IsSafeWorkflowId(Id) and FileExists(PathFor(Id));
 end;
 
 function DeleteWorkflow(const Id: string; out Err: string): Boolean;
@@ -153,7 +345,10 @@ begin
   if not IsSafeWorkflowId(Id) then begin Err := 'unsafe workflow id'; Exit; end;
   Path := PathFor(Id);
   if FileExists(Path) then
+  begin
     if not DeleteFile(Path) then begin Err := 'delete failed'; Exit; end;
+    StoreChanged;
+  end;
   Result := True;
 end;
 

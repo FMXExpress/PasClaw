@@ -609,7 +609,7 @@ begin
   PrintLn(Ansi.Bold + 'permission: ' + Ansi.Reset + ToolName + Res);
   PrintLn(Ansi.Dim + '  (' + Reason + ')' + Ansi.Reset);
   Print('  allow [y]once / [s]ession / [n]o > ');
-  if EOF then Exit;
+  if EOF then begin Result := aaNobody; Exit; end;
   ReadLn(Line);
   Line := LowerCase(Trim(Line));
   if (Line = 'y') or (Line = 'yes') or (Line = 'once') then Result := aaAllowOnce

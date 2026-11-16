@@ -299,8 +299,10 @@ function TLoopHandlers.AskPermission(const ToolName, ArgsJSON, Resource, Reason:
 var
   Line, Res: string;
 begin
-  Result := aaDeny;
+  { No terminal to ask on: nobody answered, which is not a no. }
+  Result := aaNobody;
   if not Interactive then Exit;
+  Result := aaDeny;
   Res := Resource;
   if Length(Res) > 160 then Res := Copy(Res, 1, 157) + '...';
   if Res <> '' then Res := '  ' + Ansi.Dim + Res + Ansi.Reset;
@@ -316,7 +318,7 @@ begin
     PrintLn(Ansi.Bold + 'permission: ' + Ansi.Reset + ToolName + Res);
     PrintLn(Ansi.Dim + '  (' + Reason + ')' + Ansi.Reset);
     Print('  allow [y]once / [s]ession / [n]o > ');
-    if EOF then Exit;
+    if EOF then begin Result := aaNobody; Exit; end;
     ReadLn(Line);
     Line := LowerCase(Trim(Line));
     if (Line = 'y') or (Line = 'yes') or (Line = 'once') then Result := aaAllowOnce

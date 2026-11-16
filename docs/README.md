@@ -22,6 +22,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 - [Skills](./skills.md) — `$PASCLAW_HOME/workspace/skills/`, GitHub + ClawHub install, SKILL.md format.
 - [Sessions](./sessions.md) — persistence, resume, `/new` / `/reset` / `/compact`, mid-loop `pasclaw steer`.
 - [Checkpoints](./checkpoints.md) — `/undo` / `/redo` for file-edit rewind via the zpaq-backed snapshot journal.
+- [Workflows](./workflows.md) — saved tool chains: each one a tool (`wf_<id>`) for the agent and over `/mcp`, every step through the permission rules, the agent asks you in the chat before saving one, and an approvals list holds the ones saved while nobody could be asked.
 - [MCP servers](./mcp.md) — stdio + streamable-HTTP transports, `pasclaw mcp catalog`, the bundled built-in list.
 - [Cron](./cron.md) — scheduled tasks, at-least-once delivery, per-job channel sinks.
 - [Agents](./agents.md) — standing agents: a durable roster, and the mailbox they reach each other through (including mid-turn).
