@@ -448,7 +448,7 @@ begin
   AssertTrue(Cap.WaitFor('"id":21,"result"', N) >= 0, 'answered');
   AssertTrue(Host.Answer = aaDeny, 'an option we never offered is a no');
 
-  { No answer within the limit is a no, and the editor is told to drop
+  { No answer within the limit is not a yes, and the editor is told to drop
     the prompt; an answer after that is ignored. }
   Agent.AskTimeoutMs := 300;
   try
@@ -463,7 +463,10 @@ begin
       O.Free;
     end;
     AssertTrue(Cap.WaitFor('"id":22,"result"', N) >= 0, 'the turn goes on after the limit');
-    AssertTrue(Host.Answer = aaDeny, 'unanswered is a no');
+    { Not a yes -- and not "the user declined" either: nobody answered,
+      which the gate refuses with its own message and workflow_save keeps
+      for the approvals list. }
+    AssertTrue(Host.Answer = aaNobody, 'unanswered is not a yes: nobody answered');
     AssertTrue(Cap.Has('"method":"$/cancel_request","params":{"requestId":' + Id + '}', N),
                'and the editor is told the prompt is no longer wanted');
     N := Cap.Count;
