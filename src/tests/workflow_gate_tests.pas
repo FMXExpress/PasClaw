@@ -376,6 +376,20 @@ begin
   { A step that writes makes the tool mutating. }
   SaveSpec('{"id":"scribe","name":"scribe","nodes":[{"id":"w","tool":"t_write","args":{}}]}');
   Check(Reg.Find('wf_scribe', T) and (T.Category = tcMutating), 'a write step -> mutating');
+  { An await's poll tool is called too: a read-only node that polls with a
+    writing tool writes (Codex P1 on #648); polling with a read-only one
+    does not. }
+  SaveSpec('{"id":"pollw","name":"pollw","nodes":[{"id":"a","tool":"t_read","args":{},' +
+           '"await":{"tool":"t_write","args":{}}}]}');
+  Check(Reg.Find('wf_pollw', T) and (T.Category = tcMutating), 'a writing await poll tool -> mutating');
+  SaveSpec('{"id":"pollr","name":"pollr","nodes":[{"id":"a","tool":"t_read","args":{},' +
+           '"await":{"tool":"t_read","args":{}}}]}');
+  Check(Reg.Find('wf_pollr', T) and (T.Category = tcReadOnly), 'a read-only await poll tool stays read-only');
+  { Declared outputs are written to workflows/<id>/<stamp>/ on every run
+    (Codex P2 on #648). }
+  SaveSpec('{"id":"outw","name":"outw","nodes":[{"id":"a","tool":"t_read","args":{}}],' +
+           '"outputs":[{"name":"o","value":"{{nodes.a}}"}]}');
+  Check(Reg.Find('wf_outw', T) and (T.Category = tcMutating), 'declared outputs (written to disk) -> mutating');
   { An MCP step (unknown here) counts as mutating too. }
   SaveSpec('{"id":"remote","name":"remote","nodes":[{"id":"m","tool":"srv__x","args":{}}]}');
   Check(Reg.Find('wf_remote', T) and (T.Category = tcMutating), 'an MCP step -> mutating');
@@ -391,6 +405,7 @@ begin
   Check(DeleteWorkflow('scribe', Err), 'delete: ' + Err);
   Check(not Reg.Find('wf_scribe', T), 'wf_scribe gone once deleted');
   Check(DeleteWorkflow('remote', Err), 'delete: ' + Err);
+  DeleteWorkflow('pollr', Err);
 
   Check(WorkflowToolName('a b/c') = 'wf_a_b_c', 'tool names hold only safe characters');
 end;
@@ -416,6 +431,8 @@ begin
     SaveSpec('{"id":"scribe","name":"scribe","nodes":[{"id":"w","tool":"t_write","args":{}}]}');
     R := Rpc(Srv, '{"jsonrpc":"2.0","id":3,"method":"tools/list"}');
     Check(Pos('"wf_scribe"', R) = 0, 'a writing workflow is not served read-only');
+    Check((Pos('"wf_pollw"', R) = 0) and (Pos('"wf_outw"', R) = 0),
+          'nor one that polls with a writing tool, nor one that writes its outputs');
     R := Rpc(SrvW, '{"jsonrpc":"2.0","id":4,"method":"tools/list"}');
     Check(Pos('"wf_scribe"', R) > 0, 'it is served when writes are allowed');
     ResetCounts;
@@ -429,6 +446,8 @@ begin
     Check(Pos('isError', R) > 0, 'MCP tools/call: the call reports the failure: ' + Copy(R, 1, 300));
     Rules('[]');
     Check(DeleteWorkflow('later', Err), 'cleanup: ' + Err);
+    DeleteWorkflow('pollw', Err);
+    DeleteWorkflow('outw', Err);
   finally
     SrvW.Free;
     Srv.Free;

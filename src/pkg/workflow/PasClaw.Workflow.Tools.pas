@@ -537,9 +537,26 @@ begin
     Result := 'string';
 end;
 
-{ The tool for one saved workflow. Read-only only when every node is a
-  read-only registered tool or an llm node; anything else -- an MCP tool,
-  another workflow, an unknown name -- counts as mutating. }
+{ Is one call a workflow makes read-only? An llm step is a provider call;
+  anything else must be a registered read-only tool -- an MCP tool, another
+  workflow or an unknown name counts as writing. }
+function StepIsReadOnly(Reg: TToolRegistry; const Tool: string): Boolean;
+var
+  T: TTool;
+begin
+  if (Tool = 'llm') or (Tool = 'provider') then Exit(True);
+  Result := (Reg <> nil) and Reg.FindStatic(Tool, T) and (T.Category = tcReadOnly);
+end;
+
+(* The tool for one saved workflow. Read-only only when the whole run is:
+     - every node's tool is read-only (StepIsReadOnly);
+     - so is every await's poll tool -- the engine calls it through the
+       same caller, so a read-only node polling with a writing tool writes
+       (Codex P1 on #648). The `replicate` sugar's synthesised poll needs
+       no check here: its node names an MCP tool, mutating already;
+     - it declares no outputs: a run writes those to workflows/<id>/<stamp>/
+       (WriteRunOutputs), outside any node's gate (Codex P2 on #648).
+   The category is what plan mode and a read-only /mcp go by. *)
 function ToolForWorkflow(const Spec: TWorkflowSpec): TTool;
 var
   Root, Props, P: TJsonObject;
@@ -547,7 +564,6 @@ var
   i: Integer;
   ReadOnly: Boolean;
   Steps: string;
-  NodeTool: TTool;
   Reg: TToolRegistry;
 begin
   Result := Default(TTool);
@@ -577,11 +593,12 @@ begin
   begin
     if Steps <> '' then Steps := Steps + ' -> ';
     Steps := Steps + Spec.Nodes[i].Tool;
-    if (Spec.Nodes[i].Tool = 'llm') or (Spec.Nodes[i].Tool = 'provider') then Continue;
-    if (Reg = nil) or not Reg.FindStatic(Spec.Nodes[i].Tool, NodeTool)
-       or (NodeTool.Category <> tcReadOnly) then
+    if not StepIsReadOnly(Reg, Spec.Nodes[i].Tool) then ReadOnly := False;
+    if Spec.Nodes[i].Await.Enabled and (Trim(Spec.Nodes[i].Await.PollTool) <> '') and
+       not StepIsReadOnly(Reg, Spec.Nodes[i].Await.PollTool) then
       ReadOnly := False;
   end;
+  if Length(Spec.Outputs) > 0 then ReadOnly := False;
   if ReadOnly then Result.Category := tcReadOnly else Result.Category := tcMutating;
   Result.Description := Trim(Spec.Description);
   if Result.Description = '' then Result.Description := 'Run the saved workflow "' + Spec.Name + '".';

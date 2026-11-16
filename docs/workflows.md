@@ -35,12 +35,14 @@ claude mcp add --transport http pasclaw http://127.0.0.1:8088/mcp
   next `tools/list` and the agent's next request. The store is re-read
   only when its directory listing changes or something in the same
   process saved or deleted a workflow.
-- **Read-only or not.** `wf_<id>` is read-only when every step is a
-  read-only tool or an `llm` step. A step that writes, an MCP tool step,
-  or a step naming a tool that doesn't exist makes it mutating. Over MCP
-  that decides whether it is served: the endpoint serves read-only tools
-  unless the gateway runs with `--mcp-allow-write`, and the same applies to
-  workflows.
+- **Read-only or not.** `wf_<id>` is read-only only when the whole run
+  is: every step is a read-only tool or an `llm` step, so is the tool any
+  step's `await` polls with, and the workflow declares no outputs (a run
+  writes those to `workflows/<id>/<stamp>/`). A step or poll that writes,
+  an MCP tool, a name that isn't a registered tool, or declared outputs
+  make it mutating. That decides plan mode and what `/mcp` serves: the
+  endpoint serves read-only tools unless the gateway runs with
+  `--mcp-allow-write`, and the same applies to workflows.
 - **Names.** Characters a tool name can't hold become `_`, and the name is
   cut to 64 characters.
 - **Cost.** Each `wf_<id>` tool's schema is sent with every request, like
