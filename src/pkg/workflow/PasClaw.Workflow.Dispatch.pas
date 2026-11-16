@@ -15,6 +15,22 @@
   shared RegisterSkills hook; SetWorkflowConfig from the gateway / CLI), the
   same module-global pattern PasClaw.Tools.Sandbox uses -- because the engine's
   caller is a plain function pointer that can't capture an instance.
+
+  Every MCP and registry node goes through the SAME gates a direct tool call
+  does: plan / space mode, the ordered permission rules, the hooks, the
+  promptware scan. Before this, nodes called RunTool / MCPCallStructured
+  directly, so `deny shell_exec` did not stop a workflow node calling it.
+    - Run from an agent turn (workflow_run, a wf_<name> tool): the turn's
+      gated dispatcher, captured where the run starts (EnterWorkflowRun) --
+      an `ask` reaches the operator the way the turn's own calls do.
+    - Run from anywhere else (the web UI, cron, an MCP client): a headless
+      dispatcher -- the rules apply, and an `ask` is refused, there being
+      no one to ask.
+    - No gate in the binary at all (a test harness without the tool loop):
+      the node fails. A node never runs ungated.
+  A refused node fails with the refusal as its error, so a workflow stops
+  there instead of feeding "refused: ..." to the next node. llm nodes are a
+  provider call, not a tool, and meet no tool gate.
 *)
 unit PasClaw.Workflow.Dispatch;
 
@@ -26,6 +42,14 @@ interface
 uses
   PasClaw.Config,
   PasClaw.Tools.Registry;
+
+{ Bracket a run with the dispatcher its nodes go through -- the caller's
+  turn's (GCaptureDispatcher, called on the dispatching thread), or nil for
+  the headless one. Disp must stay referenced by the caller until
+  LeaveWorkflowRun; runs nest (a node can run a workflow), so Leave restores
+  what Enter replaced. }
+procedure EnterWorkflowRun(const Disp: IToolDispatcher; out Saved: Pointer);
+procedure LeaveWorkflowRun(Saved: Pointer);
 
 { The production node caller (matches TWorkflowToolCallerFn). }
 function WorkflowDispatch(const ToolName, ArgsJSON: string;
@@ -39,6 +63,10 @@ procedure SetWorkflowRegistry(Reg: TToolRegistry);
   A reference, not owned -- the caller must outlive workflow runs (the gateway
   / command owns it for its lifetime). llm nodes error clearly when unset. }
 procedure SetWorkflowConfig(Cfg: TConfig);
+{ What SetWorkflowConfig set (nil when nothing did). }
+function WorkflowConfig: TConfig;
+{ What SetWorkflowRegistry set (nil when nothing did). }
+function WorkflowRegistry: TToolRegistry;
 
 implementation
 
@@ -54,6 +82,34 @@ var
   GWfReg: TToolRegistry = nil;
   GWfCfg: TConfig = nil;
 
+threadvar
+  { The current run's dispatcher, as a raw pointer: the IToolDispatcher is
+    held alive by the caller between Enter and Leave. }
+  GWfDisp: Pointer;
+
+procedure EnterWorkflowRun(const Disp: IToolDispatcher; out Saved: Pointer);
+begin
+  Saved := GWfDisp;
+  GWfDisp := Pointer(Disp);
+end;
+
+procedure LeaveWorkflowRun(Saved: Pointer);
+begin
+  GWfDisp := Saved;
+end;
+
+{ The dispatcher this node goes through: the run's, or a headless one. nil
+  only when no gate exists in this binary. }
+function NodeDispatcher: IToolDispatcher;
+begin
+  if GWfDisp <> nil then
+    Result := IToolDispatcher(GWfDisp)
+  else if Assigned(GHeadlessDispatcher) and (GWfReg <> nil) then
+    Result := GHeadlessDispatcher(GWfReg)
+  else
+    Result := nil;
+end;
+
 procedure SetWorkflowRegistry(Reg: TToolRegistry);
 begin
   GWfReg := Reg;
@@ -62,6 +118,16 @@ end;
 procedure SetWorkflowConfig(Cfg: TConfig);
 begin
   GWfCfg := Cfg;
+end;
+
+function WorkflowConfig: TConfig;
+begin
+  Result := GWfCfg;
+end;
+
+function WorkflowRegistry: TToolRegistry;
+begin
+  Result := GWfReg;
 end;
 
 function TextWrap(const S: string): string;
@@ -134,22 +200,53 @@ end;
 
 function WorkflowDispatch(const ToolName, ArgsJSON: string;
   out ResultText, ResultJSON, ErrMsg: string): Boolean;
+var
+  Disp: IToolDispatcher;
+  Gate: IToolGate;
+  Refusal: string;
+  Refused: Boolean;
 begin
   ResultText := ''; ResultJSON := ''; ErrMsg := '';
-  if Pos('__', ToolName) > 0 then
-    Result := MCPCallStructured(ToolName, ArgsJSON, ResultText, ResultJSON, ErrMsg)
-  else if (ToolName = 'llm') or (ToolName = 'provider') then
-    Result := LlmNodeCall(ArgsJSON, ResultText, ResultJSON, ErrMsg)
-  else if GWfReg <> nil then
+  if (ToolName = 'llm') or (ToolName = 'provider') then
   begin
-    ResultText := GWfReg.RunTool(ToolName, ArgsJSON, ErrMsg);
-    ResultJSON := TextWrap(ResultText);
-    Result := ErrMsg = '';
+    Result := LlmNodeCall(ArgsJSON, ResultText, ResultJSON, ErrMsg);
+    Exit;
+  end;
+  if (Pos('__', ToolName) = 0) and (GWfReg = nil) then
+  begin
+    ErrMsg := Format('workflow: unknown tool "%s" (no MCP prefix, not "llm", and no registry)', [ToolName]);
+    Exit(False);
+  end;
+  Disp := NodeDispatcher;
+  if (Disp = nil) or not Supports(Disp, IToolGate, Gate) then
+  begin
+    ErrMsg := Format('workflow: node "%s" not run -- no dispatch gate in this context', [ToolName]);
+    Exit(False);
+  end;
+  if Pos('__', ToolName) > 0 then
+  begin
+    { MCP: admitted by the gates, then called for its structured JSON. }
+    if not Gate.Admit(ToolName, ArgsJSON, Refusal) then
+    begin
+      ErrMsg := Refusal;
+      Exit(False);
+    end;
+    Result := MCPCallStructured(ToolName, ArgsJSON, ResultText, ResultJSON, ErrMsg);
+    Gate.Finish(ToolName, ArgsJSON, ResultText, ErrMsg);
+    Result := Result and (ErrMsg = '');
   end
   else
   begin
-    ErrMsg := Format('workflow: unknown tool "%s" (no MCP prefix, not "llm", and no registry)', [ToolName]);
-    Result := False;
+    { A registered tool: through every gate, a refusal failing the node. }
+    ResultText := Gate.DispatchChecked(ToolName, ArgsJSON, Refused, ErrMsg);
+    if Refused then
+    begin
+      ErrMsg := ResultText;
+      ResultText := '';
+      Exit(False);
+    end;
+    ResultJSON := TextWrap(ResultText);
+    Result := ErrMsg = '';
   end;
 end;
 

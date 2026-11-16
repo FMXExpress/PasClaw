@@ -518,6 +518,13 @@ type
       synchronously and returns per-node status. GET /v1/mcp/tools enumerates
       the registered MCP tools (name/description/schema) for the node palette. }
     procedure HandleWorkflowsList(AResp: TIdHTTPResponseInfo);
+    (* Agent-saved workflows waiting for the operator (workflow_save stages
+       them unless workflows_auto_approve): GET lists them with their spec
+       and its sha256; POST approve / reject take a body with "id" and,
+       optionally, the "sha256" the listing gave. *)
+    procedure HandleWorkflowsPending(AResp: TIdHTTPResponseInfo);
+    procedure HandleWorkflowPendingAction(const Approve: Boolean;
+      ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     procedure HandleWorkflowCreate(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     procedure HandleWorkflowItem(const Doc: string; ARequest: TIdHTTPRequestInfo;
                                  AResp: TIdHTTPResponseInfo);
@@ -2187,6 +2194,9 @@ begin
     else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions/import-dir') then HandleSessionsImportDir(ARequest, AResponse)
     else if (Copy(Doc, 1, 13) = '/v1/sessions/') then HandleSessionItem(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/workflows') then HandleWorkflowsList(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/workflows/pending') then HandleWorkflowsPending(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows/pending/approve') then HandleWorkflowPendingAction(True, ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows/pending/reject')  then HandleWorkflowPendingAction(False, ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows') then HandleWorkflowCreate(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp/tools') then HandleMCPTools(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/providers') then HandleProvidersList(AResponse)
@@ -4017,6 +4027,72 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+procedure TGatewayServer.HandleWorkflowsPending(AResp: TIdHTTPResponseInfo);
+var
+  Sums: TWorkflowSummaryArray;
+  Spec: TWorkflowSpec;
+  Root, O: TJsonObject; Arr: TJsonArray; i: Integer;
+  Err: string;
+begin
+  if not FCfg.WorkflowsEnabled then begin WriteJSON(AResp, 404, '{"error":"workflows disabled"}'); Exit; end;
+  Sums := ListPendingWorkflows;
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Sums) do
+    begin
+      O := TJsonObject.Create;
+      O.PutStr('id', Sums[i].Id);
+      O.PutStr('name', Sums[i].Name);
+      O.PutStr('description', Sums[i].Description);
+      O.PutInt('nodes', Sums[i].NodeCount);
+      { replaces: approving overwrites a saved workflow of this id }
+      O.PutBool('replaces', WorkflowExists(Sums[i].Id));
+      { sha256 goes back with the approval, so a version staged after
+        this listing is not approved unseen }
+      O.PutStr('sha256', PendingWorkflowSha(Sums[i].Id));
+      if LoadPendingWorkflow(Sums[i].Id, Spec, Err) then
+        O.PutRaw('spec', WorkflowToJSON(Spec));
+      Arr.AddObject(O);
+    end;
+    Root.PutArray('pending', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleWorkflowPendingAction(const Approve: Boolean;
+  ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+var
+  Body, Id, Sha, Err: string;
+  O: TJsonObject;
+  Ok: Boolean;
+begin
+  if not FCfg.WorkflowsEnabled then begin WriteJSON(AResp, 404, '{"error":"workflows disabled"}'); Exit; end;
+  Body := ReadRequestBody(ARequest);
+  Id := '';
+  Sha := '';
+  if Trim(Body) <> '' then
+  begin
+    try O := TJsonObject.Parse(Body); except O := nil; end;
+    if O <> nil then
+    try
+      Id := Trim(O.GetStr('id', ''));
+      Sha := Trim(O.GetStr('sha256', ''));
+    finally
+      O.Free;
+    end;
+  end;
+  if Id = '' then begin WriteJSON(AResp, 400, '{"error":"missing id"}'); Exit; end;
+  if Approve then Ok := ApprovePendingWorkflow(Id, Sha, Err)
+  else            Ok := RejectPendingWorkflow(Id, Err);
+  if Ok then
+    WriteJSON(AResp, 200, '{"status":"ok","id":' + JsonStr(Id) + '}')
+  else
+    WriteJSON(AResp, 400, '{"error":' + JsonStr(Err) + '}');
 end;
 
 procedure TGatewayServer.HandleWorkflowCreate(ARequest: TIdHTTPRequestInfo;

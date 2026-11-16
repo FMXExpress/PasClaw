@@ -1,9 +1,21 @@
 (*
   PasClaw.Workflow.Tools - the agent-facing workflow tools:
 
-    workflow_save   author/replace a workflow from a JSON spec (validated)
+    workflow_save   author/replace a workflow from a JSON spec (validated);
+                    staged for the operator's approval unless
+                    workflows_auto_approve
     workflow_list   list saved workflows
     workflow_run    run a saved workflow by name with inputs
+    wf_<name>       one tool per saved workflow, its parameters the
+                    workflow's inputs -- in every registry that has the
+                    workflow tools, so also in PasClaw's MCP server. A live
+                    source: a workflow saved, approved or deleted by any
+                    process is a tool (or gone) on the next lookup, no
+                    restart.
+
+  Every run goes through the dispatch gates node by node (see
+  PasClaw.Workflow.Dispatch): from an agent turn with the turn's own
+  dispatcher, from anywhere else with a headless one.
 
   These let the agent BUILD a workflow ("make me a generate->upscale chain")
   and RUN it, and let cron invoke a saved chain. Nodes call MCP tools through
@@ -19,11 +31,19 @@ unit PasClaw.Workflow.Tools;
 interface
 
 uses
+  PasClaw.Tools.Types,       { TToolList }
   PasClaw.Tools.Registry,
   PasClaw.Workflow;          { TWorkflowSpec, for the exposed output seam }
 
 { Register workflow_save / workflow_list / workflow_run on Reg. }
 procedure RegisterWorkflowTools(Reg: TToolRegistry);
+
+{ The wf_<name> tools for the saved workflows right now (the live source
+  RegisterWorkflowTools adds). Exposed for tests. }
+function SavedWorkflowTools: TToolList;
+{ wf_<id> with every character a provider rejects in a tool name made '_',
+  cut to 64. }
+function WorkflowToolName(const Id: string): string;
 
 { Exposed for the unit tests: the output-writing seam takes client-supplied
   names and directories, so its refusals are contract, not detail. }
@@ -34,9 +54,10 @@ function SanitizeWorkflowFileName(const Name: string): string;
 implementation
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, SyncObjs,
   PasClaw.JSON,
-  PasClaw.Tools.Types,
+  PasClaw.Config,
+  PasClaw.Utils,
   PasClaw.Tools.Sandbox,       { ResolveWorkspacePath / PathInsideDirectory }
   PasClaw.Workflow.Store,
   PasClaw.Workflow.Dispatch;   { WorkflowDispatch -- routes MCP / llm / registry nodes }
@@ -174,7 +195,7 @@ end;
 const
   SAVE_SCHEMA =
     '{"type":"object","properties":{' +
-    '"name":{"type":"string","description":"workflow name; registers workflow_<name>"},' +
+    '"name":{"type":"string","description":"workflow name; once saved (and approved) it is also the tool wf_<name>"},' +
     '"description":{"type":"string"},' +
     '"inputs":{"type":"array","items":{"type":"object","properties":{' +
       '"name":{"type":"string"},"type":{"type":"string"},"required":{"type":"boolean"}}}},' +
@@ -209,12 +230,28 @@ begin
   begin ErrMsg := 'workflow_save: ' + Err; Exit(''); end;
   if not ValidateWorkflow(Spec, nil, Errs) then
   begin ErrMsg := 'workflow_save: invalid workflow:' + sLineBreak + Errs; Exit(''); end;
+  { The store files a spec with no id under its name; say that id below. }
+  if Trim(Spec.Id) = '' then Spec.Id := Spec.Name;
+  { The operator reviews what the agent saves before it runs or becomes a
+    tool, as with an agent-authored skill -- unless they turned that off. }
+  if (WorkflowConfig = nil) or not WorkflowConfig.WorkflowsAutoApprove then
+  begin
+    if not StagePendingWorkflow(Spec, Err) then
+    begin ErrMsg := 'workflow_save: ' + Err; Exit(''); end;
+    Result := Format('staged workflow "%s" (%d node(s)) for the operator''s approval -- ' +
+                     'it does not run and is not a tool until approved ' +
+                     '(`pasclaw workflow approve %s`, or the web UI''s Workflow tab).',
+                     [Spec.Name, Length(Spec.Nodes), Spec.Id]);
+    if WorkflowExists(Spec.Id) then
+      Result := Result + ' The saved version keeps running until then.';
+    Exit;
+  end;
   if not SaveWorkflow(Spec, Err) then
   begin ErrMsg := 'workflow_save: ' + Err; Exit(''); end;
   Result := Format('saved workflow "%s" (%d node(s)) -> %s. Run it with ' +
-                   'workflow_run({"name":"%s"}); read it back with workflow_get.',
+                   '%s or workflow_run({"name":"%s"}); read it back with workflow_get.',
                    [Spec.Name, Length(Spec.Nodes),
-                    WorkflowPath(Spec.Id), Spec.Name]);
+                    WorkflowPath(Spec.Id), WorkflowToolName(Spec.Id), Spec.Name]);
 end;
 
 function ToolWorkflowGet(const ArgsJSON: string; out ErrMsg: string): string;
@@ -263,35 +300,33 @@ begin
   end;
 end;
 
-function ToolWorkflowRun(const ArgsJSON: string; out ErrMsg: string): string;
+{ Run Spec with InputsJSON, each node through the gates, and render the
+  result. Called on the tool's dispatching thread: the turn's dispatcher is
+  captured here, so a node's `ask` reaches the operator like the turn's
+  own calls. Outside a turn there is none and nodes get the headless gate. }
+function RunSavedWorkflow(const Spec: TWorkflowSpec; const InputsJSON: string;
+  out ErrMsg: string): string;
 var
-  Args, InputsObj, Root, O: TJsonObject;
-  Name, InputsJSON, Err, OutErrs: string;
+  Root, O: TJsonObject;
+  Err, OutErrs: string;
   OutJSON, OutDirWritten, OutDirErr: string;
-  Spec: TWorkflowSpec;
   Res: TWorkflowNodeResultArray;
   Arr: TJsonArray;
   i: Integer;
   Ok: Boolean;
+  Disp: IToolDispatcher;
+  Saved: Pointer;
 begin
   ErrMsg := '';
   Result := '';
-  Name := ''; InputsJSON := '{}';
-  try Args := TJsonObject.Parse(ArgsJSON); except Args := nil; end;
-  if Args = nil then begin ErrMsg := 'workflow_run: bad arguments'; Exit; end;
+  Disp := nil;
+  if Assigned(GCaptureDispatcher) then Disp := GCaptureDispatcher();
+  EnterWorkflowRun(Disp, Saved);
   try
-    Name := Args.GetStr('name', '');
-    InputsObj := Args.ChildObject('inputs');
-    if InputsObj <> nil then InputsJSON := InputsObj.ToJSON;
+    Ok := RunWorkflowRepeated(Spec, InputsJSON, @WorkflowDispatch, Res, Err);
   finally
-    Args.Free;
+    LeaveWorkflowRun(Saved);
   end;
-  if Name = '' then begin ErrMsg := 'workflow_run: "name" is required'; Exit; end;
-
-  if not LoadWorkflow(Name, Spec, Err) then
-  begin ErrMsg := 'workflow_run: ' + Err; Exit; end;
-
-  Ok := RunWorkflowRepeated(Spec, InputsJSON, @WorkflowDispatch, Res, Err);
 
   Root := TJsonObject.Create;
   try
@@ -341,6 +376,213 @@ begin
     Root.Free;
   end;
   if not Ok then ErrMsg := Err;   { surface failure to the loop too }
+end;
+
+function ToolWorkflowRun(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  Args, InputsObj: TJsonObject;
+  Name, InputsJSON, Err: string;
+  Spec: TWorkflowSpec;
+begin
+  ErrMsg := '';
+  Result := '';
+  Name := ''; InputsJSON := '{}';
+  try Args := TJsonObject.Parse(ArgsJSON); except Args := nil; end;
+  if Args = nil then begin ErrMsg := 'workflow_run: bad arguments'; Exit; end;
+  try
+    Name := Args.GetStr('name', '');
+    InputsObj := Args.ChildObject('inputs');
+    if InputsObj <> nil then
+    try
+      InputsJSON := InputsObj.ToJSON;
+    finally
+      InputsObj.Free;
+    end;
+  finally
+    Args.Free;
+  end;
+  if Name = '' then begin ErrMsg := 'workflow_run: "name" is required'; Exit; end;
+  if not LoadWorkflow(Name, Spec, Err) then
+  begin ErrMsg := 'workflow_run: ' + Err; Exit; end;
+  Result := RunSavedWorkflow(Spec, InputsJSON, ErrMsg);
+end;
+
+{ ---- wf_<name>: one tool per saved workflow ---- }
+
+type
+  { Holds the workflow id a wf_ tool runs; handlers are methods, the id
+    cannot ride in a plain function pointer. One per id ever seen, kept
+    for the process's life (a call in flight may hold it). }
+  TWfRunner = class
+  public
+    Id: string;
+    function Run(const ArgsJSON: string; out ErrMsg: string): string;
+  end;
+
+var
+  GWfLock: TCriticalSection;
+  GWfRunners: TStringList;      { id -> TWfRunner, owned }
+  GWfSig: string;               { the store as last listed }
+  GWfTools: TToolList;          { the tools built from it }
+
+function TWfRunner.Run(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  Spec: TWorkflowSpec;
+  Err, Inputs: string;
+begin
+  Result := '';
+  ErrMsg := '';
+  if not LoadWorkflow(Id, Spec, Err) then
+  begin ErrMsg := WorkflowToolName(Id) + ': ' + Err; Exit; end;
+  Inputs := Trim(ArgsJSON);
+  if Inputs = '' then Inputs := '{}';
+  Result := RunSavedWorkflow(Spec, Inputs, ErrMsg);
+end;
+
+function WorkflowToolName(const Id: string): string;
+var
+  i: Integer;
+begin
+  Result := 'wf_' + Id;
+  for i := 1 to Length(Result) do
+    if not CharInSet(Result[i], ['a'..'z', 'A'..'Z', '0'..'9', '_', '-']) then
+      Result[i] := '_';
+  if Length(Result) > 64 then SetLength(Result, 64);
+end;
+
+function RunnerFor(const Id: string): TWfRunner;
+var
+  i: Integer;
+begin
+  i := GWfRunners.IndexOf(Id);
+  if i >= 0 then Exit(TWfRunner(GWfRunners.Objects[i]));
+  Result := TWfRunner.Create;
+  Result.Id := Id;
+  GWfRunners.AddObject(Id, Result);
+end;
+
+function JsonSchemaType(const T: string): string;
+var
+  L: string;
+begin
+  L := LowerCase(Trim(T));
+  if (L = 'number') or (L = 'integer') or (L = 'boolean') or (L = 'object') or (L = 'array') then
+    Result := L
+  else if L = 'bool' then
+    Result := 'boolean'
+  else
+    Result := 'string';
+end;
+
+{ The tool for one saved workflow. Read-only only when every node is a
+  read-only registered tool or an llm node; anything else -- an MCP tool,
+  another workflow, an unknown name -- counts as mutating. }
+function ToolForWorkflow(const Spec: TWorkflowSpec): TTool;
+var
+  Root, Props, P: TJsonObject;
+  Req: TJsonArray;
+  i: Integer;
+  ReadOnly: Boolean;
+  Steps: string;
+  NodeTool: TTool;
+  Reg: TToolRegistry;
+begin
+  Result := Default(TTool);
+  Result.Name := WorkflowToolName(Spec.Id);
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr('type', 'object');
+    Props := TJsonObject.Create;
+    Req := TJsonArray.Create;
+    for i := 0 to High(Spec.Inputs) do
+    begin
+      P := TJsonObject.Create;
+      P.PutStr('type', JsonSchemaType(Spec.Inputs[i].InputType));
+      Props.PutObject(Spec.Inputs[i].Name, P);
+      if Spec.Inputs[i].Required then Req.AddStr(Spec.Inputs[i].Name);
+    end;
+    Root.PutObject('properties', Props);
+    if Req.Count > 0 then Root.PutArray('required', Req) else Req.Free;
+    Result.Schema := Root.ToJSON;
+  finally
+    Root.Free;
+  end;
+  ReadOnly := Length(Spec.Nodes) > 0;
+  Steps := '';
+  Reg := WorkflowRegistry;
+  for i := 0 to High(Spec.Nodes) do
+  begin
+    if Steps <> '' then Steps := Steps + ' -> ';
+    Steps := Steps + Spec.Nodes[i].Tool;
+    if (Spec.Nodes[i].Tool = 'llm') or (Spec.Nodes[i].Tool = 'provider') then Continue;
+    if (Reg = nil) or not Reg.FindStatic(Spec.Nodes[i].Tool, NodeTool)
+       or (NodeTool.Category <> tcReadOnly) then
+      ReadOnly := False;
+  end;
+  if ReadOnly then Result.Category := tcReadOnly else Result.Category := tcMutating;
+  Result.Description := Trim(Spec.Description);
+  if Result.Description = '' then Result.Description := 'Run the saved workflow "' + Spec.Name + '".';
+  Result.Description := Result.Description + ' (Saved workflow "' + Spec.Name + '": ' + Steps +
+    '. Each step meets the same permission rules as a direct call; returns {ok, output, nodes}.)';
+  Result.HandlerObj := RunnerFor(Spec.Id).Run;
+end;
+
+{ The workflows directory as a signature: this process's store generation,
+  then file names, sizes and times (another process -- `pasclaw workflow
+  approve` while the gateway runs -- shows up only there). One listing per
+  lookup; the tools are rebuilt only when it changes. }
+function StoreSignature: string;
+var
+  Info: TSearchRec;
+begin
+  Result := IntToStr(WorkflowStoreGeneration) + '|';
+  if not DirectoryExists(WorkflowsDir) then Exit;
+  if FindFirst(JoinPath(WorkflowsDir, '*.json'), faAnyFile, Info) = 0 then
+  try
+    repeat
+      if (Info.Attr and faDirectory) = 0 then
+        Result := Result + Info.Name + ':' + IntToStr(Info.Size) + ':' +
+                  IntToStr(Info.Time) + ';';
+    until FindNext(Info) <> 0;
+  finally
+    FindClose(Info);
+  end;
+end;
+
+function SavedWorkflowTools: TToolList;
+var
+  Sig, Err: string;
+  Sums: TWorkflowSummaryArray;
+  Spec: TWorkflowSpec;
+  i, j: Integer;
+  T: TTool;
+  Dup: Boolean;
+begin
+  Sig := StoreSignature;
+  GWfLock.Acquire;
+  try
+    if (Sig = GWfSig) and (GWfTools <> nil) then Exit(Copy(GWfTools));
+    SetLength(GWfTools, 0);
+    Sums := ListWorkflows;
+    for i := 0 to High(Sums) do
+    begin
+      if not LoadWorkflow(Sums[i].Id, Spec, Err) then Continue;
+      Spec.Id := Sums[i].Id;
+      T := ToolForWorkflow(Spec);
+      { Two ids that differ only in a character a tool name cannot hold
+        would share a name: the first keeps it. }
+      Dup := False;
+      for j := 0 to High(GWfTools) do
+        if GWfTools[j].Name = T.Name then begin Dup := True; Break; end;
+      if Dup then Continue;
+      SetLength(GWfTools, Length(GWfTools) + 1);
+      GWfTools[High(GWfTools)] := T;
+    end;
+    GWfSig := Sig;
+    Result := Copy(GWfTools);
+  finally
+    GWfLock.Release;
+  end;
 end;
 
 procedure Reg1(Reg: TToolRegistry; const AName, ADesc, ASchema: string;
@@ -406,8 +648,23 @@ begin
   Reg1(Reg, 'workflow_run',
     'Run a saved workflow by name with inputs. Returns {ok, output (the final ' +
     'result URL/text), nodes:[per-node status]}. Nodes execute in dependency ' +
-    'order and pass output between each other.',
+    'order and pass output between each other. Each saved workflow is also ' +
+    'its own tool, wf_<name>, taking the workflow''s inputs directly.',
     RUN_SCHEMA, ToolWorkflowRun, tcMutating);
+
+  { wf_<name> for each saved workflow, live. }
+  Reg.AddDynamicSource(@SavedWorkflowTools);
 end;
+
+initialization
+  GWfLock := TCriticalSection.Create;
+  GWfRunners := TStringList.Create;
+  GWfRunners.OwnsObjects := True;
+  GWfRunners.Sorted := True;
+  GWfRunners.CaseSensitive := True;
+
+finalization
+  GWfRunners.Free;
+  GWfLock.Free;
 
 end.

@@ -57,7 +57,11 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/responses` | POST | OpenAI Responses-compatible. String or message-array `input`. Streams with `stream: true`. Held-out verification is reported as on `/v1/chat/completions` when PasClaw runs the tool loop (no client-supplied `tools`). |
 | `/v1/permissions` | GET | Permission requests waiting for an answer (`{"pending":[{id, session, tool, resource, args, reason}]}`). A request appears when a `permissions` rule says `ask` during a turn; the same object is published as a `permission_request` desktop event. |
 | `/v1/permissions/<id>` | POST | Answer one: `{"answer":"allow"}` (once), `"session"` (remember for that session), or `"deny"`. 404 once it has been answered or has timed out (`permissions_ask_timeout_sec`, then deny). With no desktop-events subscriber connected an `ask` denies immediately. See [Security → Permissions](./security.md#permissions-ordered-rules). |
-| `/mcp`, `/v1/mcp/rpc` | POST | MCP JSON-RPC endpoint when PasClaw is acting as an MCP server. |
+| `/v1/workflows` | GET, POST | Saved workflows; save one (the operator's saves are not staged). `/v1/workflows/<id>`: GET, PUT, DELETE. |
+| `/v1/workflows/<id>/run` | POST | Run one; the body is its inputs. Every step meets the permission rules; an `ask` is refused. |
+| `/v1/workflows/pending` | GET | Workflows the agent saved, waiting for approval, each with its `spec` and `sha256`. |
+| `/v1/workflows/pending/approve`, `/v1/workflows/pending/reject` | POST | `{"id", "sha256"?}`. A `sha256` that no longer matches the staged file refuses the approval. See [Workflows](./workflows.md#approval). |
+| `/mcp`, `/v1/mcp/rpc` | POST | MCP JSON-RPC endpoint when PasClaw is acting as an MCP server. Each saved workflow is served as the tool `wf_<id>`. |
 
 ## Embedded web UI
 

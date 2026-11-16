@@ -433,6 +433,27 @@ begin
   end;
 end;
 
+(* A saved workflow's spec (workflows/<id>.json) or one waiting for approval
+   (workflows/.pending/...). workflow_save stages what the agent writes for
+   the operator to approve -- a file tool writing the spec directly would
+   walk around that, and a saved workflow is a tool other agents can call.
+   A run's outputs (workflows/<id>/<stamp>/...) stay writable. *)
+function IsWorkflowSpec(const Canon: string): Boolean;
+var
+  Root, Rel: string;
+begin
+  Result := False;
+  Root := ExcludeTrailingPathDelimiter(Canonicalize(WorkspacePath('workflows')));
+  if not PathInsideDirectory(Canon, Root) or PathsEqual(Canon, Root) then Exit;
+  Rel := Copy(Canon, Length(Root) + 2, MaxInt);
+  { SameText: on a case-insensitive file system .PENDING is the same
+    directory. }
+  if SameText(Rel, '.pending') or
+     SameText(Copy(Rel, 1, Length('.pending') + 1), '.pending' + PathDelim) then
+    Exit(True);
+  Result := (Pos(PathDelim, Rel) = 0) and SameText(ExtractFileExt(Rel), '.json');
+end;
+
 function CanWritePath(const Path: string; out Reason: string): Boolean;
 var
   Canon: string;
@@ -452,6 +473,14 @@ begin
               'agent tools write -- the board''s rules live there. Use the ' +
               'task tool (action=update, submit, verdict) or agent ' +
               'action=ask_operator instead.';
+    Exit(False);
+  end;
+  if IsWorkflowSpec(Canonicalize(Path)) then
+  begin
+    Reason := 'refused: "' + Canonicalize(Path) + '" is a saved workflow (or one ' +
+              'waiting for approval), which only workflow_save writes -- what it ' +
+              'saves waits for the operator''s approval before it runs or becomes ' +
+              'a tool. Use workflow_save instead.';
     Exit(False);
   end;
   if not GPolicy.RestrictToWorkspace then Exit(True);

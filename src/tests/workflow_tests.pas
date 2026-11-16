@@ -345,9 +345,11 @@ begin
   Check(not WorkflowDispatch('llm', '{"prompt":"hi"}', t, j, e), 'dispatch: llm without config fails');
   Check(Pos('provider config', e) > 0, 'dispatch: llm routed to the provider layer');
 
-  { MCP branch -> bridge (no servers connected) }
-  Check(not WorkflowDispatch('replicate__x', '{}', t, j, e), 'dispatch: MCP name fails without servers');
-  Check(Pos('MCP', e) > 0, 'dispatch: __ name routed to the MCP bridge');
+  { MCP branch: this program links no tool loop, so there is no gate to
+    pass the node through -- it fails rather than run ungated.
+    workflow_gate_tests covers the gated path to the bridge. }
+  Check(not WorkflowDispatch('replicate__x', '{}', t, j, e), 'dispatch: MCP name fails without a gate');
+  Check(Pos('no dispatch gate', e) > 0, 'dispatch: an ungated MCP node does not run: ' + e);
 
   { fallthrough with no registry -> unknown-tool error }
   Check(not WorkflowDispatch('web_fetch', '{}', t, j, e), 'dispatch: unknown non-MCP tool fails w/o registry');

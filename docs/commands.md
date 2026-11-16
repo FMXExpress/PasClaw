@@ -46,6 +46,7 @@ Top-level commands are dispatched by `src/cmd/PasClaw.Cmd.Root.pas`. Run `pascla
 | [`backup`](#backup) | Zip the workspace, a redacted config and restore notes; rotate old archives. |
 | [`restore`](#restore) | Put a backup's workspace back under `$PASCLAW_HOME`. |
 | [`route`](#route) | Report which models the last N days of sessions ran on. |
+| [`workflow`](#workflow) | List saved workflows; read, approve or reject the ones the agent saved. |
 | [`update`](#update) | Check or self-update from GitHub releases. |
 | [`version`](#version) | Show version and build info. |
 
@@ -532,6 +533,19 @@ pasclaw permissions test fs_write /home/me/secrets/key.pem
 ```
 
 `list` prints the policy rules (`<home>/policies.json`) and the config rules (`config.json` → `permissions`) in evaluation order. `test` prints what the dispatch gate would decide for one call (`allow`, `deny`, `ask`, or no rule) and which rule decided it. See [Security → Permissions](./security.md#permissions-ordered-rules) for the rule shape.
+
+## workflow
+
+```sh
+pasclaw workflow list                    # saved workflows and the wf_<id> tool each is
+pasclaw workflow pending                 # what the agent saved, waiting for you
+pasclaw workflow show digest             # every step: the tool and its arguments, and the sha256
+pasclaw workflow approve digest          # save it: it runs, and is the tool wf_digest
+pasclaw workflow approve digest --sha256 3f1c…   # refuse if it changed since `show`
+pasclaw workflow reject digest
+```
+
+A workflow the agent saves with `workflow_save` is staged until approved (unless `workflows_auto_approve` is on). An approval from here reaches a running gateway without a restart. See [Workflows](./workflows.md#approval).
 
 ## update
 

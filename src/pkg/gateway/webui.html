@@ -4593,7 +4593,58 @@ async function wfLoadList() {
       b.addEventListener("click", () => wfLoad(w.id));
       box.appendChild(b);
     });
-  } catch (e) { box.innerHTML = '<div class="wf-hint">Workflows are disabled or unavailable</div>'; }
+  } catch (e) { box.innerHTML = '<div class="wf-hint">Workflows are disabled or unavailable</div>'; return; }
+  await wfLoadPending(box);
+}
+
+/* Workflows the agent saved, waiting for approval (workflow_save stages
+   them unless workflows_auto_approve). Each shows every step it would
+   call with which arguments -- the thing to read before approving -- and
+   approve sends back the sha256 it was listed with, so a version staged
+   after this listing is refused rather than approved unseen. */
+async function wfLoadPending(box) {
+  let p;
+  try { p = await (await gwFetch("/v1/workflows/pending")).json(); } catch { return; }
+  if (!p || !p.pending || !p.pending.length) return;
+  const hdr = document.createElement("div");
+  hdr.className = "wf-hint";
+  hdr.style.marginTop = "10px";
+  hdr.style.fontWeight = "600";
+  hdr.textContent = "Waiting for approval (" + p.pending.length + ")";
+  box.appendChild(hdr);
+  p.pending.forEach(w => {
+    const card = document.createElement("div");
+    card.className = "wf-pending";
+    card.style.cssText = "border:1px solid var(--border);border-radius:6px;padding:6px;margin-top:6px";
+    const steps = ((w.spec && w.spec.nodes) || []).map(n =>
+      (n.id || "") + "  " + (n.tool || "") + "\n    " + JSON.stringify(n.args || {})).join("\n");
+    card.innerHTML =
+        `<div><b>${escapeHtml(w.name || w.id)}</b> <span class="wf-hint">${w.nodes} step(s)` +
+        (w.replaces ? " · replaces the saved one" : "") + `</span></div>` +
+        (w.description ? `<div class="wf-hint">${escapeHtml(w.description)}</div>` : "") +
+        `<details><summary class="wf-hint">steps</summary>` +
+        `<pre style="white-space:pre-wrap;font-size:11px;margin:4px 0">${escapeHtml(steps)}</pre></details>` +
+        `<div style="display:flex;gap:6px;margin-top:4px">` +
+        `<button class="primary wf-approve" type="button">approve</button>` +
+        `<button class="wf-reject" type="button">reject</button></div>`;
+    card.querySelector(".wf-approve").addEventListener("click", () => wfPendingAction(w, "approve"));
+    card.querySelector(".wf-reject").addEventListener("click", () => wfPendingAction(w, "reject"));
+    box.appendChild(card);
+  });
+}
+
+async function wfPendingAction(w, what) {
+  try {
+    const r = await gwFetch("/v1/workflows/pending/" + what, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: w.id, sha256: w.sha256 }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) wfMsg(what === "approve"
+      ? "Approved " + w.id + " — it runs now, and agents can call it as a tool"
+      : "Discarded " + w.id);
+    else wfMsg(what + " failed: " + (j.error || ("http " + r.status)));
+  } catch (e) { wfMsg(what + " failed: " + e); }
+  await wfLoadList();
 }
 
 function wfNewClicked() {

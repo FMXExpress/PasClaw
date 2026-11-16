@@ -984,6 +984,12 @@ type
       default. The workflow_save/list/run agent tools register alongside skills
       regardless; this flag gates the HTTP surface for locked-down deploys. }
     WorkflowsEnabled:      Boolean;
+    (* A workflow the AGENT saves (workflow_save) goes straight into use
+       instead of waiting in workflows/.pending for the operator's approval.
+       Off by default: a saved workflow becomes a tool (wf_<name>) that
+       other agents can call over MCP, so what the agent writes there is
+       reviewed first, like an agent-authored skill. *)
+    WorkflowsAutoApprove:  Boolean;
     (* Raw JSON of the "database" array (a list of named SQL connections for the
        db_* tools). DatabaseJSON is env-EXPANDED (markers resolved) -- it carries
        live credentials and is what SetDBConfigFromJSON hands the connector; it
@@ -1523,6 +1529,7 @@ begin
   CheckpointsEnabled     := True;  { on by default -- zero prompt cost, prevents lost work on multi-edit sessions. }
   MemoryDistillEnabled   := False; { opt-in: ~one extra LLM call per turn. }
   WorkflowsEnabled       := True;  { on: tools are inert until a workflow is saved. }
+  WorkflowsAutoApprove   := False; { agent-saved workflows wait for the operator }
   DatabaseJSON           := '';    { no db_* connections until a "database" section is added. }
   DatabaseRawJSON        := '';    { pre-expansion "database" section, for save. }
   MemoryFactsBudget      := 2000;  { ~30 facts injected wholesale when distill on. }
@@ -1910,6 +1917,8 @@ begin
       locked-down deploy disabling the /v1/workflows surface) round-trips. }
     if not WorkflowsEnabled then
       Root.PutBool('workflows_enabled', False);
+    if WorkflowsAutoApprove then
+      Root.PutBool('workflows_auto_approve', True);
     { Persist the PRE-expansion "database" section so an env secret marker
       round-trips as the placeholder, never the resolved value. Fall back to
       DatabaseJSON only when there is no raw section (e.g. a programmatically
@@ -2694,6 +2703,7 @@ begin
     CheckpointsEnabled  := Root.GetBool('checkpoints_enabled', CheckpointsEnabled);
     MemoryDistillEnabled := Root.GetBool('memory_distill_enabled', MemoryDistillEnabled);
     WorkflowsEnabled := Root.GetBool('workflows_enabled', WorkflowsEnabled);
+    WorkflowsAutoApprove := Root.GetBool('workflows_auto_approve', WorkflowsAutoApprove);
     { Keep the "database" array verbatim; PasClaw.Tools.DB parses it. }
     Arr := Root.ChildArray('database');
     if Arr <> nil then DatabaseJSON := Arr.ToJSON;

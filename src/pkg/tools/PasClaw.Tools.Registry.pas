@@ -44,6 +44,37 @@ type
     function Dispatch(const Name, ArgsJSON: string; out ErrMsg: string): string;
   end;
   TCaptureDispatcherFn = function: IToolDispatcher;
+  { A dispatcher with the same gates and no loop behind it: the rules in
+    policies.json / config.json apply, plan and space mode do not (there is
+    no turn), and an `ask` is refused -- nobody is there to answer. For a
+    caller that dispatches on its own, such as a workflow run from cron,
+    the web UI or an MCP client. Installed by PasClaw.Tools.ToolLoop. }
+  THeadlessDispatcherFn = function(Reg: TObject): IToolDispatcher;
+
+  (* The admission half of the gates, for a caller that must make the call
+     itself -- a workflow's MCP node needs MCPCallStructured's JSON, which a
+     text-only Dispatch cannot hand back. Admit runs the mode gates, the
+     permission rules (asking where there is someone to ask) and the
+     BeforeToolCall hooks; Finish runs AfterToolResult and the promptware
+     scan over the text. DispatchChecked is Dispatch for a caller that must
+     tell a refusal from a result -- a workflow, which would otherwise feed
+     "refused: ..." to its next node as data. The loop's dispatcher
+     implements both interfaces. *)
+  IToolGate = interface
+    ['{7C1D2E3F-4A5B-4C6D-9E8F-0A1B2C3D4E5F}']
+    function Admit(const Name, ArgsJSON: string; out Refusal: string): Boolean;
+    procedure Finish(const Name, ArgsJSON: string; var ResultText, ErrMsg: string);
+    { Dispatch, through every gate, reporting a refusal as Refused (the
+      refusal is the result) rather than as a successful call. }
+    function DispatchChecked(const Name, ArgsJSON: string; out Refused: Boolean;
+                             out ErrMsg: string): string;
+  end;
+
+  (* Tools whose set changes while the process runs -- saved workflows,
+     each its own tool. Asked on every lookup, so a tool saved, approved or
+     deleted by any process is there (or gone) on the next call with no
+     restart; the source caches. Static tools win a name clash. *)
+  TDynamicToolsFn = function: TToolList;
 
   TToolRegistry = class
   private
@@ -63,7 +94,9 @@ type
       RunTool releases the lock before invoking the handler so a slow
       tool (HTTP MCP call, shell-out) can't block parallel reads. }
     FLock:  TCriticalSection;
+    FDynamic: array of TDynamicToolsFn;
     function IsRevealedLocked(const Name: string): Boolean;
+    function DynamicTools: TToolList;
     procedure RegisterImpl(const T: TTool);
   public
     constructor Create;
@@ -100,7 +133,13 @@ type
       tools register AFTER disclosure runs, so a one-shot sweep missed them
       and the saving looked half-applied. Order-independence is the point. }
     property DeferLongTail: Boolean read FDeferLongTail write FDeferLongTail;
+    { Add a live source of tools (see TDynamicToolsFn). Adding the same
+      source twice is a no-op. }
+    procedure AddDynamicSource(Fn: TDynamicToolsFn);
     function  Find(const Name: string; out T: TTool): Boolean;
+    { Find among the registered tools only, never asking a live source --
+      for a live source itself, which would otherwise recurse. }
+    function  FindStatic(const Name: string; out T: TTool): Boolean;
     function  Names: TStringArray;
     function  Count: Integer;
     function  ToProviderDefs: TToolDefinitionArray;
@@ -141,6 +180,7 @@ type
 var
   { Installed by PasClaw.Tools.ToolLoop at initialization. See IToolDispatcher. }
   GCaptureDispatcher: TCaptureDispatcherFn = nil;
+  GHeadlessDispatcher: THeadlessDispatcherFn = nil;
 
 type
   TAgentTurnProbe = function: Boolean;
@@ -339,7 +379,65 @@ begin
   RegisterImpl(Modified);
 end;
 
-function TToolRegistry.Find(const Name: string; out T: TTool): Boolean;
+procedure TToolRegistry.AddDynamicSource(Fn: TDynamicToolsFn);
+var
+  i: Integer;
+begin
+  if not Assigned(Fn) then Exit;
+  FLock.Acquire;
+  try
+    for i := 0 to High(FDynamic) do
+      if @FDynamic[i] = @Fn then Exit;
+    SetLength(FDynamic, Length(FDynamic) + 1);
+    FDynamic[High(FDynamic)] := Fn;
+  finally
+    FLock.Release;
+  end;
+end;
+
+{ Every live source's tools, minus any whose name a static tool has, and
+  never deferred, hidden or code-mode. The sources are called OUTSIDE the
+  lock: they read the disk. }
+function TToolRegistry.DynamicTools: TToolList;
+var
+  Srcs: array of TDynamicToolsFn;
+  Got: TToolList;
+  i, j, k: Integer;
+  Clash: Boolean;
+begin
+  Result := nil;
+  FLock.Acquire;
+  try
+    Srcs := Copy(FDynamic);
+  finally
+    FLock.Release;
+  end;
+  for i := 0 to High(Srcs) do
+  begin
+    Got := Srcs[i]();
+    for j := 0 to High(Got) do
+    begin
+      FLock.Acquire;
+      try
+        Clash := False;
+        for k := 0 to High(FTools) do
+          if FTools[k].Name = Got[j].Name then begin Clash := True; Break; end;
+      finally
+        FLock.Release;
+      end;
+      for k := 0 to High(Result) do
+        if Result[k].Name = Got[j].Name then begin Clash := True; Break; end;
+      if Clash then Continue;
+      Got[j].IsDeferred := False;
+      Got[j].Hidden := False;
+      Got[j].CodeMode := False;
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := Got[j];
+    end;
+  end;
+end;
+
+function TToolRegistry.FindStatic(const Name: string; out T: TTool): Boolean;
 var
   i: Integer;
 begin
@@ -357,9 +455,37 @@ begin
   end;
 end;
 
+function TToolRegistry.Find(const Name: string; out T: TTool): Boolean;
+var
+  i: Integer;
+  Dyn: TToolList;
+begin
+  FLock.Acquire;
+  try
+    for i := 0 to High(FTools) do
+      if FTools[i].Name = Name then
+      begin
+        T := FTools[i];
+        Exit(True);
+      end;
+    Result := False;
+    if Length(FDynamic) = 0 then Exit;
+  finally
+    FLock.Release;
+  end;
+  Dyn := DynamicTools;
+  for i := 0 to High(Dyn) do
+    if Dyn[i].Name = Name then
+    begin
+      T := Dyn[i];
+      Exit(True);
+    end;
+end;
+
 function TToolRegistry.Names: TStringArray;
 var
   i, k: Integer;
+  Dyn: TToolList;
 begin
   FLock.Acquire;
   try
@@ -381,6 +507,12 @@ begin
   finally
     FLock.Release;
   end;
+  Dyn := DynamicTools;
+  for i := 0 to High(Dyn) do
+  begin
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := Dyn[i].Name;
+  end;
 end;
 
 function TToolRegistry.Count: Integer;
@@ -391,6 +523,7 @@ begin
   finally
     FLock.Release;
   end;
+  Result := Result + Length(DynamicTools);
 end;
 
 function TToolRegistry.AnyRevealed: Boolean;
@@ -415,6 +548,7 @@ end;
 function TToolRegistry.ToProviderDefs: TToolDefinitionArray;
 var
   i, k: Integer;
+  Dyn: TToolList;
 begin
   FLock.Acquire;
   try
@@ -449,6 +583,14 @@ begin
     SetLength(Result, k);
   finally
     FLock.Release;
+  end;
+  Dyn := DynamicTools;
+  for i := 0 to High(Dyn) do
+  begin
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)].Name        := Dyn[i].Name;
+    Result[High(Result)].Description := Dyn[i].Description;
+    Result[High(Result)].Schema      := Dyn[i].Schema;
   end;
 end;
 
