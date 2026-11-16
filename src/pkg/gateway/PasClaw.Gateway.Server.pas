@@ -72,6 +72,12 @@ type
                               ARequest: TIdHTTPRequestInfo;
                               AResponse: TIdHTTPResponseInfo) of object;
 
+  { An ask's own channel besides the desktop event feed: the chat stream of
+    the turn that asks (the web UI draws the card inline). Notify writes one
+    SSE comment line; Alive says whether that stream is still open. }
+  TAskNotify = procedure(const Line: string) of object;
+  TAskAlive  = function: Boolean of object;
+
   { Wraps TIdHTTPServer and dispatches requests to handler methods. Pass a
     provider + tool registry in at construction; ownership stays with the
     caller. Stop() blocks until the listener has fully torn down. }
@@ -540,6 +546,11 @@ type
     procedure HandleSteer(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     { Permissions "ask" (see the FAskLock comment). }
     function  AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+    { The same ask, also written into a chat stream (Notify) and abandoned
+      as unanswered if that stream closes (Alive). Public for the
+      per-request asker in the implementation section. }
+    function  AskVia(const ToolName, ArgsJSON, Resource, Reason: string;
+                     Notify: TAskNotify; Alive: TAskAlive): TAskAnswer;
     procedure HandlePermissionsList(AResp: TIdHTTPResponseInfo);
     procedure HandlePermissionAnswer(const Doc: string; ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     { Resolve a registered MCP tool by its bare suffix (after "server__"),
@@ -3850,7 +3861,7 @@ type
     Answer: TAskAnswer;
     constructor Create;
     destructor Destroy; override;
-    function ToJSON: string;
+    function ToJSON(ArgsCap: Integer = 4000): string;
   end;
 
 constructor TPendingAsk.Create;
@@ -3866,26 +3877,36 @@ begin
   inherited Destroy;
 end;
 
-function TPendingAsk.ToJSON: string;
+function TPendingAsk.ToJSON(ArgsCap: Integer): string;
 var
   A: string;
 begin
   A := ArgsJSON;
-  if Length(A) > 4000 then A := Copy(A, 1, 4000);   { a preview; the UI shows the resource }
+  if Length(A) > ArgsCap then A := Copy(A, 1, ArgsCap);   { a preview; the UI shows the resource }
   Result := '{"id":' + JsonStr(Id) + ',"session":' + JsonStr(Session) +
             ',"tool":' + JsonStr(Tool) + ',"resource":' + JsonStr(Resource) +
             ',"args":' + JsonStr(A) + ',"reason":' + JsonStr(Reason) + '}';
 end;
 
 function TGatewayServer.AskPermission(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+begin
+  Result := AskVia(ToolName, ArgsJSON, Resource, Reason, nil, nil);
+end;
+
+function TGatewayServer.AskVia(const ToolName, ArgsJSON, Resource, Reason: string;
+  Notify: TAskNotify; Alive: TAskAlive): TAskAnswer;
 var
   P: TPendingAsk;
-  i, n, LimitMs: Integer;
+  i, Waited, LimitMs: Integer;
+  Answered: Boolean;
 begin
-  Result := aaDeny;
-  if DesktopSubscriberCount = 0 then
+  { Nobody to show it to: no desktop on the event feed, and no chat stream
+    that draws asks. Nobody answered -- a gate refuses, and workflow_save
+    stages for later instead of taking it as a no. }
+  Result := aaNobody;
+  if (DesktopSubscriberCount = 0) and not Assigned(Notify) then
   begin
-    LogWarn('permissions: "%s" needs an answer and no web UI is connected -- denied', [ToolName]);
+    LogWarn('permissions: "%s" needs an answer and no web UI is connected -- not asked', [ToolName]);
     Exit;
   end;
   P := TPendingAsk.Create;
@@ -3902,17 +3923,30 @@ begin
     P.Resource := Resource;
     P.ArgsJSON := ArgsJSON;
     P.Reason := Reason;
-    n := Length(FAsks);
-    SetLength(FAsks, n + 1);
-    FAsks[n] := P;
+    i := Length(FAsks);
+    SetLength(FAsks, i + 1);
+    FAsks[i] := P;
   finally
     FAskLock.Leave;
   end;
   PublishRaw('{"type":"permission_request","ask":' + P.ToJSON + '}');
+  { In the chat: the whole arguments, so the card can show what the call
+    would do (a workflow's every step), not a preview. }
+  if Assigned(Notify) then Notify('pasclaw-ask ' + P.ToJSON(64000));
   LimitMs := FCfg.PermissionsAskTimeoutSec * 1000;
   try
-    if P.Event.WaitFor(LimitMs) = wrSignaled then Result := P.Answer
-    else LogWarn('permissions: no answer for "%s" within %d s -- denied', [ToolName, FCfg.PermissionsAskTimeoutSec]);
+    { In one-second slices, so a chat closed mid-question stops the wait
+      instead of holding the turn for the whole timeout. }
+    Answered := False;
+    Waited := 0;
+    while Waited < LimitMs do
+    begin
+      if P.Event.WaitFor(1000) = wrSignaled then begin Answered := True; Break; end;
+      Inc(Waited, 1000);
+      if Assigned(Alive) and not Alive() and (DesktopSubscriberCount = 0) then Break;
+    end;
+    if Answered then Result := P.Answer
+    else LogWarn('permissions: no answer for "%s" -- not allowed', [ToolName]);
   finally
     FAskLock.Enter;
     try
@@ -3928,6 +3962,9 @@ begin
     end;
     PublishRaw('{"type":"permission_resolved","id":' + JsonStr(P.Id) +
                ',"answer":' + JsonStr(AskAnswerName(Result)) + '}');
+    if Assigned(Notify) then
+      Notify('pasclaw-ask-resolved {"id":' + JsonStr(P.Id) +
+             ',"answer":' + JsonStr(AskAnswerName(Result)) + '}');
     P.Free;
   end;
 end;
@@ -8078,10 +8115,16 @@ type
     FId, FModel: string;
     FDebugIO: Boolean;
     FClosed: Boolean;
+    { One frame on the wire at a time: a permission ask can write from a
+      parallel tool thread while another writes too. }
+    FWriteLock: TCriticalSection;
     procedure WriteSocketBytes(const Data: TBytes);
   public
     constructor Create(AContext: TIdContext; const Id, Model: string;
                        DebugIO: Boolean);
+    destructor Destroy; override;
+    { The client is still reading. }
+    function IsOpen: Boolean;
     { Emits Data as a single HTTP/1.1 chunked-encoding chunk. Use this
       for SSE event payloads -- every WriteChunk / WriteComment goes
       through here. }
@@ -8112,6 +8155,22 @@ type
     constructor Create(AContext: TIdContext; AStreamer: TSSEStreamer);
     procedure BeforeTurn(var ContinueTurn: Boolean;
                          var Messages: TMessageArray); override;
+  end;
+
+  (* The asker of a streamed turn whose client draws asks in the chat (the
+     web UI, which says so with `X-PasClaw-Asks: inline`). An ask goes to
+     the desktop feed as before and also into this turn's own stream as a
+     `: pasclaw-ask {...}` comment; the answer comes back through POST
+     /v1/permissions/<id> like any other. Other streaming clients never
+     send the header: an OpenAI SDK skips the comment and would leave the
+     question hanging until the timeout. *)
+  TStreamAsker = class
+  private
+    FServer: TGatewayServer;
+    FStreamer: TSSEStreamer;
+  public
+    constructor Create(AServer: TGatewayServer; AStreamer: TSSEStreamer);
+    function Ask(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
   end;
 
 function EmitSSEResponseHeaders(AContext: TIdContext;
@@ -8209,6 +8268,19 @@ begin
   FModel   := Model;
   FDebugIO := DebugIO;
   FClosed  := False;
+  FWriteLock := TCriticalSection.Create;
+end;
+
+destructor TSSEStreamer.Destroy;
+begin
+  FWriteLock.Free;
+  inherited Destroy;
+end;
+
+function TSSEStreamer.IsOpen: Boolean;
+begin
+  Result := (not FClosed) and (FContext <> nil) and (FContext.Connection <> nil)
+            and FContext.Connection.Connected;
 end;
 
 procedure TSSEStreamer.WriteSocketBytes(const Data: TBytes);
@@ -8275,17 +8347,40 @@ begin
   for i := 0 to High(Payload) do begin Frame[Offset] := Payload[i]; Inc(Offset); end;
   Frame[Offset]     := CRLF[0];
   Frame[Offset + 1] := CRLF[1];
-  WriteSocketBytes(Frame);
+  FWriteLock.Enter;
+  try
+    WriteSocketBytes(Frame);
+  finally
+    FWriteLock.Leave;
+  end;
 end;
 
 procedure TSSEStreamer.CloseStream;
 var
   Terminator: TBytes;
 begin
-  if FClosed then Exit;
-  FClosed := True;
-  Terminator := TEncoding.UTF8.GetBytes('0'#13#10#13#10);
-  WriteSocketBytes(Terminator);
+  FWriteLock.Enter;
+  try
+    if FClosed then Exit;
+    FClosed := True;
+    Terminator := TEncoding.UTF8.GetBytes('0'#13#10#13#10);
+    WriteSocketBytes(Terminator);
+  finally
+    FWriteLock.Leave;
+  end;
+end;
+
+constructor TStreamAsker.Create(AServer: TGatewayServer; AStreamer: TSSEStreamer);
+begin
+  inherited Create;
+  FServer := AServer;
+  FStreamer := AStreamer;
+end;
+
+function TStreamAsker.Ask(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+begin
+  Result := FServer.AskVia(ToolName, ArgsJSON, Resource, Reason,
+                           FStreamer.WriteComment, FStreamer.IsOpen);
 end;
 
 constructor TDisconnectAbortHook.Create(AContext: TIdContext; AStreamer: TSSEStreamer);
@@ -8523,6 +8618,7 @@ var
   StreamStarted, StreamClosed: Boolean;
   ActivityCollector: TToolActivityCollector;
   AbortHook: TDisconnectAbortHook;
+  StreamAsker: TStreamAsker;
   Prim: ILLMProvider;
   FB: TLLMProviderArray;
   FBModels: TStringArray;
@@ -8540,6 +8636,7 @@ begin
   TurnLock := nil;
   Streamer := nil;
   AbortHook := nil;
+  StreamAsker := nil;
   StreamStarted := False;
   StreamClosed := False;
   AWasStreamingRequest := False;
@@ -8864,6 +8961,11 @@ begin
         Streamer). Append (don't replace) so any hooks set upstream survive. }
       AbortHook := TDisconnectAbortHook.Create(AContext, Streamer);
       LoopCfg.Hooks := LoopCfg.Hooks + [AbortHook];
+      if SameText(Trim(ARequest.RawHeaders.Values['X-PasClaw-Asks']), 'inline') then
+      begin
+        StreamAsker := TStreamAsker.Create(Self, Streamer);
+        LoopCfg.OnAsk := StreamAsker.Ask;
+      end;
       Streamer.WriteComment('connected');
       if not RunCheckpointedLoop(ReqSession, LoopCfg, Msgs, Loop) then
       begin
@@ -9052,6 +9154,7 @@ begin
   finally
     if TurnLock <> nil then TurnLock.Leave;
     Req.Free;
+    if StreamAsker <> nil then StreamAsker.Free;
     if Streamer <> nil then Streamer.Free;
     if AbortHook <> nil then AbortHook.Free;
     if ActivityCollector <> nil then ActivityCollector.Free;

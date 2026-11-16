@@ -59,6 +59,7 @@ uses
   PasClaw.Config,
   PasClaw.Utils,
   PasClaw.Tools.Sandbox,       { ResolveWorkspacePath / PathInsideDirectory }
+  PasClaw.Permissions,         { TAskAnswer -- workflow_save asks the operator }
   PasClaw.Workflow.Store,
   PasClaw.Workflow.Dispatch;   { WorkflowDispatch -- routes MCP / llm / registry nodes }
 
@@ -220,10 +221,42 @@ const
     '"name":{"type":"string","description":"saved workflow name"}' +
     '},"required":["name"]}';
 
+{ What the operator is asked when the agent saves a workflow: what it will
+  be called, and every step with its arguments -- the thing to read before
+  saying yes. Each surface shows Reason (the TUI and CLI print it, the web
+  UI's card and ACP's title start with it); the web UI also draws the
+  steps from the arguments. }
+function WorkflowSaveQuestion(const Spec: TWorkflowSpec): string;
+var
+  i: Integer;
+  A: string;
+begin
+  Result := Format('save the workflow "%s" -- it becomes the tool %s',
+                   [Spec.Name, WorkflowToolName(Spec.Id)]);
+  if WorkflowExists(Spec.Id) then Result := Result + ', replacing the saved one';
+  Result := Result + ':';
+  for i := 0 to High(Spec.Nodes) do
+  begin
+    A := Spec.Nodes[i].ArgsJSON;
+    if Length(A) > 160 then A := Copy(A, 1, 157) + '...';
+    Result := Result + sLineBreak + Format('  %d. %s: %s %s',
+      [i + 1, Spec.Nodes[i].Id, Spec.Nodes[i].Tool, A]);
+  end;
+end;
+
+function SavedMessage(const Spec: TWorkflowSpec; const How: string): string;
+begin
+  Result := Format('saved workflow "%s" (%d node(s))%s -> %s. Run it with ' +
+                   '%s or workflow_run({"name":"%s"}); read it back with workflow_get.',
+                   [Spec.Name, Length(Spec.Nodes), How,
+                    WorkflowPath(Spec.Id), WorkflowToolName(Spec.Id), Spec.Name]);
+end;
+
 function ToolWorkflowSave(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Spec: TWorkflowSpec;
-  Err, Errs: string;
+  Err, Errs, Ignored: string;
+  Ans: TAskAnswer;
 begin
   ErrMsg := '';
   if not ParseWorkflow(ArgsJSON, Spec, Err) then
@@ -232,26 +265,56 @@ begin
   begin ErrMsg := 'workflow_save: invalid workflow:' + sLineBreak + Errs; Exit(''); end;
   { The store files a spec with no id under its name; say that id below. }
   if Trim(Spec.Id) = '' then Spec.Id := Spec.Name;
-  { The operator reviews what the agent saves before it runs or becomes a
-    tool, as with an agent-authored skill -- unless they turned that off. }
-  if (WorkflowConfig = nil) or not WorkflowConfig.WorkflowsAutoApprove then
+  if not IsSafeWorkflowId(Spec.Id) then
+  begin ErrMsg := Format('workflow_save: unsafe workflow id "%s" (use letters, digits, - _ .)', [Spec.Id]); Exit(''); end;
+  { Refused by the store anyway; refuse before asking anyone about it. }
+  if SameText(Spec.Id, 'pending') then
+  begin ErrMsg := 'workflow_save: "pending" is reserved; name the workflow something else'; Exit(''); end;
+
+  (* The operator says yes before what the agent wrote runs or becomes a
+     tool, as with a skill it writes -- unless they turned that off. In a
+     chat they are asked there and then, through the same asker an `ask`
+     rule uses (the web UI's card in the chat, the TUI footer, the CLI
+     prompt, the editor's dialog over ACP). Only when nobody can be asked
+     -- an MCP client, an API call with no UI, a standing agent's turn, an
+     ask nobody answered -- is it staged for later: `pasclaw workflow
+     approve`, or the web UI's approvals list. *)
+  if (WorkflowConfig <> nil) and WorkflowConfig.WorkflowsAutoApprove then
   begin
-    if not StagePendingWorkflow(Spec, Err) then
+    if not SaveWorkflow(Spec, Err) then
     begin ErrMsg := 'workflow_save: ' + Err; Exit(''); end;
-    Result := Format('staged workflow "%s" (%d node(s)) for the operator''s approval -- ' +
-                     'it does not run and is not a tool until approved ' +
-                     '(`pasclaw workflow approve %s`, or the web UI''s Workflow tab).',
-                     [Spec.Name, Length(Spec.Nodes), Spec.Id]);
-    if WorkflowExists(Spec.Id) then
-      Result := Result + ' The saved version keeps running until then.';
-    Exit;
+    Exit(SavedMessage(Spec, ''));
   end;
-  if not SaveWorkflow(Spec, Err) then
-  begin ErrMsg := 'workflow_save: ' + Err; Exit(''); end;
-  Result := Format('saved workflow "%s" (%d node(s)) -> %s. Run it with ' +
-                   '%s or workflow_run({"name":"%s"}); read it back with workflow_get.',
-                   [Spec.Name, Length(Spec.Nodes),
-                    WorkflowPath(Spec.Id), WorkflowToolName(Spec.Id), Spec.Name]);
+
+  Ans := aaNobody;
+  if Assigned(GAskOperator) then
+    Ans := GAskOperator('workflow_save', ArgsJSON, Spec.Id, WorkflowSaveQuestion(Spec));
+  case Ans of
+    aaAllowOnce, aaAllowSession:
+      begin
+        if not SaveWorkflow(Spec, Err) then
+        begin ErrMsg := 'workflow_save: ' + Err; Exit(''); end;
+        { A version staged earlier is superseded by the one just approved. }
+        if PendingWorkflowSha(Spec.Id) <> '' then RejectPendingWorkflow(Spec.Id, Ignored);
+        Result := SavedMessage(Spec, ', approved by the user');
+      end;
+    aaDeny:
+      Result := Format('not saved: the user declined to save the workflow "%s". ' +
+                       'Nothing was saved or staged. Do not save it again unchanged; ' +
+                       'ask the user what they would prefer.', [Spec.Name]);
+  else
+    begin
+      if not StagePendingWorkflow(Spec, Err) then
+      begin ErrMsg := 'workflow_save: ' + Err; Exit(''); end;
+      Result := Format('staged workflow "%s" (%d node(s)) for the user''s approval -- ' +
+                       'no one could be asked just now. It does not run and is not a ' +
+                       'tool until approved (the web UI''s approvals list, or ' +
+                       '`pasclaw workflow approve %s`).',
+                       [Spec.Name, Length(Spec.Nodes), Spec.Id]);
+      if WorkflowExists(Spec.Id) then
+        Result := Result + ' The saved version keeps running until then.';
+    end;
+  end;
 end;
 
 function ToolWorkflowGet(const ArgsJSON: string; out ErrMsg: string): string;

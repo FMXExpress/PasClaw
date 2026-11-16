@@ -545,7 +545,7 @@ pasclaw workflow approve digest --sha256 3f1c…   # refuse if it changed since 
 pasclaw workflow reject digest
 ```
 
-A workflow the agent saves with `workflow_save` is staged until approved (unless `workflows_auto_approve` is on). An approval from here reaches a running gateway without a restart. See [Workflows](./workflows.md#approval).
+When the agent saves a workflow with `workflow_save` you are asked in the chat; these commands are for the ones saved when nobody could be asked (an MCP client, an API call, a team agent), which wait until approved. An approval from here reaches a running gateway without a restart. See [Workflows](./workflows.md#approval).
 
 ## update
 

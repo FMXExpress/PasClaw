@@ -937,6 +937,11 @@ begin
         case Ans of
           aaAllowOnce: ;
           aaAllowSession: RememberSessionAllow(Cfg.SteeringKey, ToolName, Res);
+          aaNobody:
+            begin
+              Refusal := PermissionAskRefusal(ToolName, Res, True);
+              Result := False;
+            end;
         else
           Refusal := PermissionAskRefusal(ToolName, Res, False);
           Result := False;
@@ -2014,6 +2019,19 @@ begin
   Cfg := Default(TToolLoopConfig);
   Cfg.Registry := TToolRegistry(Reg);
   Result := TLoopDispatcher.Create(Cfg);
+end;
+
+{ GAskOperator: the asker of the turn dispatching on this thread. }
+function AskOperatorOnThisThread(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+var
+  Cfg: PToolLoopConfig;
+begin
+  Cfg := GDispatchingCfg;
+  if (Cfg = nil) or not Assigned(Cfg^.OnAsk) then Exit(aaNobody);
+  if SessionAllowed(Cfg^.SteeringKey, ToolName, Resource) then Exit(aaAllowSession);
+  Result := Cfg^.OnAsk(ToolName, ArgsJSON, Resource, Reason);
+  if Result = aaAllowSession then
+    RememberSessionAllow(Cfg^.SteeringKey, ToolName, Resource);
 end;
 
 function CaptureLoopDispatcher: IToolDispatcher;
@@ -3188,9 +3206,11 @@ initialization
     using this unit directly -- PasClaw.Tools.RPC sits below the loop. }
   GCaptureDispatcher := @CaptureLoopDispatcher;
   GHeadlessDispatcher := @HeadlessLoopDispatcher;
+  GAskOperator := @AskOperatorOnThisThread;
 
 finalization
   GCaptureDispatcher := nil;
   GHeadlessDispatcher := nil;
+  GAskOperator := nil;
 
 end.

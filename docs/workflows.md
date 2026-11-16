@@ -79,9 +79,29 @@ calling `read_file`.
 
 ## Approval
 
-When the agent saves a workflow, it is **staged**, not saved. It does not
-run and is not a tool until you approve it. Skills the agent writes work
-the same way.
+When the agent saves a workflow, you are asked first, in the chat it is
+working in.
+
+- **In a chat.** The question appears where you are: a card under the
+  agent's reply in the web UI, the footer in the TUI, a prompt in the CLI,
+  the editor's permission dialog over ACP. It shows what the workflow will
+  be called and every step with its arguments. **Save** makes it the tool
+  `wf_<id>` straight away. **Don't save** drops it: nothing is saved or
+  kept for later, and the agent is told you said no. **Save, and don't ask
+  again for it in this chat** also lets later saves of that same workflow
+  in this chat through without asking. If the workflow is already saved,
+  the card says the new version replaces it.
+- **When nobody can be asked,** the workflow waits for you instead. That
+  covers another agent saving over MCP, an API call with no web UI chat, a
+  team agent's turn, and a question nobody answered in time. It is staged
+  in `workspace/workflows/.pending/<id>.json`, and the web UI's header
+  shows **N to approve**. The badge opens a list of everything waiting
+  (staged workflows and staged skills), each with its steps and **Approve**
+  / **Reject**. A staged workflow does not run and is not a tool. If one
+  with that id is already saved, the saved version keeps running until you
+  approve the new one.
+
+The same list is in the Workflow tab, and on the command line:
 
 ```
 $ pasclaw workflow pending
@@ -105,28 +125,19 @@ $ pasclaw workflow approve digest
 ✓ approved digest -- it runs now, and is the tool wf_digest (no restart needed)
 ```
 
-- **Where it waits:** `workspace/workflows/.pending/<id>.json`. The agent
-  is told it is waiting and how to approve it. If a workflow with that id
-  is already saved, the saved version keeps running until you approve the
-  new one.
-- **Review it** in the web UI's Workflow tab (under *Waiting for
-  approval*, each step with its arguments), with `pasclaw workflow show
-  <id>`, or with `GET /v1/workflows/pending`.
-- **Approve** with the tab's button, `pasclaw workflow approve <id>`, or
-  `POST /v1/workflows/pending/approve` with `{"id": "...", "sha256": "..."}`.
-  The `sha256` is the one the listing (or `show`) gave you. If the staged
+- **Over HTTP:** `GET /v1/workflows/pending`, then
+  `POST /v1/workflows/pending/approve` with `{"id": "...", "sha256": "..."}`
+  or `POST /v1/workflows/pending/reject` with `{"id": "..."}`.
+- **The sha256** is the one the list (or `show`) gave you. If the staged
   file has changed since then, for example because the agent saved again,
   the approval is refused, so you never approve a version you haven't
-  read. The tab sends it for you, and `--sha256` does the same on the
+  read. The web UI sends it for you, and `--sha256` does the same on the
   command line. Approving checks the workflow is valid again before saving
   it.
-- **Reject** with the tab's button, `pasclaw workflow reject <id>`, or
-  `POST /v1/workflows/pending/reject` with `{"id": "..."}`.
-- **Your own saves are not staged:** the editor, `POST /v1/workflows` and
-  `PUT /v1/workflows/<id>` save directly.
+- **Your own saves are not asked about:** the editor, `POST /v1/workflows`
+  and `PUT /v1/workflows/<id>` save directly.
 - **Turn it off** with `"workflows_auto_approve": true` in `config.json`.
-  The agent's saves are then saved directly, as they were before this
-  change.
+  The agent's saves are then saved without asking.
 - **The file tools can't write around it.** `write_file`, `edit_file` and
   the other file tools refuse a workflow spec
   (`workflows/<id>.json`) and anything under `workflows/.pending/`, and the

@@ -114,6 +114,22 @@
   .header-actions button{display:inline-flex;align-items:center;justify-content:center;
     width:30px;height:30px;padding:0;background:none;border:0;color:var(--text-2)}
   .header-actions button:hover{background:var(--surface-2);color:var(--text)}
+  /* What waits for the operator's yes: staged workflows and skills. Only
+     drawn when something does. */
+  .header-actions #approvals-btn{width:auto;height:26px;padding:0 .6rem;border-radius:13px;
+    font-size:12px;font-weight:600;color:var(--warn);background:var(--warn-soft);
+    border:1px solid var(--warn);margin-right:.3rem;white-space:nowrap}
+  .header-actions #approvals-btn[hidden]{display:none}
+  #approvals-overlay{position:fixed;inset:0;z-index:190;display:flex;align-items:flex-start;
+    justify-content:center;background:rgba(8,10,14,.55);padding:4rem 1rem 1rem}
+  #approvals-overlay[hidden]{display:none}
+  #approvals-card{width:min(640px,96vw);max-height:80vh;overflow:auto;border:1px solid var(--border-strong);
+    border-radius:12px;padding:1rem 1.1rem;background:var(--surface);box-shadow:var(--shadow-pop)}
+  #approvals-card .apv-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem}
+  #approvals-card .apv-head b{font-size:15px}
+  #approvals-card .apv-sub{font-size:12.5px;color:var(--text-2);margin:0 0 .6rem}
+  #approvals-list .ask-card{margin-bottom:.6rem}
+  #approvals-list pre{white-space:pre-wrap;font-size:11.5px;max-height:14rem;overflow:auto;margin:.3rem 0}
   main{position:relative;flex:1;min-height:0;display:flex;overflow:hidden}
   .tab{display:none;flex:1;min-width:0;overflow:hidden;background:var(--bg)}
   .tab.active{display:flex}
@@ -277,6 +293,18 @@
   .row.u .bub{max-width:85%;background:var(--surface-2);border:1px solid var(--border);
     border-radius:12px;padding:.5rem .8rem}
   .row.a .bub{flex:1}
+  /* A question for the operator in the chat: a permission ask, or the agent
+     asking to save a workflow. Live only -- the turn's tool result is what
+     the transcript keeps. */
+  .row.ask .bub{flex:1;display:flex;flex-direction:column;gap:.5rem;white-space:normal}
+  .ask-card{border:1px solid var(--warn);background:var(--warn-soft);border-radius:8px;padding:.6rem .75rem}
+  .ask-card.done{border-color:var(--border);background:var(--surface-2);opacity:.85}
+  .ask-card .ask-title{font-weight:600}
+  .ask-card .ask-why{font-size:12.5px;color:var(--text-2);margin:.2rem 0 .35rem;white-space:pre-wrap}
+  .ask-card ol{margin:.25rem 0 .4rem 1.2rem;padding:0;font-size:12.5px}
+  .ask-card ol code{font-size:11.5px;word-break:break-all}
+  .ask-card .ask-btns{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.35rem}
+  .ask-card .ask-state{font-size:12.5px;color:var(--text-2)}
   .row.e{flex-direction:column;gap:.3rem}
   .row.e .role{display:block;font-size:12px;font-weight:600;color:var(--danger);text-transform:capitalize}
   .row.e .bub{align-self:stretch;border:1px solid var(--danger-line);background:var(--danger-soft);
@@ -794,6 +822,7 @@
     <button data-tab="settings">Settings</button>
   </nav>
   <div class="header-actions">
+    <button id="approvals-btn" type="button" hidden title="Things the agent made that wait for your yes"></button>
     <button id="theme-btn" type="button" title="Switch between light and dark" aria-label="Switch between light and dark"><svg class="ic" aria-hidden="true"><use href="#i-moon"/></svg></button>
     <button id="gw-token-btn" type="button" title="Set / clear gateway bearer token (used when PASCLAW_GATEWAY_TOKEN is set on the server)" aria-label="Gateway token"><svg class="ic" aria-hidden="true"><use href="#i-key"/></svg></button>
   </div>
@@ -1272,6 +1301,18 @@
   </div>
 </main>
 
+<!-- What waits for the operator: workflows and skills the agent saved when
+     nobody could be asked in the chat (an MCP client, an API call, a team
+     agent). Opened from the header's approvals button. -->
+<div id="approvals-overlay" hidden>
+  <div id="approvals-card" role="dialog" aria-label="Waiting for your approval">
+    <div class="apv-head"><b>Waiting for your approval</b>
+      <button id="approvals-close" class="icon-btn" type="button" aria-label="Close">Close</button></div>
+    <p class="apv-sub">The agent made these when no one could be asked in a chat. Nothing here runs until you approve it.</p>
+    <div id="approvals-list"></div>
+  </div>
+</div>
+
 <!-- First-boot onboarding wizard. Hidden by default; shown by JS when the
      config has no usable provider (or via the /onboard command). -->
 <div id="onboard-overlay" hidden>
@@ -1469,6 +1510,97 @@ function gwSseUrl(path) {
   if (!tok) return path;
   return path + (path.indexOf("?") < 0 ? "?" : "&") + "token=" + encodeURIComponent(tok);
 }
+/* ===== Approvals: staged workflows and skills =====
+   Polled every 20 s, after each chat turn, and when the panel acts. The
+   header button shows the count and opens the list; each item shows what
+   it would do (a workflow's every step, a skill's text) with approve and
+   reject. A workflow's approval carries the sha256 it was listed with, so
+   a version the agent staged after this listing is refused, not approved
+   unseen. */
+let approvalsCache = { workflows: [], skills: [] };
+async function refreshApprovals() {
+  const get = async (path) => {
+    try { const r = await gwFetch(path); if (!r.ok) return []; return ((await r.json()).pending) || []; }
+    catch { return []; }
+  };
+  const [workflows, skills] = await Promise.all([get("/v1/workflows/pending"), get("/v1/skills/pending")]);
+  approvalsCache = { workflows, skills };
+  const n = workflows.length + skills.length;
+  const btn = document.getElementById("approvals-btn");
+  if (btn) {
+    btn.hidden = n === 0;
+    btn.textContent = n + " to approve";
+  }
+  const ov = document.getElementById("approvals-overlay");
+  if (ov && !ov.hidden) renderApprovals();
+  return n;
+}
+function renderApprovals() {
+  const box = document.getElementById("approvals-list");
+  if (!box) return;
+  box.innerHTML = "";
+  const { workflows, skills } = approvalsCache;
+  if (!workflows.length && !skills.length) {
+    box.innerHTML = '<div class="apv-sub">Nothing waits for you.</div>';
+    return;
+  }
+  for (const w of workflows) {
+    const spec = w.spec || {};
+    const card = document.createElement("div");
+    card.className = "ask-card";
+    const steps = (spec.nodes || []).map(n =>
+      `<li><b>${escapeHtml(n.id || "")}</b> · <code>${escapeHtml(n.tool || "")}</code> `
+      + `<code>${escapeHtml(JSON.stringify(n.args || {}))}</code></li>`).join("");
+    card.innerHTML =
+        `<div class="ask-title">Workflow <code>${escapeHtml(w.name || w.id)}</code>`
+      + (w.replaces ? ` <span class="ask-state">(replaces the saved one)</span>` : "") + `</div>`
+      + (w.description ? `<div class="ask-why">${escapeHtml(w.description)}</div>` : "")
+      + `<ol>${steps}</ol>`
+      + `<div class="ask-why">Approved, it runs, and agents can call it as <code>wf_${escapeHtml(w.id)}</code>.</div>`
+      + `<div class="ask-btns"><button class="primary" data-act="approve" type="button">Approve</button>`
+      + `<button data-act="reject" type="button">Reject</button></div>`;
+    card.querySelectorAll("button[data-act]").forEach(b => b.addEventListener("click", () =>
+      approvalAction("/v1/workflows/pending/" + b.dataset.act, { id: w.id, sha256: w.sha256 })));
+    box.appendChild(card);
+  }
+  for (const s of skills) {
+    const card = document.createElement("div");
+    card.className = "ask-card";
+    card.innerHTML =
+        `<div class="ask-title">Skill <code>${escapeHtml(s.name || s.id)}</code> `
+      + `<span class="ask-state">(${escapeHtml(s.action || "create")})</span></div>`
+      + (s.content ? `<pre>${escapeHtml(s.content)}</pre>` : "")
+      + `<div class="ask-btns"><button class="primary" data-act="approve" type="button">Approve</button>`
+      + `<button data-act="reject" type="button">Reject</button></div>`;
+    card.querySelectorAll("button[data-act]").forEach(b => b.addEventListener("click", () =>
+      approvalAction("/v1/skills/pending/" + b.dataset.act, { id: s.id })));
+    box.appendChild(card);
+  }
+}
+async function approvalAction(path, body) {
+  try {
+    const r = await gwFetch(path, { method: "POST", headers: { "content-type": "application/json" },
+                                    body: JSON.stringify(body) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      window.alert((j.error || ("http " + r.status)) + "");
+    }
+  } catch (e) { window.alert(String(e)); }
+  await refreshApprovals();
+  renderApprovals();
+}
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("approvals-btn");
+  const ov = document.getElementById("approvals-overlay");
+  if (btn && ov) {
+    btn.addEventListener("click", () => { ov.hidden = false; renderApprovals(); refreshApprovals(); });
+    document.getElementById("approvals-close").addEventListener("click", () => { ov.hidden = true; });
+    ov.addEventListener("click", (e) => { if (e.target === ov) ov.hidden = true; });
+  }
+  refreshApprovals();
+  setInterval(refreshApprovals, 20000);
+});
+
 document.addEventListener("DOMContentLoaded", () => {
   const btn = document.getElementById("gw-token-btn");
   if (btn) btn.addEventListener("click", () => promptForToken(
@@ -2124,8 +2256,84 @@ function scheduleRunPaint(run) {
    far, or the typing dots. */
 function attachLiveBubble(run) {
   run.bub = addLine("a", "");
+  run.askRow = null;
   if (run.text) paintRun(run);
   else run.bub.innerHTML = TYPING_HTML;
+  renderRunAsks(run);
+}
+
+/* The questions a running turn is waiting on, as cards under its bubble:
+   what is asked and why, then Allow once / Allow for this chat / Deny.
+   The answer goes to POST /v1/permissions/<id>, the same route the desktop
+   uses; the gateway confirms it in the stream (pasclaw-ask-resolved), and
+   the card then shows what was decided. A workflow save lists every step
+   the workflow would run, from the spec in the call's arguments. */
+function askSteps(a) {
+  if (a.tool !== "workflow_save") return null;
+  let spec;
+  try { spec = JSON.parse(a.args); } catch { return null; }
+  if (!spec || !Array.isArray(spec.nodes)) return null;
+  return spec;
+}
+function askCardHTML(a) {
+  const spec = askSteps(a);
+  let title, body;
+  if (spec) {
+    title = `Save the workflow <code>${escapeHtml(spec.name || a.resource)}</code> as a tool?`;
+    const inputs = (spec.inputs || []).map(i => i.name).filter(Boolean);
+    body = (spec.description ? `<div class="ask-why">${escapeHtml(spec.description)}</div>` : "")
+         + (inputs.length ? `<div class="ask-why">Inputs: ${inputs.map(n => `<code>${escapeHtml(n)}</code>`).join(", ")}</div>` : "")
+         + `<ol>` + spec.nodes.map(n =>
+             `<li><b>${escapeHtml(n.id || "")}</b> · <code>${escapeHtml(n.tool || "")}</code> `
+             + `<code>${escapeHtml(JSON.stringify(n.args || {}))}</code></li>`).join("") + `</ol>`
+         + `<div class="ask-why">Once saved it runs, and agents can call it as <code>wf_${escapeHtml(a.resource)}</code>.</div>`;
+  } else {
+    title = `Allow <code>${escapeHtml(a.tool)}</code>`
+          + (a.resource ? ` on <code>${escapeHtml(a.resource.length > 160 ? a.resource.slice(0, 157) + "…" : a.resource)}</code>` : "") + `?`;
+    body = a.reason ? `<div class="ask-why">${escapeHtml(a.reason)}</div>` : "";
+  }
+  const state = { allow: "Allowed once", session: "Allowed for this chat", deny: "Denied",
+                  nobody: "No answer — not allowed" }[a.answer];
+  const btns = a.answer
+    ? `<div class="ask-state">${escapeHtml(state || a.answer)}</div>`
+    : `<div class="ask-btns">`
+      + `<button class="primary" data-ans="allow" type="button">${spec ? "Save" : "Allow once"}</button>`
+      + `<button data-ans="session" type="button">${spec ? "Save, and don't ask again for it in this chat" : "Allow for this chat"}</button>`
+      + `<button data-ans="deny" type="button">${spec ? "Don't save" : "Deny"}</button></div>`;
+  return `<div class="ask-title">${title}</div>${body}${btns}`;
+}
+function renderRunAsks(run) {
+  if (!run.bub || !run.asks.length) return;
+  if (!run.askRow || !run.askRow.isConnected) {
+    const row = document.createElement("div");
+    row.className = "row ask";
+    row.innerHTML = `<div class="role"></div><div class="bub"></div>`;
+    const anchor = run.bub.closest(".row");
+    anchor.parentNode.insertBefore(row, anchor.nextSibling);
+    run.askRow = row;
+  }
+  const box = run.askRow.querySelector(".bub");
+  box.innerHTML = "";
+  for (const a of run.asks) {
+    const card = document.createElement("div");
+    card.className = "ask-card" + (a.answer ? " done" : "");
+    card.innerHTML = askCardHTML(a);
+    card.querySelectorAll("button[data-ans]").forEach(b =>
+      b.addEventListener("click", () => answerAsk(run, a, b.dataset.ans)));
+    box.appendChild(card);
+  }
+  log.scrollTop = log.scrollHeight;
+}
+async function answerAsk(run, a, answer) {
+  a.sending = true;
+  try {
+    const r = await gwFetch("/v1/permissions/" + encodeURIComponent(a.id), {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answer }) });
+    /* 404: answered elsewhere, or it timed out -- the stream says which. */
+    if (r.ok) a.answer = answer;
+  } catch {}
+  renderRunAsks(run);
 }
 
 /* Stream one assistant reply for the open chat's current history. The user
@@ -2139,8 +2347,8 @@ async function streamAssistant() {
      X-PasClaw-Session and is checkpoint-scoped to this chat (not the workspace
      fallback). No-op once a session id exists. */
   const sid = await ensureSession();
-  const run = { sid, turns, abort: new AbortController(), text: "", tools: [],
-                error: "", bub: null, done: false, discard: false, raf: false };
+  const run = { sid, turns, abort: new AbortController(), text: "", tools: [], asks: [],
+                askRow: null, error: "", bub: null, done: false, discard: false, raf: false };
   runs.add(run);
   /* Usually still on screen; the operator may have moved on while the
      session was being made. */
@@ -2155,7 +2363,10 @@ async function streamAssistant() {
      PasClaw.Gateway.ToolView). Built from this chat's own turns and sent
      under its own session id, whatever is open by the time it goes. */
   const body = Object.assign({ stream: true }, chatRequestBody(turns));
-  const headers = { "content-type": "application/json", "accept": "text/event-stream" };
+  /* X-PasClaw-Asks: this page draws a question for the operator in the
+     chat (renderRunAsks), so the gateway sends it down this stream. */
+  const headers = { "content-type": "application/json", "accept": "text/event-stream",
+                    "X-PasClaw-Asks": "inline" };
   if (sid) headers["X-PasClaw-Session"] = sid;
 
   try {
@@ -2191,6 +2402,14 @@ async function streamAssistant() {
           const c = line.slice(1).trim();
           if (c.startsWith("pasclaw-tool ")) {
             try { run.tools.push(JSON.parse(c.slice("pasclaw-tool ".length))); scheduleRunPaint(run); } catch {}
+          } else if (c.startsWith("pasclaw-ask-resolved ")) {
+            try {
+              const r = JSON.parse(c.slice("pasclaw-ask-resolved ".length));
+              const a = run.asks.find(x => x.id === r.id);
+              if (a) { a.answer = r.answer; renderRunAsks(run); }
+            } catch {}
+          } else if (c.startsWith("pasclaw-ask ")) {
+            try { run.asks.push(JSON.parse(c.slice("pasclaw-ask ".length))); renderRunAsks(run); } catch {}
           }
           continue;
         }
@@ -2253,6 +2472,7 @@ async function streamAssistant() {
        meanwhile shows this copy, not the server's older one. */
     if (!run.discard && turns.length) adoptSessionId(turns, await persistTurns(sid, turns));
     runs.delete(run);
+    refreshApprovals();   /* the turn may have staged something */
     renderSessions();
     if (shown && activeTurns === turns) m.focus();
   }
@@ -4645,6 +4865,7 @@ async function wfPendingAction(w, what) {
     else wfMsg(what + " failed: " + (j.error || ("http " + r.status)));
   } catch (e) { wfMsg(what + " failed: " + e); }
   await wfLoadList();
+  refreshApprovals();
 }
 
 function wfNewClicked() {

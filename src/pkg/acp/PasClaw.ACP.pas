@@ -893,7 +893,11 @@ begin
        '{"optionId":"allow_session","name":"Allow for this session","kind":"allow_always"},' +
        '{"optionId":"reject_once","name":"Deny","kind":"reject_once"}]}',
        ResultJSON) then
+  begin
+    { The editor did not answer the request at all: nobody answered. }
+    Result := aaNobody;
     Exit;
+  end;
   { Anything but a selected allow is a no: a cancelled outcome, a reject,
     an option we did not offer, a malformed answer. }
   try

@@ -15,7 +15,8 @@ uses
   SysUtils, Classes, SyncObjs,
   PasClaw.Utils,            { canonical TStringArray (Delphi side) }
   PasClaw.Tools.Types,
-  PasClaw.Providers.Types;
+  PasClaw.Providers.Types,
+  PasClaw.Permissions;   { TAskAnswer -- GAskOperator }
 
 type
   {$IFNDEF FPC}
@@ -181,6 +182,20 @@ var
   { Installed by PasClaw.Tools.ToolLoop at initialization. See IToolDispatcher. }
   GCaptureDispatcher: TCaptureDispatcherFn = nil;
   GHeadlessDispatcher: THeadlessDispatcherFn = nil;
+
+type
+  { Ask the operator of the turn dispatching on this thread, through the
+    same asker a permission rule's `ask` uses (the web UI's in-chat card,
+    the TUI footer, the CLI prompt, ACP's request_permission). For a tool
+    whose own work needs a yes -- workflow_save asks before a workflow
+    becomes a tool. aaNobody when no turn is dispatching here or it has no
+    asker; aaAllowSession without asking when the operator already allowed
+    this tool on this resource for the session. }
+  TAskOperatorFn = function(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+
+var
+  { Installed by PasClaw.Tools.ToolLoop, which sits above this unit. }
+  GAskOperator: TAskOperatorFn = nil;
 
 type
   TAgentTurnProbe = function: Boolean;

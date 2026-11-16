@@ -69,7 +69,11 @@ type
   end;
   TPermRuleArray = array of TPermRule;
 
-  TAskAnswer = (aaDeny, aaAllowOnce, aaAllowSession);
+  { aaNobody: no one answered -- there was no one to ask (no terminal, no
+    web UI connected), or the question timed out. Not the same as a no:
+    a gate refuses either way, but a caller with somewhere else to put
+    the decision (workflow_save stages it for later) can tell them apart. }
+  TAskAnswer = (aaDeny, aaAllowOnce, aaAllowSession, aaNobody);
 
   { The asker a loop config carries. Called on the dispatching thread
     (loop thread, or a parallel worker) and expected to block until a
@@ -247,6 +251,7 @@ begin
   case A of
     aaAllowOnce:    Result := 'allow';
     aaAllowSession: Result := 'session';
+    aaNobody:       Result := 'nobody';
   else              Result := 'deny';
   end;
 end;
@@ -423,8 +428,9 @@ begin
   if Res <> '' then Res := ' on "' + Res + '"';
   if NobodyAsked then
     Result := 'refused: tool "' + Tool + '"' + Res + ' needs the user''s permission ' +
-              'and no one is here to ask -- this session has ' +
-              'no interactive operator. Do not retry the same call; tell the user ' +
+              'and nobody answered -- no one is here to ask (this session has no ' +
+              'interactive operator), or the question went unanswered. Do not retry ' +
+              'the same call; tell the user ' +
               'what you needed and why, or find another way.'
   else
     Result := 'refused: the user declined to allow tool "' + Tool + '"' + Res +

@@ -46,6 +46,7 @@ var
   GWriteCalls: Integer = 0;
   GAsked: Integer = 0;
   GLastReadArgs: string = '';
+  GLastAskTool, GLastAskResource, GLastAskReason: string;
   Reg: TToolRegistry;
   Cfg: TConfig;
 
@@ -102,6 +103,9 @@ type
 function TAsker.Ask(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
 begin
   Inc(GAsked);
+  GLastAskTool := ToolName;
+  GLastAskResource := Resource;
+  GLastAskReason := Reason;
   Result := Answer;
 end;
 
@@ -218,6 +222,13 @@ begin
     ResetCounts;
     Check(not RunRW(MakeLoopDispatcher(LC), Res, Err), 'turn ask declined: the run fails');
     Check((GAsked = 1) and (GWriteCalls = 0), 'turn ask declined: asked, did not run');
+    { Nobody answered (no terminal, no UI, a timeout): refused, and saying so. }
+    Asker.Answer := aaNobody;
+    ResetCounts;
+    Check(not RunRW(MakeLoopDispatcher(LC), Res, Err), 'turn ask unanswered: the run fails');
+    Check(GWriteCalls = 0, 'turn ask unanswered: did not run');
+    Check(Pos('nobody answered', NodeErr(Res, 'b')) > 0,
+          'turn ask unanswered: says nobody answered, not that the user declined: ' + NodeErr(Res, 'b'));
     Rules('[]');
 
     { Plan mode: the mutating node is refused, the read-only one runs. }
@@ -486,6 +497,99 @@ begin
   SetWorkflowConfig(Cfg);
 end;
 
+{ In a chat, workflow_save asks the operator there and then -- the same
+  asker an `ask` rule uses -- and does what they say. }
+procedure TestSaveAsksInChat;
+var
+  LC: TToolLoopConfig;
+  Asker: TAsker;
+  Disp: IToolDispatcher;
+  Out_, Err: string;
+  T: TTool;
+const
+  SPEC_A = '{"name":"chatflow","description":"made in a chat","nodes":[' +
+           '{"id":"look","tool":"t_read","args":{"q":"{{inputs.q}}"}},' +
+           '{"id":"put","tool":"t_write","args":{"x":"{{nodes.look}}"}}],' +
+           '"edges":[{"from":"look","to":"put"}],' +
+           '"inputs":[{"name":"q","type":"string"}]}';
+begin
+  Rules('[]');
+  Cfg.WorkflowsAutoApprove := False;
+  SetWorkflowConfig(Cfg);
+  Asker := TAsker.Create;
+  try
+    LC := Default(TToolLoopConfig);
+    LC.Registry := Reg;
+    LC.SteeringKey := 'sess-wf-ask';
+    LC.OnAsk := Asker.Ask;
+
+    { Allow: saved and a tool at once; nothing staged. }
+    Asker.Answer := aaAllowOnce;
+    ResetCounts;
+    Disp := MakeLoopDispatcher(LC);
+    Out_ := Disp.Dispatch('workflow_save', SPEC_A, Err);
+    Check(GAsked = 1, 'chat save: the operator was asked');
+    Check((GLastAskTool = 'workflow_save') and (GLastAskResource = 'chatflow'),
+          'chat save: asked about workflow_save on the workflow''s id');
+    Check((Pos('wf_chatflow', GLastAskReason) > 0) and (Pos('t_read', GLastAskReason) > 0) and
+          (Pos('t_write', GLastAskReason) > 0) and (Pos('{{nodes.look}}', GLastAskReason) > 0),
+          'chat save: the question shows the tool name and every step with its arguments: ' + GLastAskReason);
+    Check(WorkflowExists('chatflow') and Reg.Find('wf_chatflow', T), 'chat save allowed: saved and a tool: ' + Out_ + Err);
+    Check(Length(ListPendingWorkflows) = 0, 'chat save allowed: nothing staged');
+    Check(Pos('approved by the user', Out_) > 0, 'chat save allowed: the agent is told: ' + Out_);
+    Check(Pos('replacing the saved one', GLastAskReason) = 0, 'a new workflow is not "replacing"');
+
+    { Deny: neither saved nor staged; the saved version is untouched. }
+    Asker.Answer := aaDeny;
+    ResetCounts;
+    Out_ := Disp.Dispatch('workflow_save',
+      '{"name":"chatflow","description":"CHANGED","nodes":[{"id":"w","tool":"t_write","args":{}}]}', Err);
+    Check(GAsked = 1, 'chat save denied: asked');
+    Check(Pos('replacing the saved one', GLastAskReason) > 0, 'an update says it replaces the saved one');
+    Check(Pos('declined', Out_) > 0, 'chat save denied: the agent is told: ' + Out_);
+    Check(Length(ListPendingWorkflows) = 0, 'chat save denied: not staged either');
+    Check(Reg.Find('wf_chatflow', T) and (Pos('made in a chat', T.Description) > 0),
+          'chat save denied: the saved version is unchanged');
+
+    { Nobody answered: staged for later, as with no chat at all. }
+    Asker.Answer := aaNobody;
+    Out_ := Disp.Dispatch('workflow_save', '{"name":"later2","nodes":[{"id":"a","tool":"t_read","args":{}}]}', Err);
+    Check(not WorkflowExists('later2') and (PendingWorkflowSha('later2') <> ''),
+          'chat save unanswered: staged, not saved: ' + Out_);
+
+    { Approving in the chat supersedes a version staged earlier. }
+    Asker.Answer := aaAllowOnce;
+    Out_ := Disp.Dispatch('workflow_save', '{"name":"later2","nodes":[{"id":"a","tool":"t_read","args":{}}]}', Err);
+    Check(WorkflowExists('later2') and (PendingWorkflowSha('later2') = ''),
+          'chat save allowed: an earlier staged copy is dropped: ' + Out_);
+
+    { Allow for this chat: not asked again about the same workflow in the
+      same session; asked about another one. }
+    Asker.Answer := aaAllowSession;
+    ResetCounts;
+    Disp.Dispatch('workflow_save', '{"name":"sticky","nodes":[{"id":"a","tool":"t_read","args":{}}]}', Err);
+    Disp.Dispatch('workflow_save', '{"name":"sticky","description":"v2","nodes":[{"id":"a","tool":"t_read","args":{}}]}', Err);
+    Check(GAsked = 1, 'allow for this chat: asked once for two saves of one workflow (asked ' + IntToStr(GAsked) + ')');
+    Check(Reg.Find('wf_sticky', T) and (Pos('v2', T.Description) > 0), 'the second save landed');
+    Asker.Answer := aaDeny;
+    Disp.Dispatch('workflow_save', '{"name":"other","nodes":[{"id":"a","tool":"t_read","args":{}}]}', Err);
+    Check(GAsked = 2, 'another workflow is asked about');
+
+    { No asker on the turn (a team agent, an API call): staged. }
+    LC.OnAsk := nil;
+    ResetCounts;
+    Out_ := MakeLoopDispatcher(LC).Dispatch('workflow_save', '{"name":"noasker","nodes":[{"id":"a","tool":"t_read","args":{}}]}', Err);
+    Check((GAsked = 0) and (PendingWorkflowSha('noasker') <> ''), 'no asker: staged: ' + Out_);
+
+    RejectPendingWorkflow('noasker', Err);
+    DeleteWorkflow('chatflow', Err);
+    DeleteWorkflow('later2', Err);
+    DeleteWorkflow('sticky', Err);
+  finally
+    Asker.Free;
+  end;
+end;
+
 procedure TestFileToolsCannotWriteSpecs;
 var
   Why, Dir: string;
@@ -537,6 +641,7 @@ begin
     TestWorkflowTools;
     TestMCPServes;
     TestApproval;
+    TestSaveAsksInChat;
     TestFileToolsCannotWriteSpecs;
   finally
     SetWorkflowConfig(nil);
