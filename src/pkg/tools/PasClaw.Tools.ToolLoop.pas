@@ -1930,7 +1930,6 @@ function TLoopDispatcher.DispatchChecked(const Name, ArgsJSON: string;
   out Refused: Boolean; out ErrMsg: string): string;
 var
   D: TToolCallDispatch;
-  Truncated: Boolean;
 begin
   Result := '';
   ErrMsg := '';
@@ -1956,9 +1955,11 @@ begin
     ErrMsg := D.Err;
     Exit;
   end;
+  { No output cap here, unlike Dispatch: a workflow step's output is the
+    next step's input (selectors read into it), not text for the model's
+    context, and a truncated JSON result breaks the chain. The workflow's
+    own result is capped like any tool result where it reaches the model. }
   Result := MaybeFlagPromptware(D.ResultText, 'tool output (' + Name + ', via workflow)');
-  if (FCfg.ToolOutputCap > 0) and (Length(Result) > FCfg.ToolOutputCap) then
-    Result := StashAndMaybeTruncate(Result, FCfg.ToolOutputCap, Truncated);
 end;
 
 function TLoopDispatcher.Admit(const Name, ArgsJSON: string; out Refusal: string): Boolean;

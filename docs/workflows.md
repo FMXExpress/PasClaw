@@ -55,8 +55,10 @@ claude mcp add --transport http pasclaw http://127.0.0.1:8088/mcp
 
 A workflow step meets the same checks as a tool call the agent makes
 directly: the [permission rules](./security.md#permissions-ordered-rules),
-plan and space mode, `BeforeToolCall` / `AfterToolResult` hooks, the
-promptware scan and the output cap. Before this, steps called their tools
+plan and space mode, `BeforeToolCall` / `AfterToolResult` hooks and the
+promptware scan. (Not the output cap: a step's output is the next step's
+input, and cutting it would break the chain. The workflow's result is
+capped where it reaches the model.) Before this, steps called their tools
 directly, so a rule like `deny read_file` did not stop a workflow from
 calling `read_file`.
 

@@ -45,6 +45,7 @@ var
   GReadCalls: Integer = 0;
   GWriteCalls: Integer = 0;
   GAsked: Integer = 0;
+  GLastReadArgs: string = '';
   Reg: TToolRegistry;
   Cfg: TConfig;
 
@@ -57,6 +58,7 @@ function ToolRead(const ArgsJSON: string; out ErrMsg: string): string;
 begin
   ErrMsg := '';
   Inc(GReadCalls);
+  GLastReadArgs := ArgsJSON;
   Result := 'read:' + ArgsJSON;
 end;
 
@@ -241,6 +243,36 @@ begin
     Hook.Free;
     Asker.Free;
   end;
+end;
+
+{ The output cap is for what reaches the model; a step's output is the next
+  step's input and must arrive whole. }
+procedure TestNoCapBetweenSteps;
+var
+  Res: TWorkflowNodeResultArray;
+  Err, Long: string;
+  LC: TToolLoopConfig;
+  Saved: Pointer;
+  Disp: IToolDispatcher;
+begin
+  Rules('[]');
+  Long := StringOfChar('x', 400);
+  LC := Default(TToolLoopConfig);
+  LC.Registry := Reg;
+  LC.ToolOutputCap := 50;
+  Disp := MakeLoopDispatcher(LC);
+  EnterWorkflowRun(Disp, Saved);
+  try
+    Check(RunWorkflow(Spec('{"id":"chain","name":"chain","nodes":[' +
+      '{"id":"a","tool":"t_read","args":{"q":"' + Long + '"}},' +
+      '{"id":"b","tool":"t_read","args":{"y":"{{nodes.a}}"}}],' +
+      '"edges":[{"from":"a","to":"b"}]}'), '{}', @WorkflowDispatch, Res, Err),
+      'cap: the chain runs: ' + Err);
+  finally
+    LeaveWorkflowRun(Saved);
+  end;
+  Check(Pos(Long, GLastReadArgs) > 0, 'cap: the second step got the first step''s whole output (' +
+        IntToStr(Length(GLastReadArgs)) + ' bytes)');
 end;
 
 procedure TestMCPNodeGated;
@@ -499,6 +531,7 @@ begin
     SetWorkflowConfig(Cfg);
     TestHeadlessGates;
     TestTurnGates;
+    TestNoCapBetweenSteps;
     TestMCPNodeGated;
     TestFailClosed;
     TestWorkflowTools;
