@@ -150,7 +150,7 @@ begin
   if P = 0 then Exit;
   P := P + Length('retry in ');
   Num := '';
-  while (P <= Length(Err)) and (Err[P] in ['0'..'9']) do
+  while (P <= Length(Err)) and CharInSet(Err[P], ['0'..'9']) do
   begin
     Num := Num + Err[P];
     Inc(P);
@@ -165,11 +165,6 @@ var
 begin
   SetLength(Result, N);
   for i := 0 to N - 1 do Result[i] := i;
-end;
-
-function NowISO: string;
-begin
-  Result := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss"Z"', LocalTimeToUniversal(Now));
 end;
 
 function RunBenchRerank(const Argv: array of string; Start: Integer): Integer;
@@ -455,7 +450,9 @@ begin
       Rec.CandidateValue := StatsMRR(Cand);
       Rec.Margin := Margin;
       Rec.Pass := Pass;
-      Rec.At := NowISO;
+      { NowIsoUtc, not LocalTimeToUniversal: that one is FPC's DateUtils
+        only (dcc64 E2003). }
+      Rec.At := NowIsoUtc;
       Detail := TJsonObject.Create;
       try
         Detail.PutRaw('first_stage', StatsToJSON(First));

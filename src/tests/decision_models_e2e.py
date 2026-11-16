@@ -228,6 +228,8 @@ def main():
         if rc != 0 or "PASS" not in out or not os.path.exists(rec_path):
             fail("bench where the decision model wins should pass, exit 0 and record: rc %d %r" % (rc, out[-900:]))
         rec = json.load(open(rec_path))["runs"][0]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", rec.get("at", "")):
+            fail("the record's time should be ISO 8601 UTC: %r" % rec.get("at"))
         if not (rec["pass"] and rec["baseline_kind"] == "llm" and rec["n"] == 4
                 and abs(rec["candidate_value"] - 1.0) < 1e-6 and abs(rec["baseline_value"] - 0.25) < 1e-6):
             fail("recorded run is wrong: %r" % rec)

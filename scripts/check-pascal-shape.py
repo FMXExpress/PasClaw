@@ -30,6 +30,15 @@ reader might not:
   source is a different variable. Declare a named type, or TArray<T>,
   for both.
 
+  An FPC-only routine outside an {$IFDEF FPC} branch: FPC's RTL has
+  LocalTimeToUniversal, UniversalTimeToLocal and GetTickCount64, dcc64's
+  does not (E2003 Undeclared identifier). LocalTimeToUniversal reached
+  dcc64 twice (the run file, the decision-model bench record) and
+  GetTickCount64 once (the relay). Use PasClaw.Utils' NowIsoUtc /
+  IsoUtcInMinutes, or guard the call with {$IFDEF FPC} ... {$ELSE}
+  TTimeZone.Local.ToUniversalTime ... {$ENDIF}. Test programs under
+  src/tests/ are built by FPC only and are not checked.
+
 Two other checks were tried here and removed, because a checker that cries
 wolf is worse than no checker:
 
@@ -185,7 +194,42 @@ def check(path):
                 f'take Copy({m.group(2)}) of another declaration (E2008) -- declare '
                 f'both with one named type or TArray<T>')
 
+    # 4. FPC-only RTL routines outside an {$IFDEF FPC} branch. Lines are
+    #    walked on the raw text so the directives are visible; an
+    #    occurrence counts only if the comment-free line has it too. Each
+    #    frame of the stack is 'fpc' (FPC compiles this), 'dcc' (only
+    #    dcc64 does) or 'any' (a condition this check does not read).
+    if '/src/tests/' not in '/' + path.replace('\\', '/'):
+        raw_lines = raw.split('\n')
+        stack = []
+        directive = re.compile(r'\{\$(IFDEF|IFNDEF|IF|ELSEIF|ELSE|ENDIF|IFEND)\b([^}]*)\}', re.I)
+        for i, rline in enumerate(raw_lines):
+            code_line = lines[i] if i < len(lines) else ''
+            hits = [m for m in FPC_ONLY.finditer(rline)] if FPC_ONLY.search(code_line) else []
+            events = [(m.start(), 'd', m) for m in directive.finditer(rline)] + \
+                     [(m.start(), 'h', m) for m in hits]
+            for _, kind, m in sorted(events, key=lambda e: e[0]):
+                if kind == 'd':
+                    word, arg = m.group(1).upper(), m.group(2).strip().upper()
+                    if word == 'IFDEF':
+                        stack.append('fpc' if arg == 'FPC' else 'any')
+                    elif word == 'IFNDEF':
+                        stack.append('dcc' if arg == 'FPC' else 'any')
+                    elif word == 'IF':
+                        stack.append('any')
+                    elif word in ('ELSE', 'ELSEIF') and stack:
+                        stack[-1] = {'fpc': 'dcc', 'dcc': 'fpc'}.get(stack[-1], 'any')
+                    elif word in ('ENDIF', 'IFEND') and stack:
+                        stack.pop()
+                elif 'fpc' not in stack:
+                    problems.append(
+                        f'{path}:{i + 1}: {m.group(0)} is FPC-only (dcc64 E2003) -- use '
+                        f'NowIsoUtc / IsoUtcInMinutes, or put it in an {{$IFDEF FPC}} branch')
+
     return problems
+
+
+FPC_ONLY = re.compile(r'\b(LocalTimeToUniversal|UniversalTimeToLocal|GetTickCount64)\b')
 
 
 # Vendored/generated headers whose declarations this scanner cannot follow.
