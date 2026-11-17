@@ -582,6 +582,7 @@ lint-version:
 	@python3 scripts/check-version-sync.py
 
 lint-pascal-shape:
+	@python3 -I scripts/test-check-pascal-shape.py
 	@python3 scripts/check-pascal-shape.py $$(find src desktop -name '*.pas' -o -name '*.dpr')
 	@echo "pascal shape: OK"
 
