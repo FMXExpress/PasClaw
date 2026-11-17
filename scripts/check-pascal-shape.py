@@ -30,6 +30,19 @@ reader might not:
   source is a different variable. Declare a named type, or TArray<T>,
   for both.
 
+  An FPC-only routine outside an {$IFDEF FPC} branch: FPC's RTL has
+  LocalTimeToUniversal, UniversalTimeToLocal and GetTickCount64, dcc64's
+  does not (E2003 Undeclared identifier). LocalTimeToUniversal reached
+  dcc64 twice (the run file, the decision-model bench record) and
+  GetTickCount64 once (the relay). Use PasClaw.Utils' NowIsoUtc /
+  IsoUtcInMinutes, or guard the call with {$IFDEF FPC} ... {$ELSE}
+  TTimeZone.Local.ToUniversalTime ... {$ENDIF}. Test programs under
+  src/tests/ are built by FPC only and are not checked. Only the {$...}
+  directive form is read; the tree has no (*$...*) directives.
+
+The cases each rule must flag, and must leave alone, are in
+test-check-pascal-shape.py, which `make lint-pascal-shape` runs first.
+
 Two other checks were tried here and removed, because a checker that cries
 wolf is worse than no checker:
 
@@ -86,6 +99,48 @@ def strip_comments_and_strings(text):
             continue
         out.append(c)
         i += 1
+    return ''.join(out)
+
+
+def char_kinds(text):
+    """One character per character of text: 'c' code, 's' string, 'B' the
+    brace opening a { } comment and 'b' the rest of it, 'p' a (* *)
+    comment, 'l' a // comment; newlines stay newlines. Same length and line
+    structure as text, so a match in the raw text can be asked what it is
+    -- strip_comments_and_strings shortens the text and cannot."""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '\n':
+            out.append('\n'); i += 1
+        elif c == "'":
+            out.append('s'); i += 1
+            while i < n:
+                if text[i] == "'":
+                    if i + 1 < n and text[i + 1] == "'":
+                        out.append('ss'); i += 2
+                        continue
+                    out.append('s'); i += 1
+                    break
+                out.append('\n' if text[i] == '\n' else 's'); i += 1
+        elif c == '{':
+            out.append('B'); i += 1
+            while i < n and text[i] != '}':
+                out.append('\n' if text[i] == '\n' else 'b'); i += 1
+            if i < n:
+                out.append('b'); i += 1
+        elif c == '(' and i + 1 < n and text[i + 1] == '*':
+            out.append('pp'); i += 2
+            while i < n and not (text[i] == '*' and i + 1 < n and text[i + 1] == ')'):
+                out.append('\n' if text[i] == '\n' else 'p'); i += 1
+            if i < n:
+                out.append('pp'[:min(2, n - i)]); i += 2
+        elif c == '/' and i + 1 < n and text[i + 1] == '/':
+            while i < n and text[i] != '\n':
+                out.append('l'); i += 1
+        else:
+            out.append('c'); i += 1
     return ''.join(out)
 
 
@@ -185,7 +240,47 @@ def check(path):
                 f'take Copy({m.group(2)}) of another declaration (E2008) -- declare '
                 f'both with one named type or TArray<T>')
 
+    # 4. FPC-only RTL routines outside an {$IFDEF FPC} branch. Walked on
+    #    the raw text with char_kinds alongside it, position for position:
+    #    a hit counts only where the name is code (not in a comment or a
+    #    string -- one line can hold both, Codex P2 on #649), and a
+    #    directive only where its brace opens a comment (not quoted in a
+    #    string or inside another comment). Each frame of the stack is
+    #    'fpc' (FPC compiles this), 'dcc' (only dcc64 does) or 'any' (a
+    #    condition this check does not read).
+    if '/src/tests/' not in '/' + path.replace('\\', '/'):
+        kinds = char_kinds(raw)
+        raw_lines, kind_lines = raw.split('\n'), kinds.split('\n')
+        stack = []
+        directive = re.compile(r'\{\$(IFDEF|IFNDEF|IF|ELSEIF|ELSE|ENDIF|IFEND)\b([^}]*)\}', re.I)
+        for i, rline in enumerate(raw_lines):
+            kline = kind_lines[i] if i < len(kind_lines) else ''
+            events = [(m.start(), 'd', m) for m in directive.finditer(rline)
+                      if m.start() < len(kline) and kline[m.start()] == 'B'] + \
+                     [(m.start(), 'h', m) for m in FPC_ONLY.finditer(rline)
+                      if m.start() < len(kline) and kline[m.start()] == 'c']
+            for _, kind, m in sorted(events, key=lambda e: e[0]):
+                if kind == 'd':
+                    word, arg = m.group(1).upper(), m.group(2).strip().upper()
+                    if word == 'IFDEF':
+                        stack.append('fpc' if arg == 'FPC' else 'any')
+                    elif word == 'IFNDEF':
+                        stack.append('dcc' if arg == 'FPC' else 'any')
+                    elif word == 'IF':
+                        stack.append('any')
+                    elif word in ('ELSE', 'ELSEIF') and stack:
+                        stack[-1] = {'fpc': 'dcc', 'dcc': 'fpc'}.get(stack[-1], 'any')
+                    elif word in ('ENDIF', 'IFEND') and stack:
+                        stack.pop()
+                elif 'fpc' not in stack:
+                    problems.append(
+                        f'{path}:{i + 1}: {m.group(0)} is FPC-only (dcc64 E2003) -- use '
+                        f'NowIsoUtc / IsoUtcInMinutes, or put it in an {{$IFDEF FPC}} branch')
+
     return problems
+
+
+FPC_ONLY = re.compile(r'\b(LocalTimeToUniversal|UniversalTimeToLocal|GetTickCount64)\b')
 
 
 # Vendored/generated headers whose declarations this scanner cannot follow.
