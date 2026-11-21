@@ -38,6 +38,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 - [Agent teams plan](./agent-teams-plan.md) — the design story behind them.
 - [Team board plan](./team-board-plan.md) — rules the board holds instead of the prompts: a second agent's verdict, frozen criteria, dependencies, one queue for the human's calls, repeated causes turned into proven rules. Ideas from Pullboard.
 - [Chat channels](./channels.md) — Telegram, Discord, Slack, Teams, LINE, WhatsApp, Matrix, IRC, Email.
+- [DOS](./dos.md) — `PCLAW.EXE`, the agent on an MS-DOS PC, reaching the model over a serial line through `pasclaw bridge`.
 - [Embedding in your own app](./embedding.md) — `TPasClawAgent` / `TPasClawServer` `TComponent`s for VCL/FMX/CLI binaries.
 
 ## Operations
