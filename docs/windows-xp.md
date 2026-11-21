@@ -8,10 +8,22 @@ through OpenSSL (via Indy), which speaks TLS 1.2 on XP like anywhere else.
 So unlike [DOS](./dos.md), XP needs no bridge: pasclaw talks to the
 provider directly.
 
-> **Status: built, not yet run on XP.** The XP build compiles, and a check
-> (below) confirms its header and every imported function are ones XP
-> has. It has not been run on an XP machine, and Wine could not run it in
-> the environment it was built in. Reports welcome.
+> **Status: runs on Windows XP SP2; HTTPS and the agent not yet tried
+> there.**
+>
+> - **Load check:** all 200 functions `pasclaw.exe` imports are in the
+>   export tables of the XP SP2 system DLLs (5.1.2600.2180).
+> - **Run on XP:** `pasclaw version`, `status` and `doctor` ran on XP in
+>   [VirtualXP](https://lrusso.github.io/VirtualXP/VirtualXP.htm), a
+>   LiveXP disc in the Halfix emulator. The exe was added to its CD, with a
+>   `Run` registry entry to start it at logon.
+> - **Console:** the banner rendered and colour turned itself off.
+>   `version` and `status` exited 0. `doctor` exited 1, as it should
+>   before `onboard`.
+> - **Not tried:** that emulator has no network, so HTTPS (OpenSSL), the
+>   gateway and an agent turn have not been run on XP.
+>
+> Reports welcome.
 
 ## Build
 
