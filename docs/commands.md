@@ -47,6 +47,7 @@ Top-level commands are dispatched by `src/cmd/PasClaw.Cmd.Root.pas`. Run `pascla
 | [`restore`](#restore) | Put a backup's workspace back under `$PASCLAW_HOME`. |
 | [`route`](#route) | Report which models the last N days of sessions ran on. |
 | [`workflow`](#workflow) | List saved workflows; read, approve or reject the ones the agent saved. |
+| [`bridge`](#bridge) | Carry the DOS client's model calls from a serial line (or a TCP port) to the gateway. |
 | [`update`](#update) | Check or self-update from GitHub releases. |
 | [`version`](#version) | Show version and build info. |
 
@@ -546,6 +547,17 @@ pasclaw workflow reject digest
 ```
 
 When the agent saves a workflow with `workflow_save` you are asked in the chat; these commands are for the ones saved when nobody could be asked (an MCP client, an API call, a team agent), which wait until approved. An approval from here reaches a running gateway without a restart. See [Workflows](./workflows.md#approval).
+
+## bridge
+
+```sh
+pasclaw bridge                               # TCP 127.0.0.1:5150, for DOSBox-X's nullmodem
+pasclaw bridge --serial /dev/ttyUSB0         # a null-modem cable, 115200 8N1
+pasclaw bridge --serial COM3 --baud 38400    # Windows
+pasclaw bridge --gateway https://gw.example --token $TOKEN --model some-model
+```
+
+The modern end of the line to `PCLAW.EXE`, the DOS client. It forwards `POST /v1/responses`, `GET /v1/health` and `GET /v1/models` to the gateway this config runs (with this config's token) or to `--gateway` (with `--token` / `$PASCLAW_GATEWAY_TOKEN`), and refuses everything else. Ctrl-C stops it. See [DOS](./dos.md).
 
 ## update
 

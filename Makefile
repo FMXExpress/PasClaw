@@ -140,6 +140,7 @@ UNIT_DIRS = \
 	src/pkg/otel \
 	src/pkg/projects \
 	src/pkg/acp \
+	src/pkg/bridge \
 	src/cmd
 
 # Indy unit + include dirs (only used when building under FPC).
@@ -177,7 +178,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test test-verify test-verify-routes test-steering-fastpath test-workspace-listing test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-memory-tiers test-backup test-maintain openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape lint-version lint-utf8-file-io test-workspaces test-projects test-tool-schema test-teams test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test dos dos-host dos-toolchain test-dos test-dos-dosbox test-verify test-verify-routes test-steering-fastpath test-workspace-listing test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-memory-tiers test-backup test-maintain openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape lint-version lint-utf8-file-io test-workspaces test-projects test-tool-schema test-teams test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -872,6 +873,55 @@ test-decision-models-e2e: $(BIN)
 # staged until approved (HTTP with sha256, or the CLI from another process).
 test-workflows-e2e: $(BIN)
 	@python3 -I src/tests/workflows_e2e.py $(BIN)
+
+# ---- DOS client (src/dos, docs/dos.md) ----
+# PCLAW.EXE runs the agent on an MS-DOS PC and reaches the model through
+# `pasclaw bridge` over a serial line. `make dos-toolchain` builds the
+# i386-go32v2 cross compiler once (scripts/setup-dos-toolchain.sh);
+# `make dos` then builds build/dos/PCLAW.EXE + CWSDPMI.EXE. `make dos-host`
+# builds the same client for this machine (TCP to the bridge) for tests.
+DOS_TOOLCHAIN ?= $(HOME)/.cache/pasclaw/dos-toolchain
+PPC386 ?= $(DOS_TOOLCHAIN)/ppc386
+DOS_UNITS ?= $(DOS_TOOLCHAIN)/units/go32v2
+DOSDIR = $(BUILDDIR)/dos
+DOS_SRC = $(wildcard src/dos/*.pas) src/dos/pclaw.dpr \
+	src/pkg/bridge/PasClaw.Bridge.Wire.pas src/pkg/json/PasClaw.JSON.pas
+DOS_UNIT_FLAGS = -Fusrc/dos -Fusrc/pkg/bridge -Fusrc/pkg/json
+
+dos-toolchain:
+	@sh scripts/setup-dos-toolchain.sh
+
+dos: $(DOSDIR)/PCLAW.EXE
+
+$(DOSDIR)/PCLAW.EXE: $(DOS_SRC)
+	@test -x $(PPC386) || { echo "no DOS compiler at $(PPC386): run 'make dos-toolchain' first"; exit 1; }
+	@mkdir -p $(DOSDIR)/lib
+	$(PPC386) -n -Tgo32v2 -MDelphi -Sh -O2 -Xs $(foreach d,$(wildcard $(DOS_UNITS)/*),-Fu$(d)) \
+		$(DOS_UNIT_FLAGS) -FE$(DOSDIR) -FU$(DOSDIR)/lib -o$(DOSDIR)/PCLAW.EXE src/dos/pclaw.dpr
+	@cp -f $(DOS_TOOLCHAIN)/CWSDPMI.EXE $(DOSDIR)/CWSDPMI.EXE
+	@echo "built $(DOSDIR)/PCLAW.EXE -- copy it and CWSDPMI.EXE to the DOS PC"
+
+dos-host: $(BUILDDIR)/dos-host/pclaw
+
+$(BUILDDIR)/dos-host/pclaw: $(DOS_SRC) src/pkg/bridge/PasClaw.Bridge.Serial.pas
+	@mkdir -p $(BUILDDIR)/dos-host/lib
+	$(FPC) -MDelphi -Sh -O2 $(DOS_UNIT_FLAGS) -FE$(BUILDDIR)/dos-host -FU$(BUILDDIR)/dos-host/lib src/dos/pclaw.dpr
+
+# The wire format, the bridge (gateway stubbed), the client's text, tools
+# and history; then the bridge and the host-built client end to end
+# against a real gateway and a scripted model.
+test-dos: $(BIN) $(BUILDDIR)/dos-host/pclaw | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) -Fusrc/dos src/tests/bridge_wire_tests.pas -o$(BUILDDIR)/bridge_wire_tests
+	@$(BUILDDIR)/bridge_wire_tests
+	@python3 -I src/tests/dos_bridge_e2e.py $(BIN) $(BUILDDIR)/dos-host/pclaw
+
+# PCLAW.EXE itself, in DOSBox-X, its COM1 wired to the bridge. Skips
+# without dosbox-x or the DOS toolchain.
+test-dos-dosbox: $(BIN)
+	@if ! command -v dosbox-x >/dev/null 2>&1; then echo "  skip: test-dos-dosbox needs dosbox-x"; \
+	elif [ ! -x $(PPC386) ]; then echo "  skip: test-dos-dosbox needs the DOS toolchain (make dos-toolchain)"; \
+	else $(MAKE) --no-print-directory dos && python3 -I src/tests/dos_dosbox_e2e.py $(BIN) $(DOSDIR); fi
 
 # $(BIN) plus headless Chromium: in the web UI a chat can be left, and
 # another one asked, while a turn runs; each turn's reply lands in its own
@@ -1597,7 +1647,7 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-verify-routes test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-code-outline test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-gateway-local-only test-acp test-streaming test-stale-units test-context-usage test-context-usage-e2e test-provider-error-e2e test-provider-usage test-usage-stats-e2e test-stats-reset-e2e test-oneshot-session-e2e test-fs-relative-path-e2e test-webui-sessions-e2e test-decision-models test-decision-models-e2e test-workflows-e2e test-webui-markdown test-acp-e2e test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version
+test: smoke test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-verify-routes test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-code-outline test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-gateway-local-only test-acp test-streaming test-stale-units test-context-usage test-context-usage-e2e test-provider-error-e2e test-provider-usage test-usage-stats-e2e test-stats-reset-e2e test-oneshot-session-e2e test-fs-relative-path-e2e test-webui-sessions-e2e test-decision-models test-decision-models-e2e test-workflows-e2e test-dos test-dos-dosbox test-webui-markdown test-acp-e2e test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version
 
 # Benchmark harness for the /v1/stats aggregation path. Prints timings,
 # not pass/fail -- cited by docs/stats-collection-plan.md. Not in `test`.
