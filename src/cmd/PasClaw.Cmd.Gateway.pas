@@ -213,6 +213,25 @@ begin
   end;
 end;
 
+(* Start one listener. A port that cannot be had -- in use, a bad address,
+   or no TCP/IP at all (a Windows XP live CD answered WSAESOCKTNOSUPPORT) --
+   is a one-line error and exit code 1, not an unhandled-exception dump. *)
+function StartListener(Srv: TGatewayServer; const Addr: string; Port: Integer;
+  const What: string): Boolean;
+begin
+  Result := False;
+  try
+    Srv.Start(Addr, Port);
+    Result := True;
+  except
+    on E: Exception do
+      PrintErr(FormatCLIError(Format('cannot listen on %s:%d%s: %s',
+        [Addr, Port, What, StringReplace(StringReplace(Trim(E.Message), #13#10, ' -- ', [rfReplaceAll]),
+                                         #10, ' -- ', [rfReplaceAll])]),
+        'pasclaw gateway'));
+  end;
+end;
+
 function Cmd_Gateway_Run(const Argv: array of string): Integer;
 var
   Cfg: TConfig;
@@ -494,18 +513,18 @@ begin
         Email.Spawn;  { runs Email.Run on a dedicated TThread }
       end;
 
-      Server.Start(Args.Addr, Args.Port);
+      if not StartListener(Server, Args.Addr, Args.Port, '') then Exit(1);
       { Announce ourselves to clients on this machine: `pasclaw status`,
         `pasclaw agent --attach`, `pasclaw tui --attach` read this file.
         Removed in the finally below; a crash leaves it, and readers
         treat a dead pid as absent. }
       WriteGatewayRunFile(GetHome, Args.Addr, Args.Port, GetEffectiveGatewayToken(Cfg), FormatVersion);
       InstallStopSignalHandler;   { Ctrl-C / SIGTERM -> WaitForStop returns -> the finally runs }
-      if MCPServer <> nil then
-        MCPServer.Start(Args.Addr, Args.MCPPort);
+      if (MCPServer <> nil) and
+         not StartListener(MCPServer, Args.Addr, Args.MCPPort, ' (--mcp-port)') then Exit(1);
       if AppsServer <> nil then
       begin
-        AppsServer.Start(Args.Addr, Args.AppsPort);
+        if not StartListener(AppsServer, Args.Addr, Args.AppsPort, ' (--apps-port)') then Exit(1);
         { The desktop needs to know where to point its iframes. Publishing it
           here rather than letting the client guess means a mismatch is a
           visible configuration error, not a silent fallback to the insecure

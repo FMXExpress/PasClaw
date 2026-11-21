@@ -5333,16 +5333,15 @@ end;
    DIRECTORY handle at all -- without it the oauth-directory case fails
    and silently degrades to the lexical compare.
 
-   The import is PasClaw-prefixed rather than named after the API:
+   The function is PasClaw-prefixed rather than named after the API:
    recent Winapi.Windows declares GetFinalPathNameByHandleW itself, and
    an identically-named local declaration would shadow it silently. A
    distinct name means the two can never be confused for one another,
    and older FPC Windows headers that lack it are still covered.
 
-   NOT COMPILE-TESTED: this container has no Windows target or cross
-   units, so this branch has been reviewed by inspection only. It fails
-   safe -- any failure returns '' and the caller keeps the lexical path,
-   which is exactly today's behaviour. *)
+   Compiled for win32 with FPC by `make xp`; not compiled with Delphi
+   here. It fails safe -- any failure returns '' and the caller keeps the
+   lexical path. *)
 const
   FILE_FLAG_BACKUP_SEMANTICS_ = $02000000;
   FILE_NAME_NORMALIZED_       = $00000000;
@@ -5365,7 +5364,7 @@ begin
   if not GGetFinalPathLooked then
   begin
     GGetFinalPath := TGetFinalPathNameByHandleW(
-      GetProcAddress(GetModuleHandle('kernel32.dll'), 'GetFinalPathNameByHandleW'));
+      GetProcAddress(GetModuleHandle('kernel32.dll'), PAnsiChar('GetFinalPathNameByHandleW')));
     GGetFinalPathLooked := True;
   end;
   if Assigned(GGetFinalPath) then

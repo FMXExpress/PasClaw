@@ -20,8 +20,17 @@ provider directly.
 > - **Console:** the banner rendered and colour turned itself off.
 >   `version` and `status` exited 0. `doctor` exited 1, as it should
 >   before `onboard`.
-> - **Not tried:** that emulator has no network, so HTTPS (OpenSSL), the
->   gateway and an agent turn have not been run on XP.
+> - **Gateway:** that disc has no TCP/IP stack at all (no `TCPIP.SYS`,
+>   `AFD.SYS` or `MSWSOCK.DLL`) and no browser, so the gateway cannot
+>   listen there and the web UI cannot be opened. `pasclaw gateway` got as
+>   far as opening its port and stopped with `cannot listen on
+>   127.0.0.1:8088: Socket Error # 10044 -- Socket type not supported.`
+>   and exit code 1. On the way it showed two bugs, now fixed: the disc's
+>   crypto provider does not load (`CryptAcquireContext` fails with
+>   `NTE_BAD_SIGNATURE`), so pasclaw now falls back to `RtlGenRandom`; and
+>   a listener that could not be opened was an unhandled-exception dump.
+> - **Not tried:** HTTPS (OpenSSL), a running gateway, the web UI in an
+>   XP browser, and an agent turn. That needs an XP with networking.
 >
 > Reports welcome.
 
