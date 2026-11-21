@@ -794,6 +794,15 @@ uses
                               caller's trace stays connected to the agent
                               turn that gets kicked off by this request. }
 
+{$IF DEFINED(FPC) AND DEFINED(MSWINDOWS)}
+type
+  { FPC's Windows unit, imported above for CanonicalPath, declares a
+    TCriticalSection record and a TMessage record of its own; this unit
+    means the SyncObjs class and the chat message. }
+  TCriticalSection = SyncObjs.TCriticalSection;
+  TMessage = PasClaw.Providers.Types.TMessage;
+{$IFEND}
+
 var
   { Process-wide cache for the /v1/stats response. Walking the
     sessions directory + summing the per-session counters is fine
@@ -5338,9 +5347,32 @@ const
   FILE_FLAG_BACKUP_SEMANTICS_ = $02000000;
   FILE_NAME_NORMALIZED_       = $00000000;
 
+type
+  TGetFinalPathNameByHandleW = function(hFile: THandle; lpszFilePath: PWideChar;
+                                        cchFilePath, dwFlags: DWORD): DWORD; stdcall;
+
+var
+  { Looked up at run time, not imported: Windows XP has no
+    GetFinalPathNameByHandleW, and a static import of it would stop the
+    whole program from loading there. Absent, CanonicalPath returns ''
+    and the caller keeps the lexical path. }
+  GGetFinalPath: TGetFinalPathNameByHandleW = nil;
+  GGetFinalPathLooked: Boolean = False;
+
 function PC_GetFinalPathNameByHandleW(hFile: THandle; lpszFilePath: PWideChar;
-                                      cchFilePath, dwFlags: DWORD): DWORD; stdcall;
-  external 'kernel32.dll' name 'GetFinalPathNameByHandleW';
+                                      cchFilePath, dwFlags: DWORD): DWORD;
+begin
+  if not GGetFinalPathLooked then
+  begin
+    GGetFinalPath := TGetFinalPathNameByHandleW(
+      GetProcAddress(GetModuleHandle('kernel32.dll'), 'GetFinalPathNameByHandleW'));
+    GGetFinalPathLooked := True;
+  end;
+  if Assigned(GGetFinalPath) then
+    Result := GGetFinalPath(hFile, lpszFilePath, cchFilePath, dwFlags)
+  else
+    Result := 0;
+end;
 
 function CanonicalPath(const P: string): string;
 var

@@ -374,7 +374,7 @@ begin
     Result := A.HomeOverride;
     Exit;
   end;
-  Env := GetEnvironmentVariable('PASCLAW_HOME');
+  Env := SysUtils.GetEnvironmentVariable('PASCLAW_HOME');
   if Env <> '' then
   begin
     Result := Env;
@@ -583,7 +583,7 @@ begin
       Exit(1);
     end;
 
-    SavedHomeEnv := GetEnvironmentVariable('PASCLAW_HOME');
+    SavedHomeEnv := SysUtils.GetEnvironmentVariable('PASCLAW_HOME');
     SavedCwd     := GetCurrentDir;
     SetEnv('PASCLAW_HOME', Home);
     LogInfo('build: PASCLAW_HOME=%s (temp=%s)',

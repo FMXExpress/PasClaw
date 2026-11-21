@@ -761,7 +761,7 @@ begin
   if GSSLProbed then Exit;
   GSSLProbed := True;
 
-  CustomDir := GetEnvironmentVariable('PASCLAW_OPENSSL_DIR');
+  CustomDir := SysUtils.GetEnvironmentVariable('PASCLAW_OPENSSL_DIR');
   if CustomDir = '' then
     CustomDir := ExtractFilePath(ParamStr(0));
   if (CustomDir <> '') and DirectoryExists(CustomDir) then
@@ -846,8 +846,8 @@ end;
 
 function EnvNoProxy: string;
 begin
-  Result := GetEnvironmentVariable('NO_PROXY');
-  if Result = '' then Result := GetEnvironmentVariable('no_proxy');
+  Result := SysUtils.GetEnvironmentVariable('NO_PROXY');
+  if Result = '' then Result := SysUtils.GetEnvironmentVariable('no_proxy');
 end;
 
 procedure ApplyEnvProxy(Http: TIdHTTP; const URL: string);
@@ -872,13 +872,13 @@ var
 begin
   if MakeHTTPS(URL) then
   begin
-    Raw := GetEnvironmentVariable('HTTPS_PROXY');
-    if Raw = '' then Raw := GetEnvironmentVariable('https_proxy');
+    Raw := SysUtils.GetEnvironmentVariable('HTTPS_PROXY');
+    if Raw = '' then Raw := SysUtils.GetEnvironmentVariable('https_proxy');
   end
   else
   begin
-    Raw := GetEnvironmentVariable('HTTP_PROXY');
-    if Raw = '' then Raw := GetEnvironmentVariable('http_proxy');
+    Raw := SysUtils.GetEnvironmentVariable('HTTP_PROXY');
+    if Raw = '' then Raw := SysUtils.GetEnvironmentVariable('http_proxy');
   end;
   if Raw = '' then Exit;
   if HostBypassesProxy(ExtractURLHost(URL), EnvNoProxy) then Exit;

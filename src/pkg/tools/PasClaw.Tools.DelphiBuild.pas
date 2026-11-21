@@ -202,7 +202,7 @@ begin
   Result := '';
   { 1. Explicit operator override -- works on any OS (e.g. a cross-mounted
        toolchain), and lets tests point at a fixture. }
-  Cand := GetEnvironmentVariable('PASCLAW_DELPHI_BIN');
+  Cand := SysUtils.GetEnvironmentVariable('PASCLAW_DELPHI_BIN');
   if (Cand <> '') and HasDcc(Cand) then Exit(Cand);
 
   {$IFDEF MSWINDOWS}
@@ -212,8 +212,8 @@ begin
   Cand := RegFindBin(HKEY_LOCAL_MACHINE);
   if Cand <> '' then Exit(Cand);
   { 3. Default Program Files roots as a last resort. }
-  PFx86 := GetEnvironmentVariable('ProgramFiles(x86)');
-  PF    := GetEnvironmentVariable('ProgramFiles');
+  PFx86 := SysUtils.GetEnvironmentVariable('ProgramFiles(x86)');
+  PF    := SysUtils.GetEnvironmentVariable('ProgramFiles');
   Cand := ProbeRoots(PFx86);
   if Cand <> '' then Exit(Cand);
   Cand := ProbeRoots(PF);
@@ -316,7 +316,7 @@ function MsbuildAllowed: Boolean;
 var
   V: string;
 begin
-  V := LowerCase(Trim(GetEnvironmentVariable('PASCLAW_DELPHI_ALLOW_MSBUILD')));
+  V := LowerCase(Trim(SysUtils.GetEnvironmentVariable('PASCLAW_DELPHI_ALLOW_MSBUILD')));
   Result := (V = '1') or (V = 'true') or (V = 'yes') or (V = 'on');
 end;
 
@@ -443,10 +443,10 @@ begin
   RelDcu  := JoinPath(LibBase, 'release');
   DbgDcu  := JoinPath(LibBase, 'debug');
 
-  NS := GetEnvironmentVariable('PASCLAW_DELPHI_NAMESPACES');
+  NS := SysUtils.GetEnvironmentVariable('PASCLAW_DELPHI_NAMESPACES');
   if NS = '' then NS := DefaultNamespaces;
 
-  Extra := GetEnvironmentVariable('PASCLAW_DELPHI_SEARCH');
+  Extra := SysUtils.GetEnvironmentVariable('PASCLAW_DELPHI_SEARCH');
 
   SearchDirs := TStringList.Create;
   ProjNs := TStringList.Create;

@@ -68,7 +68,11 @@ function ReadSecretLine(const Prompt: string): string;
                         file (WriteConsoleW returns ERROR_INVALID_HANDLE
                         on non-console handles).
 
-     FPC any-OS, Delphi non-Windows   plain Write/WriteLn. FPC's
+     Windows + FPC      the same, with the UTF-8 string decoded to
+                        UTF-16 first. Also what keeps XP working: its
+                        console cannot take UTF-8 bytes reliably.
+
+     FPC non-Windows, Delphi non-Windows   plain Write/WriteLn. FPC's
                         runtime emits the AnsiString's UTF-8 bytes
                         directly; POSIX terminals interpret UTF-8 by
                         default. No transcode trap to bypass.
@@ -110,12 +114,35 @@ begin
     need SetTextCodePage to point Output/ErrOutput at UTF-8 as well.
     FPC's WriteLn already emits the UTF-8 bytes its AnsiString holds,
     so it doesn't need the extra call. }
+  { Not before Vista: XP's console in code page 65001 makes WriteFile
+    report characters for bytes, which the RTL takes for a failed write
+    (I/O error 101). Print / PrintLn go through WriteConsoleW there and
+    need no code page; plain WriteLn keeps the OEM one. }
+  if Win32MajorVersion < 6 then Exit;
   SetConsoleCP(CP_UTF8);
   SetConsoleOutputCP(CP_UTF8);
   {$IFNDEF FPC}
   SetTextCodePage(Output,    CP_UTF8);
   SetTextCodePage(ErrOutput, CP_UTF8);
   {$ENDIF}
+end;
+
+{ Can ANSI colour sequences be shown? A console renders them only with
+  ENABLE_VIRTUAL_TERMINAL_PROCESSING, which nothing set before: on a
+  classic console they printed as "<-[31m". Windows 10+ accepts the
+  flag; XP, 7 and 8 refuse it, and then colour is turned off. Output
+  that is not a console (a pipe, a file) is left as it was. }
+function ConsoleTakesAnsi: Boolean;
+const
+  ENABLE_VIRTUAL_TERMINAL_PROCESSING_ = $0004;
+var
+  H: THandle;
+  Mode: DWORD;
+begin
+  H := GetStdHandle(STD_OUTPUT_HANDLE);
+  if (H = INVALID_HANDLE_VALUE) or not GetConsoleMode(H, Mode) then Exit(True);
+  if (Mode and ENABLE_VIRTUAL_TERMINAL_PROCESSING_) <> 0 then Exit(True);
+  Result := SetConsoleMode(H, Mode or ENABLE_VIRTUAL_TERMINAL_PROCESSING_);
 end;
 {$ENDIF}
 
@@ -157,6 +184,7 @@ procedure CliUI_Init(NoColor: Boolean);
 begin
   {$IFDEF MSWINDOWS}
   EnableUTF8Console;
+  if not NoColor and not ConsoleTakesAnsi then NoColor := True;
   {$ENDIF}
   GNoColor := NoColor;
   SetAnsi(NoColor);
@@ -173,7 +201,7 @@ var
   a: string;
 begin
   Result := False;
-  if (GetEnvironmentVariable('NO_COLOR') <> '') or (GetEnvironmentVariable('TERM') = 'dumb') then
+  if (SysUtils.GetEnvironmentVariable('NO_COLOR') <> '') or (SysUtils.GetEnvironmentVariable('TERM') = 'dumb') then
     Exit(True);
   for i := 1 to ParamCount do
   begin
@@ -214,10 +242,10 @@ procedure ApplyTimezoneFromEnv;
 var
   Tz: string;
 begin
-  Tz := GetEnvironmentVariable('TZ');
+  Tz := SysUtils.GetEnvironmentVariable('TZ');
   if Tz = '' then Exit;
   PrintLn('TZ environment: ' + Tz);
-  PrintLn('ZONEINFO environment: ' + GetEnvironmentVariable('ZONEINFO'));
+  PrintLn('ZONEINFO environment: ' + SysUtils.GetEnvironmentVariable('ZONEINFO'));
   { FPC honours the TZ environment variable on Unix natively; on Windows we
     simply report it and let the RTL handle conversions. }
 end;
@@ -414,7 +442,48 @@ begin
 end;
 {$IFEND}
 
-{$IF DEFINED(MSWINDOWS) AND NOT DEFINED(FPC)}
+{$IF DEFINED(MSWINDOWS) AND DEFINED(FPC)}
+{ FPC on Windows, the same plan as Delphi's below: a console gets UTF-16
+  through WriteConsoleW, so neither the console's code page nor XP's
+  broken UTF-8 one matters; a pipe or a file gets the UTF-8 bytes. T is
+  flushed first so text an ordinary Write left in the RTL's buffer still
+  comes out before this. }
+procedure WriteToHandle(H: THandle; var T: Text; const S: string);
+var
+  Mode, Written: DWORD;
+  W: UnicodeString;
+begin
+  if (H = INVALID_HANDLE_VALUE) or (S = '') then Exit;
+  Flush(T);
+  if GetConsoleMode(H, Mode) then
+  begin
+    W := UTF8Decode(S);
+    if W <> '' then WriteConsoleW(H, PWideChar(W), Length(W), Written, nil);
+  end
+  else
+    WriteFile(H, S[1], Length(S), Written, nil);
+end;
+
+procedure Print(const S: string);
+begin
+  WriteToHandle(GetStdHandle(STD_OUTPUT_HANDLE), Output, S);
+end;
+
+procedure PrintLn(const S: string);
+begin
+  WriteToHandle(GetStdHandle(STD_OUTPUT_HANDLE), Output, S + sLineBreak);
+end;
+
+procedure PrintErr(const S: string);
+begin
+  WriteToHandle(GetStdHandle(STD_ERROR_HANDLE), ErrOutput, S);
+end;
+
+procedure PrintLnErr(const S: string);
+begin
+  WriteToHandle(GetStdHandle(STD_ERROR_HANDLE), ErrOutput, S + sLineBreak);
+end;
+{$ELSEIF DEFINED(MSWINDOWS)}
 procedure WriteToHandle(H: THandle; const S: string);
 { Per the per-surface plan above: WriteConsoleW when H is a real
   console (UTF-16 → renderer, no codepage conversion); UTF-8 bytes

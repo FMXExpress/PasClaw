@@ -22,6 +22,9 @@ machine. The gateway passes the DOS client's tools through to the model
 (`/v1/responses` with `function` tools) and returns the model's tool calls
 unrun; they run on DOS and their results go back in the next request.
 
+For a Windows XP machine you do not need any of this: XP has TCP/IP, and
+the full `pasclaw.exe` builds for it. See [Windows XP](./windows-xp.md).
+
 ## What you need
 
 - **The DOS PC**: a 486 or later, MS-DOS 5+ or FreeDOS, a serial port.

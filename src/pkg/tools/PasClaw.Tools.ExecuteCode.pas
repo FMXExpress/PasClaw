@@ -259,11 +259,11 @@ var
   WithExt: string;
 {$ENDIF}
 begin
-  if FileSearch(Exe, GetEnvironmentVariable('PATH')) <> '' then Exit(True);
+  if FileSearch(Exe, SysUtils.GetEnvironmentVariable('PATH')) <> '' then Exit(True);
   {$IFDEF MSWINDOWS}
   WithExt := Exe;
   if Pos('.', WithExt) = 0 then WithExt := WithExt + '.exe';
-  if FileSearch(WithExt, GetEnvironmentVariable('PATH')) <> '' then Exit(True);
+  if FileSearch(WithExt, SysUtils.GetEnvironmentVariable('PATH')) <> '' then Exit(True);
   {$ENDIF}
   Result := False;
 end;

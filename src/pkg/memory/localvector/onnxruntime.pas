@@ -1018,7 +1018,9 @@ end;
 
 function TORTTensor<T>.ToString(const Separator: ortstring): ortstring;
 var
-  z,y,x: Int64;s,s2:ortstring;
+  { SizeInt: a for-loop counter must be an ordinal, and on 32-bit
+    targets Int64 is not one. Same width as Int64 on 64-bit. }
+  z,y,x: SizeInt;s,s2:ortstring;
 begin
   result:='';
   case Length(FShape) of
@@ -2753,7 +2755,7 @@ end;
 
 function TORTModelMetadataHelper.GetCustomMetadataMapKeysAllocated(
   allocator: TOrtAllocator): TArray<AllocatedStringPtr>;
-var _out:PPOrtChar; num_keys,i:int64_t;
+var _out:PPOrtChar; num_keys:int64_t; i:SizeInt;   { i: an ordinal on 32-bit targets too }
 begin
   ThrowOnError(GetApi().ModelMetadataGetCustomMetadataMapKeys(p_, allocator.p_, @_out, @num_keys));
   if num_keys <= 0 then

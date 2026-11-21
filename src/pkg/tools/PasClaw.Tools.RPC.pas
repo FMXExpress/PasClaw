@@ -489,7 +489,7 @@ begin
   Token  := '';
   Host   := LoopbackHost;
   ErrMsg := '';
-  Path := GetEnvironmentVariable(EnvInfoVar);
+  Path := SysUtils.GetEnvironmentVariable(EnvInfoVar);
   if Path = '' then
   begin
     ErrMsg := 'no ' + EnvInfoVar +
