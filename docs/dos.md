@@ -22,6 +22,10 @@ machine. The gateway passes the DOS client's tools through to the model
 (`/v1/responses` with `function` tools) and returns the model's tool calls
 unrun; they run on DOS and their results go back in the next request.
 
+![PCLAW.EXE in DOSBox-X: the model reads C:\AUTOEXEC.BAT and explains it](./screenshots/dos.png)
+
+A real session in DOSBox-X: COM1 to `pasclaw bridge`, a gateway, Gemini.
+
 For a Windows XP machine you do not need any of this: XP has TCP/IP, and
 the full `pasclaw.exe` builds for it. See [Windows XP](./windows-xp.md).
 
@@ -68,7 +72,7 @@ On the DOS PC:
 ```
 C:\PCLAW> PCLAW
 PasClaw for DOS -- COM1 (16550) at 115200 -> gateway v0.1.6
-Type a request. /CLEAR forgets the conversation, /QUIT leaves. Esc cancels a wait.
+Type a request. /CLEAR forgets the chat, /QUIT leaves, Esc cancels a wait.
 
 pclaw> what is in AUTOEXEC.BAT?
 > read_file C:\AUTOEXEC.BAT

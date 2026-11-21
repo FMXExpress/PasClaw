@@ -34,6 +34,8 @@ provider directly.
 >
 > Reports welcome.
 
+![pasclaw version on Windows XP SP2, after ver](./screenshots/windows-xp.png)
+
 ## Build
 
 On Linux:

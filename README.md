@@ -43,7 +43,15 @@ The web UI that `pasclaw serve` / `pasclaw gateway` serves on the same port as t
 | **Workflow editor** | **Phone width** |
 | ![A two-node workflow in the editor](docs/screenshots/web-ui-workflow.png) | ![The chat tab at phone width](docs/screenshots/web-ui-phone.png) |
 
-More, and how they are made, in [docs/screenshots](docs/screenshots/README.md). The content is fixture data written by the capture script, not a real session.
+More, and how they are made, in [docs/screenshots](docs/screenshots/README.md). The web UI's content is fixture data written by the capture script, not a real session.
+
+### DOS and Windows XP
+
+| MS-DOS: `PCLAW.EXE` ([docs/dos.md](docs/dos.md)) | Windows XP: the full `pasclaw.exe` ([docs/windows-xp.md](docs/windows-xp.md)) |
+|---|---|
+| ![PCLAW.EXE in DOSBox-X: the model reads C:\AUTOEXEC.BAT and explains it](docs/screenshots/dos.png) | ![pasclaw version on Windows XP SP2, after ver](docs/screenshots/windows-xp.png) |
+
+Both are real runs. On DOS (DOSBox-X), the request went down COM1 to `pasclaw bridge`, then through a gateway to Gemini (`gemini-3.5-flash`); the model's `read_file` ran on the DOS drive. On Windows XP SP2 ([VirtualXP](https://lrusso.github.io/VirtualXP/VirtualXP.htm)), the exe is the `make xp` build. That emulator has no network, so the XP shot shows a local command, not an agent turn.
 
 ## Features
 

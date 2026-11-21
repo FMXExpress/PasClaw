@@ -252,7 +252,8 @@ begin
     end;
 
     Say(Format('PasClaw for DOS -- %s at %d -> %s', [Link.Describe, A.Baud, Info]));
-    Say('Type a request. /CLEAR forgets the conversation, /QUIT leaves. Esc cancels a wait.');
+    { One 80-column line: Say wraps at the screen edge. }
+    Say('Type a request. /CLEAR forgets the chat, /QUIT leaves, Esc cancels a wait.');
     while True do
     begin
       Say('');
