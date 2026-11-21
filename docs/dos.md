@@ -22,6 +22,9 @@ machine. The gateway passes the DOS client's tools through to the model
 (`/v1/responses` with `function` tools) and returns the model's tool calls
 unrun; they run on DOS and their results go back in the next request.
 
+For a Windows XP machine you do not need any of this: XP has TCP/IP, and
+the full `pasclaw.exe` builds for it. See [Windows XP](./windows-xp.md).
+
 ## What you need
 
 - **The DOS PC**: a 486 or later, MS-DOS 5+ or FreeDOS, a serial port.
@@ -125,6 +128,12 @@ pasclaw bridge [--listen [ADDR:]PORT | --serial DEVICE [--baud N]]
   `GET /v1/models`, nothing else: whoever holds the serial line gets the
   model, not the gateway's files, shell, config or sessions. Other routes
   are answered 403 without reaching the gateway.
+- **Only the client's own tools.** A `/v1/responses` request must bring
+  at least one function tool. With one, the gateway hands the tools to
+  the model and returns its tool calls unrun, to run on the DOS PC.
+  Without one, the gateway would run its own agent loop with its own
+  tools on its own machine, so the bridge answers such a request 400 and
+  never forwards it.
 - **Which gateway.** By default the one this `PASCLAW_HOME` runs
   (`run/gateway.json`, else `127.0.0.1:<gateway.port>`), with this
   config's gateway token. `--gateway URL` (or `$PASCLAW_GATEWAY_URL`) names
@@ -176,11 +185,11 @@ with CR LF turned into LF.
 
 | Tool | Does | Asks first |
 |---|---|---|
-| `read_file` | 200 lines at a time (`start_line` reads on), at most 6,000 bytes; a binary file is refused | no |
+| `read_file` | 200 lines at a time (`start_line` reads on), at most 6,000 bytes; a longer single line is cut, and the next window starts after it; a binary file is refused | no |
 | `list_dir` | names and sizes, `<DIR>` for directories, the volume label left out | no |
 | `write_file` | creates or replaces a file, making its directory | yes |
 | `edit_file` | replaces `old_text`, which must occur exactly once | yes |
-| `run` | `COMMAND.COM /C`, standard output captured (first 4,000 bytes) | yes |
+| `run` | `COMMAND.COM /C`, standard output captured (first 4,000 bytes) through a new `PCnnnnnn.TMP` file in `%TEMP%` (else the current directory), deleted afterwards | yes |
 
 At a question, `y` allows that one, `a` allows everything for the rest of
 the run, anything else refuses, and the model is told it was refused.

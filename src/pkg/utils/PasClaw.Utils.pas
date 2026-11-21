@@ -504,9 +504,9 @@ end;
 
 function HomeDir: string;
 begin
-  Result := GetEnvironmentVariable('HOME');
+  Result := SysUtils.GetEnvironmentVariable('HOME');
   if Result = '' then
-    Result := GetEnvironmentVariable('USERPROFILE');
+    Result := SysUtils.GetEnvironmentVariable('USERPROFILE');
   if Result = '' then
     Result := GetCurrentDir;
 end;

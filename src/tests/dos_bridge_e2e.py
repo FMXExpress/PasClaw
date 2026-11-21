@@ -16,7 +16,9 @@ link is TCP instead of COM1) runs the agent loop and the tools locally:
   - the bridge forwards only POST /v1/responses, GET /v1/health and
     GET /v1/models (403 otherwise), forces "stream": false, echoes the
     sequence number, answers a body with a bad CRC with 400 "crc", and
-    finds the next request after line noise on the same connection;
+    finds the next request after line noise on the same connection, and
+    refuses a request without function tools of its own (the gateway would
+    run its own tools for it);
   - over a serial line: `pasclaw bridge --serial` on one pseudo-terminal,
     the client on another, this test the null-modem cable between them.
 
@@ -266,9 +268,18 @@ def main():
         st, h, body = read_response(s)
         if st != 400 or json.loads(body)["error"]["message"] != "crc" or h.get("x-pasclaw-seq") != "6":
             fail("a bad CRC: %d %r" % (st, body))
+        # No function tool of its own: the gateway would run its own tools.
+        # Refused by the bridge; the model is never asked.
+        before = len(REQUESTS)
+        s.sendall(wire_request("POST", "/v1/responses", b'{"input":"run a command over there"}', seq=60))
+        st, h, body = read_response(s)
+        if st != 400 or "own function tools" not in body.decode() or len(REQUESTS) != before:
+            fail("a tool-less request through the bridge: %d %r (model asked %d times)"
+                 % (st, body, len(REQUESTS) - before))
         # Noise, then a streaming request: found, and answered as one JSON body.
+        tools = [{"type": "function", "name": "read_file", "parameters": {"type": "object"}}]
         s.sendall(b"\x00\xff garbage\r\nmore garbage\r\n" + wire_request(
-            "POST", "/v1/responses", json.dumps({"input": "hi", "stream": True}).encode(), seq=7))
+            "POST", "/v1/responses", json.dumps({"input": "hi", "stream": True, "tools": tools}).encode(), seq=7))
         st, h, body = read_response(s)
         if st != 200 or h.get("x-pasclaw-seq") != "7" or "output" not in json.loads(body):
             fail("after noise, a stream:true request: %d %r" % (st, body[:200]))

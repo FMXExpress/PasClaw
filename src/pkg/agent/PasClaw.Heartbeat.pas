@@ -271,20 +271,20 @@ begin
   else if K = 'webhook' then
   begin
     Hook := TGenericWebhook.Create(Target,
-              GetEnvironmentVariable('PASCLAW_WEBHOOK_AUTH'));
+              SysUtils.GetEnvironmentVariable('PASCLAW_WEBHOOK_AUTH'));
     try Result := Hook.Post(Message); finally Hook.Free; end;
   end
   else if K = 'line' then
   begin
-    Token := GetEnvironmentVariable('PASCLAW_LINE_TOKEN');
+    Token := SysUtils.GetEnvironmentVariable('PASCLAW_LINE_TOKEN');
     if Token = '' then Exit;
     Line := TLinePush.Create(Token);
     try Result := Line.Push(Target, Message); finally Line.Free; end;
   end
   else if K = 'whatsapp' then
   begin
-    Token   := GetEnvironmentVariable('PASCLAW_WHATSAPP_TOKEN');
-    PhoneId := GetEnvironmentVariable('PASCLAW_WHATSAPP_PHONE_ID');
+    Token   := SysUtils.GetEnvironmentVariable('PASCLAW_WHATSAPP_TOKEN');
+    PhoneId := SysUtils.GetEnvironmentVariable('PASCLAW_WHATSAPP_PHONE_ID');
     if (Token = '') or (PhoneId = '') then Exit;
     WA := TWhatsAppPush.Create(Token, PhoneId);
     try Result := WA.Push(Target, Message); finally WA.Free; end;

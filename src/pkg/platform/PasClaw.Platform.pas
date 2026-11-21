@@ -615,7 +615,7 @@ begin
      betting on. Detached and not waited on -- the capture loop below
      notices the pipe close on its own. *)
   {$IFDEF FPC}
-  with TInternalProcess.Create(nil) do
+  with TProcess.Create(nil) do   { TInternalProcess is declared further down }
   try
     Executable := 'taskkill';
     Parameters.Add('/PID'); Parameters.Add(IntToStr(Pid));

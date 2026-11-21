@@ -322,7 +322,7 @@ begin
   IsTemp := False;
   if A.HomeOverride <> '' then
     Exit(A.HomeOverride);
-  Env := GetEnvironmentVariable('PASCLAW_HOME');
+  Env := SysUtils.GetEnvironmentVariable('PASCLAW_HOME');
   if Env <> '' then
     Exit(Env);
   if A.WorkspaceOut <> '' then
@@ -460,7 +460,7 @@ begin
       Exit(1);
     end;
 
-    SavedHomeEnv := GetEnvironmentVariable('PASCLAW_HOME');
+    SavedHomeEnv := SysUtils.GetEnvironmentVariable('PASCLAW_HOME');
     SetEnvVar('PASCLAW_HOME', Home);
     LogInfo('plan: PASCLAW_HOME=%s (temp=%s)',
             [Home, BoolToStr(HomeIsTemp, True)]);

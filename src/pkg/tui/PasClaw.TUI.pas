@@ -437,7 +437,7 @@ var
   N: Integer;
 begin
   Result := 120;
-  V := Trim(GetEnvironmentVariable('PASCLAW_REQUEST_TIMEOUT'));
+  V := Trim(SysUtils.GetEnvironmentVariable('PASCLAW_REQUEST_TIMEOUT'));
   if V = '' then Exit;
   if TryStrToInt(V, N) and (N > 0) then
     Result := N;

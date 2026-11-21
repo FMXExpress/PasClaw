@@ -129,7 +129,7 @@ type
 function EnvOr(const EnvName, FlagValue: string): string;
 begin
   if FlagValue <> '' then Result := FlagValue
-  else                    Result := GetEnvironmentVariable(EnvName);
+  else                    Result := SysUtils.GetEnvironmentVariable(EnvName);
 end;
 
 function CurrentProcessID: Int64;
@@ -151,8 +151,8 @@ end;
 
 function HostName: string;
 begin
-  Result := GetEnvironmentVariable('HOSTNAME');
-  if Result = '' then Result := GetEnvironmentVariable('COMPUTERNAME');
+  Result := SysUtils.GetEnvironmentVariable('HOSTNAME');
+  if Result = '' then Result := SysUtils.GetEnvironmentVariable('COMPUTERNAME');
   if Result = '' then Result := 'worker';
 end;
 

@@ -463,8 +463,10 @@ uses
   {$IFDEF MSWINDOWS}
   { Lets dcc64 inline SysUtils.RenameFile (used by Save's atomic
     write) -- without this it falls back to a regular call and emits
-    H2443. Mirrors the pattern used in PasClaw.CliUI / PasClaw.Crypto.Random. }
-  {$IFDEF FPC}Windows,{$ELSE}Winapi.Windows,{$ENDIF}
+    H2443. Mirrors the pattern used in PasClaw.CliUI / PasClaw.Crypto.Random.
+    Delphi only: FPC does not need it, and FPC's Windows unit declares a
+    TMessage record that would hide PasClaw.Providers.Types.TMessage. }
+  {$IFNDEF FPC}Winapi.Windows,{$ENDIF}
   {$ENDIF}
   PasClaw.Config,
   PasClaw.Utils,

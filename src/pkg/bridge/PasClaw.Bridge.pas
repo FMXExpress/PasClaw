@@ -16,6 +16,14 @@
   Anything else is refused with 403: whoever holds the serial line gets
   a model, not the gateway's file, shell, config or session routes.
 
+  A /v1/responses request must carry its own function tools. With them
+  the gateway passes the tools through and returns the model's tool calls
+  unrun (they run on the DOS PC); without them it would run its own agent
+  loop with its own tools, on its own machine, for whoever holds the line.
+  The bridge refuses such a request (400) before the gateway sees it, by
+  the gateway's own rule: at least one tool whose "type" is "function"
+  (or absent) and whose "name" is not empty.
+
   A /v1/responses body is rewritten on the way: "stream" is forced off
   (the line carries one framed answer, not SSE) and, when the bridge was
   started with --model, that model is filled in for a request naming
@@ -167,8 +175,39 @@ begin
   if (not Result) and (Err = '') then Err := 'no answer';
 end;
 
+{ Does the request bring a tool of its own? The same test the gateway
+  makes to choose passthrough (PasClaw.Gateway.Server, HandleResponses):
+  a "tools" entry of type "function" -- the default when "type" is
+  absent -- with a non-empty name. }
+function HasClientFunctionTool(O: TJsonObject): Boolean;
+var
+  Tools: TJsonArray;
+  T: TJsonObject;
+  i: Integer;
+begin
+  Result := False;
+  Tools := O.ChildArray('tools');
+  if Tools = nil then Exit;
+  try
+    for i := 0 to Tools.Count - 1 do
+    begin
+      T := Tools.ItemObject(i);
+      if T = nil then Continue;
+      try
+        if (LowerCase(Trim(T.GetStr('type', 'function'))) = 'function') and
+           (T.GetStr('name', '') <> '') then
+          Exit(True);
+      finally
+        T.Free;
+      end;
+    end;
+  finally
+    Tools.Free;
+  end;
+end;
+
 { Force "stream": false and fill in the model. Err when the body is not
-  a JSON object. }
+  a JSON object, or brings no function tool of its own. }
 function RewriteResponsesBody(const Cfg: TBridgeConfig; const Body: string;
   out Err: string): string;
 var
@@ -188,6 +227,12 @@ begin
     Exit;
   end;
   try
+    if not HasClientFunctionTool(O) then
+    begin
+      Err := 'the bridge forwards only requests that bring their own function tools: ' +
+             'without them the gateway would run its own tools on its own machine';
+      Exit;
+    end;
     O.PutBool('stream', False);
     if (Cfg.Model <> '') and (O.GetStr('model', '') = '') then
       O.PutStr('model', Cfg.Model);

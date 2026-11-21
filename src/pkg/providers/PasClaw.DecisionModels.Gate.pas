@@ -252,6 +252,10 @@ begin
 end;
 
 function ReplaceFileAtomic(const Src, Dest: string): Boolean;
+{$IF DEFINED(MSWINDOWS) AND DEFINED(FPC)}
+const
+  MOVEFILE_WRITE_THROUGH = $00000008;   { not in FPC's Windows unit }
+{$IFEND}
 begin
   {$IFDEF MSWINDOWS}
   Result := MoveFileEx(PChar(Src), PChar(Dest),
