@@ -139,7 +139,9 @@ end;
 
 function Crc32Hex(const S: RawByteString): string;
 begin
-  Result := LowerCase(IntToHex(Crc32(S), 8));
+  { Int64: a Cardinal argument has no IntToHex overload of its own in
+    every Delphi version. }
+  Result := LowerCase(IntToHex(Int64(Crc32(S)), 8));
 end;
 
 function TWireReader.IsClosed: Boolean;

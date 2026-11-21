@@ -280,10 +280,17 @@ function TempOutPath: string;
 var
   T: string;
 begin
+  {$IFDEF GO32V2}
   T := GetEnvironmentVariable('TEMP');
   if T = '' then T := GetEnvironmentVariable('TMP');
   if (T = '') or not DirectoryExists(T) then T := GetCurrentDir;
   Result := IncludeTrailingPathDelimiter(T) + 'PCLAWRUN.TXT';
+  {$ELSE}
+  { A host build is not alone on the machine: its own name in the temp
+    directory, not a fixed one in the directory it works in. }
+  Result := IncludeTrailingPathDelimiter(GetTempDir) +
+            Format('pclaw-run-%d-%d.txt', [GetProcessID, Random(1000000)]);
+  {$ENDIF}
 end;
 
 function ToolRun(A: TJsonObject; Ask: TAskFn; out IsError: Boolean): string;
