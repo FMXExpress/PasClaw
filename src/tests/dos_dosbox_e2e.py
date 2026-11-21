@@ -10,7 +10,9 @@ the real go32v2 build from `make dos` under CWSDPMI:
     screen as CP437; the listing leaves out the drive's volume label;
   - write_file answered "y" on DOS's standard input writes a CP437, CR LF
     file ("--" for an em dash the model sent); answered "n" writes nothing;
-  - run goes through COMMAND.COM and its output comes back;
+  - run goes through COMMAND.COM and its output comes back, through a
+    new temporary file it deletes -- a PCLAWRUN.TXT already there is left
+    alone;
   - the model saw the DOS system prompt and the client's five tools.
 
 usage: dos_dosbox_e2e.py <pasclaw-binary> <dir with PCLAW.EXE and CWSDPMI.EXE>
@@ -77,6 +79,7 @@ def main():
     put("P2.TXT", b"WRITE MADE.TXT\r\n")
     put("P3.TXT", b"WRITE REFUSED.TXT\r\n")
     put("P4.TXT", b"RUN VER\r\n")
+    put("PCLAWRUN.TXT", b"the user's own file\r\n")   # run must not take it
     put("Y.ANS", b"y\r\n")
     put("N.ANS", b"n\r\n")
     env = dict(os.environ, PASCLAW_HOME=home, NO_COLOR="1")
@@ -151,6 +154,14 @@ def main():
         o4 = out("OUT4.TXT")
         if b"done: [c1]" not in o4 or b"DOS" not in o4.split(b"done: [c1]")[1]:
             fail("run VER through COMMAND.COM: %r" % o4, home)
+
+        if not os.path.exists(os.path.join(drive, "PCLAWRUN.TXT")):
+            fail("run deleted the user's PCLAWRUN.TXT", home)
+        if out("PCLAWRUN.TXT") != b"the user's own file\r\n":
+            fail("run overwrote the user's PCLAWRUN.TXT: %r" % out("PCLAWRUN.TXT"), home)
+        left = [n for n in os.listdir(drive) if n.upper().startswith("PC") and n.upper().endswith(".TMP")]
+        if left:
+            fail("run left its output file behind: %r" % left, home)
 
         reqs = [r for r in base.REQUESTS if any(m.get("role") == "system" for m in r.get("messages", []))]
         if not reqs:

@@ -194,11 +194,24 @@ begin
   Result := StubUp;
 end;
 
+const
+  { One function tool of the client's own: what makes the gateway pass
+    tools through instead of running its own. }
+  TOOLS = ',"tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}]';
+
 procedure TestBridgeHandle;
 var
   Cfg: TBridgeConfig;
   M, R: TWireMessage;
   O: TJsonObject;
+  i: Integer;
+const
+  NOT_PASSTHROUGH: array[0..4] of string = (
+    '{"input":"read a file on that machine"}',
+    '{"input":"hi","tools":[]}',
+    '{"input":"hi","tools":[{"type":"web_search"}]}',
+    '{"input":"hi","tools":[{"type":"function","name":""}]}',
+    '{"input":"hi","tools":"read_file"}');
 begin
   GBridgeForward := StubForward;
   Cfg.GatewayURL := 'http://gw:8088';
@@ -225,7 +238,7 @@ begin
   Check(BridgeRouteAllowed('GET', '/v1/models?x=1'), 'a query string is fine');
 
   { The model call: stream off, model filled in, token sent, answer slimmed. }
-  M := Req('POST', '/v1/responses', '{"input":"hi","stream":true}');
+  M := Req('POST', '/v1/responses', '{"input":"hi","stream":true' + TOOLS + '}');
   WireSetHeader(M, WIRE_SEQ_HEADER, '10');
   R := BridgeHandle(Cfg, M);
   Check(R.Status = 200, 'forwarded');
@@ -251,8 +264,22 @@ begin
   Check(Pos('"hi"', WireBodyToString(R.Body)) > 0, 'the output text survives');
 
   { A request naming its model keeps it. }
-  BridgeHandle(Cfg, Req('POST', '/v1/responses', '{"input":"hi","model":"mine"}'));
+  BridgeHandle(Cfg, Req('POST', '/v1/responses', '{"input":"hi","model":"mine"' + TOOLS + '}'));
   CheckEq(JsonReadStr(StubBody, 'model', ''), 'mine', 'the request''s model wins');
+
+  { No function tool of the client's own: the gateway would run its own
+    loop with its own tools on its machine. Refused here, never forwarded. }
+  for i := 0 to High(NOT_PASSTHROUGH) do
+  begin
+    StubURL := '';
+    R := BridgeHandle(Cfg, Req('POST', '/v1/responses', NOT_PASSTHROUGH[i]));
+    Check(R.Status = 400, 'refused without a client function tool: ' + NOT_PASSTHROUGH[i]);
+    CheckEq(StubURL, '', 'and never forwarded: ' + NOT_PASSTHROUGH[i]);
+  end;
+  Check(Pos('own function tools', WireBodyToString(R.Body)) > 0, 'the refusal says why');
+  { "type" absent means function, as the gateway reads it. }
+  R := BridgeHandle(Cfg, Req('POST', '/v1/responses', '{"input":"hi","tools":[{"name":"run"}]}'));
+  CheckEq(StubURL, 'http://gw:8088/v1/responses', 'a tool without "type" is a function tool');
 
   { Not JSON: 400 here, not a gateway round trip. }
   StubURL := '';
@@ -263,7 +290,7 @@ begin
   { A gateway error passes through untouched (not slimmed). }
   StubStatus := 401;
   StubAnswer := '{"error":{"message":"unauthorized"}}';
-  R := BridgeHandle(Cfg, Req('POST', '/v1/responses', '{"input":"hi"}'));
+  R := BridgeHandle(Cfg, Req('POST', '/v1/responses', '{"input":"hi"' + TOOLS + '}'));
   Check(R.Status = 401, 'gateway status kept');
   CheckEq(ErrorMessageOf(WireBodyToString(R.Body)), 'unauthorized', 'gateway error kept');
 
@@ -425,7 +452,7 @@ end;
 
 procedure TestTools;
 var
-  Dir, F, Out_, Err, Data: string;
+  Dir, F, Out_, Err, Data, P1, P2: string;
   IsErr: Boolean;
   A: TAsker;
   L: TStringList;
@@ -483,6 +510,28 @@ begin
     A.Answer := True;
     Out_ := RunDosTool('run', '{"command":"echo ran; exit 3"}', A.Ask, IsErr);
     Check((Pos('ran', Out_) > 0) and (Pos('[exit code 3]', Out_) > 0), 'run output and exit code: ' + Out_);
+
+    { One line longer than the whole cap: its start, marked as cut, and
+      the next window starts after it (not at it again). }
+    WriteFileBytes(Dir + '/long.txt', StringOfChar('j', 10000) + #10 + 'after' + #10, Err);
+    Out_ := RunDosTool('read_file', '{"path":"' + JsonEscape(Dir + '/long.txt') + '"}', A.Ask, IsErr);
+    Check(not IsErr and (Pos(StringOfChar('j', 5000), Out_) > 0), 'a long line''s start comes back');
+    Check(Pos('line 1 cut at 6000 of 10000 bytes', Out_) > 0, 'marked as cut: ' + Copy(Out_, 6000, 200));
+    Check(Pos('start_line=2', Out_) > 0, 'and reading on moves past it');
+    Out_ := RunDosTool('read_file', '{"path":"' + JsonEscape(Dir + '/long.txt') + '","start_line":2}', A.Ask, IsErr);
+    Check(Pos('after', Out_) = 1, 'the next line is reachable: ' + Copy(Out_, 1, 60));
+
+    { run's output file: new each time, never one that was there. }
+    WriteFileBytes(Dir + '/PCLAWRUN.TXT', 'keep me', Err);
+    P1 := NewRunOutputPath(Dir);
+    P2 := NewRunOutputPath(Dir);
+    Check((P1 <> '') and (P2 <> '') and (P1 <> P2), 'two different names: ' + P1 + ' ' + P2);
+    Check(FileExists(P1) and FileExists(P2), 'each made at once, so nothing else takes it');
+    Check(Length(ExtractFileName(P1)) = 12, '8.3: ' + ExtractFileName(P1));
+    DeleteFile(P1);
+    DeleteFile(P2);
+    ReadFileBytes(Dir + '/PCLAWRUN.TXT', Data, Err);
+    CheckEq(Data, 'keep me', 'a file that was there is left alone');
 
     Out_ := RunDosTool('nope', '{}', A.Ask, IsErr);
     Check(IsErr, 'unknown tool');

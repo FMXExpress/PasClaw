@@ -47,6 +47,12 @@ function RunDosTool(const Name, ArgsJSON: string; Ask: TAskFn;
 { One line for the screen: what is about to happen. }
 function DescribeToolCall(const Name, ArgsJSON: string): string;
 
+(* A file in Dir that did not exist and now does, empty, with an 8.3
+   name: where `run` sends a command's output. Made (not just named)
+   here, so nothing else takes the name before the command runs, and
+   `run` deletes it -- and only it -- afterwards. '' when no name is free. *)
+function NewRunOutputPath(const Dir: string): string;
+
 implementation
 
 uses
@@ -142,7 +148,18 @@ begin
     begin
       if SB.Length + Length(L[i]) + 1 > READ_CAP then
       begin
-        Last := i;
+        if SB.Length = 0 then
+        begin
+          { The first line alone is over the cap (minified JSON, say):
+            its start, marked as cut, and the window moves past it --
+            otherwise "read on with start_line" would name this same
+            line again, forever. }
+          SB.Append(Cap(L[i], READ_CAP, Format('line %d', [i + 1])));
+          SB.Append(#10);
+          Last := i + 1;
+        end
+        else
+          Last := i;
         Break;
       end;
       SB.Append(L[i]);
@@ -276,20 +293,33 @@ begin
   Result := 'edited ' + Path;
 end;
 
-function TempOutPath: string;
+function NewRunOutputPath(const Dir: string): string;
 var
-  T: string;
+  i: Integer;
+  H: THandle;
+begin
+  Result := '';
+  for i := 1 to 1000 do
+  begin
+    { 8.3, for DOS. }
+    Result := IncludeTrailingPathDelimiter(Dir) + Format('PC%.6d.TMP', [Random(1000000)]);
+    if FileExists(ToLocal(Result)) then Continue;
+    H := FileCreate(ToLocal(Result));
+    if H = THandle(-1) then Continue;
+    FileClose(H);
+    Exit;
+  end;
+  Result := '';
+end;
+
+function TempOutDir: string;
 begin
   {$IFDEF GO32V2}
-  T := GetEnvironmentVariable('TEMP');
-  if T = '' then T := GetEnvironmentVariable('TMP');
-  if (T = '') or not DirectoryExists(T) then T := GetCurrentDir;
-  Result := IncludeTrailingPathDelimiter(T) + 'PCLAWRUN.TXT';
+  Result := GetEnvironmentVariable('TEMP');
+  if Result = '' then Result := GetEnvironmentVariable('TMP');
+  if (Result = '') or not DirectoryExists(Result) then Result := GetCurrentDir;
   {$ELSE}
-  { A host build is not alone on the machine: its own name in the temp
-    directory, not a fixed one in the directory it works in. }
-  Result := IncludeTrailingPathDelimiter(GetTempDir) +
-            Format('pclaw-run-%d-%d.txt', [GetProcessID, Random(1000000)]);
+  Result := GetTempDir;
   {$ENDIF}
 end;
 
@@ -302,7 +332,9 @@ begin
   Cmd := A.GetStr('command', '');
   if Trim(Cmd) = '' then Exit('run needs a command');
   if not Ask('Run: ' + Cmd) then Exit('the user said no; the command did not run');
-  Tmp := TempOutPath;
+  Tmp := NewRunOutputPath(TempOutDir);
+  if Tmp = '' then Exit('no free name for a temporary file in ' + TempOutDir);
+  try
   {$IFDEF GO32V2}
   Shell := GetEnvironmentVariable('COMSPEC');
   if Shell = '' then Shell := 'C:\COMMAND.COM';
@@ -328,14 +360,15 @@ begin
   {$ENDIF}
   IsError := False;
   if ReadFileBytes(Tmp, Raw, Err) then
-  begin
-    DeleteFile(ToLocal(Tmp));
-    Result := Cap(FileTextToUtf8(Raw), RUN_CAP, 'output');
-  end
+    Result := Cap(FileTextToUtf8(Raw), RUN_CAP, 'output')
   else
     Result := '';
   if Result = '' then Result := '(no output)';
   if Code <> 0 then Result := Result + #10 + '[exit code ' + IntToStr(Code) + ']';
+  finally
+    { Only the file this call made. }
+    DeleteFile(ToLocal(Tmp));
+  end;
 end;
 
 function RunDosTool(const Name, ArgsJSON: string; Ask: TAskFn;
