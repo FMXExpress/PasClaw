@@ -3,7 +3,7 @@
 
   Wraps the OS CSPRNG:
     POSIX (Linux/macOS) -> read /dev/urandom
-    Windows             -> CryptGenRandom via advapi32
+    Windows             -> CryptGenRandom via advapi32, else RtlGenRandom
 
   OAuth PKCE and state-nonce generation need unpredictable bytes; the
   built-in System.Random / Randomize feeds off a low-entropy time seed
@@ -47,20 +47,43 @@ function CryptReleaseContext(hProv: ULONG_PTR; dwFlags: DWORD): BOOL; stdcall;
 function CryptGenRandom(hProv: ULONG_PTR; dwLen: DWORD; pbBuffer: PByte): BOOL; stdcall;
                               external advapi32 name 'CryptGenRandom';
 
+type
+  { advapi32!SystemFunction036, documented as RtlGenRandom. }
+  TRtlGenRandom = function(RandomBuffer: Pointer; RandomBufferLength: ULONG): BOOLEAN; stdcall;
+
+(* The same system generator without a cryptographic service provider: it
+   asks the kernel (KSecDD) directly, and is what C runtimes use for rand_s.
+   For a Windows whose CSP cannot be loaded -- a stripped XP live CD gave
+   CryptAcquireContext NTE_BAD_SIGNATURE -- where CryptAcquireContext fails
+   and RtlGenRandom does not. Looked up at run time rather than imported. *)
+function RtlGenRandomBytes(var Buf: TBytes): Boolean;
+var
+  Fn: TRtlGenRandom;
+begin
+  Fn := TRtlGenRandom(GetProcAddress(GetModuleHandle('advapi32.dll'), PAnsiChar('SystemFunction036')));
+  Result := Assigned(Fn) and Fn(@Buf[0], Length(Buf));
+end;
+
 function GetRandomBytes(N: Integer): TBytes;
 var
   hProv: ULONG_PTR;
+  Gle: DWORD;
+  Ok: Boolean;
 begin
   if N <= 0 then begin SetLength(Result, 0); Exit; end;
   SetLength(Result, N);
-  if not CryptAcquireContextW(hProv, nil, nil, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT) then
-    raise EOSRandomFailure.CreateFmt('CryptAcquireContext failed (gle=%d)', [GetLastError]);
-  try
-    if not CryptGenRandom(hProv, N, @Result[0]) then
-      raise EOSRandomFailure.CreateFmt('CryptGenRandom failed (gle=%d)', [GetLastError]);
-  finally
+  if CryptAcquireContextW(hProv, nil, nil, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT) then
+  begin
+    Ok := CryptGenRandom(hProv, N, @Result[0]);   { API calls: neither raises }
+    Gle := GetLastError;
     CryptReleaseContext(hProv, 0);
+    if Ok then Exit;
+    if RtlGenRandomBytes(Result) then Exit;
+    raise EOSRandomFailure.CreateFmt('CryptGenRandom failed (gle=%d), and RtlGenRandom too', [Gle]);
   end;
+  Gle := GetLastError;
+  if RtlGenRandomBytes(Result) then Exit;
+  raise EOSRandomFailure.CreateFmt('CryptAcquireContext failed (gle=%d), and RtlGenRandom too', [Gle]);
 end;
 
 {$ELSE}

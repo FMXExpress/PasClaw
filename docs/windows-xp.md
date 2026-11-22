@@ -8,10 +8,33 @@ through OpenSSL (via Indy), which speaks TLS 1.2 on XP like anywhere else.
 So unlike [DOS](./dos.md), XP needs no bridge: pasclaw talks to the
 provider directly.
 
-> **Status: built, not yet run on XP.** The XP build compiles, and a check
-> (below) confirms its header and every imported function are ones XP
-> has. It has not been run on an XP machine, and Wine could not run it in
-> the environment it was built in. Reports welcome.
+> **Status: runs on Windows XP SP2; HTTPS and the agent not yet tried
+> there.**
+>
+> - **Load check:** all 200 functions `pasclaw.exe` imports are in the
+>   export tables of the XP SP2 system DLLs (5.1.2600.2180).
+> - **Run on XP:** `pasclaw version`, `status` and `doctor` ran on XP in
+>   [VirtualXP](https://lrusso.github.io/VirtualXP/VirtualXP.htm), a
+>   LiveXP disc in the Halfix emulator. The exe was added to its CD, with a
+>   `Run` registry entry to start it at logon.
+> - **Console:** the banner rendered and colour turned itself off.
+>   `version` and `status` exited 0. `doctor` exited 1, as it should
+>   before `onboard`.
+> - **Gateway:** that disc has no TCP/IP stack at all (no `TCPIP.SYS`,
+>   `AFD.SYS` or `MSWSOCK.DLL`) and no browser, so the gateway cannot
+>   listen there and the web UI cannot be opened. `pasclaw gateway` got as
+>   far as opening its port and stopped with `cannot listen on
+>   127.0.0.1:8088: Socket Error # 10044 -- Socket type not supported.`
+>   and exit code 1. On the way it showed two bugs, now fixed: the disc's
+>   crypto provider does not load (`CryptAcquireContext` fails with
+>   `NTE_BAD_SIGNATURE`), so pasclaw now falls back to `RtlGenRandom`; and
+>   a listener that could not be opened was an unhandled-exception dump.
+> - **Not tried:** HTTPS (OpenSSL), a running gateway, the web UI in an
+>   XP browser, and an agent turn. That needs an XP with networking.
+>
+> Reports welcome.
+
+![pasclaw version on Windows XP SP2, after ver](./screenshots/windows-xp.png)
 
 ## Build
 

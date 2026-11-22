@@ -1,7 +1,7 @@
 # Screenshots
 
 PasClaw's two browser surfaces, both served by `pasclaw serve` / `pasclaw
-gateway` on the same port.
+gateway` on the same port, then the DOS client and the Windows XP build.
 
 ## Web UI — chat (`/`)
 
@@ -63,7 +63,37 @@ The project-oriented surface: a Projects panel, desktop icons per project,
 and a taskbar with Ask and Log. This is the browser desktop — distinct from
 the native FMX desktop application, which is not shown here.
 
+## MS-DOS — `PCLAW.EXE`
+
+![PCLAW.EXE in DOSBox-X: the model reads C:\AUTOEXEC.BAT and explains it](./dos.png)
+
+The DOS client ([dos.md](../dos.md)) in DOSBox-X, in an interactive session.
+This one is a real run, not fixture data. The request was typed at the
+`pclaw>` prompt. It went down COM1 (`serial1=nullmodem ... transparent:1`) to
+`pasclaw bridge --listen`, then through a gateway to Gemini
+(`gemini-3.5-flash`, with `gemini_server_tools.google_search` off). The
+model's `read_file` ran on the DOS drive, a host folder mounted as C: that
+holds a sample `AUTOEXEC.BAT` and `CONFIG.SYS`. Taken with ImageMagick
+`import` from the DOSBox-X window under Xvfb (720 x 400 text mode), then
+scaled 2x with nearest-neighbour. A model's answer differs from run to run,
+so this one is not reproducible byte for byte.
+
+## Windows XP — `pasclaw.exe`
+
+![pasclaw version on Windows XP SP2, after ver](./windows-xp.png)
+
+The `make xp` build ([windows-xp.md](../windows-xp.md)) on Windows XP SP2:
+[VirtualXP](https://lrusso.github.io/VirtualXP/VirtualXP.htm), a LiveXP disc
+in the Halfix emulator, in headless Chromium. The exe and a batch file were
+added to that disc's ISO image, with a `Run` registry entry that runs the
+batch file at logon (`ver`, then `pasclaw version`). The picture is the
+emulator canvas's own pixels at the guest's 800 x 600. That disc has no
+network stack, so there is no agent turn to show.
+
 ## Regenerating
+
+The DOS and Windows XP shots above were taken by hand as described; this
+section is about the web UI shots.
 
 `capture.py` seeds a gateway and drives headless Chromium against it. Two
 steps, because the gateway has to be running in between:
@@ -105,9 +135,9 @@ Run twice from a fresh fixture home at the same path, `web-ui-chat`,
 system prompt it measures: init at a different path and the system prompt's
 count moves by a token or two.
 
-## The content is fixture data
+## The web UI content is fixture data
 
-The shots are deliberately taken against a gateway holding real content — a
+The web UI shots are deliberately taken against a gateway holding real content — a
 finished conversation, a seeded `workspace/memory/MEMORY.md`, a saved
 workflow, and three projects. An empty instance photographs the chrome and nothing else, which is
 what the first attempt at these produced: a blank chat pane and "No projects
