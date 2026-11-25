@@ -34,6 +34,18 @@ mark="$out/.sweep-mark"
 next="$out/.sweep-mark.$$"
 touch "$next" 2>/dev/null || exit 0
 
+# Delete the compiled units of the sources named on stdin, one per line.
+sweep_units() {
+  while IFS= read -r src; do
+    base=$(basename "$src")
+    base=${base%.*}
+    lower=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')
+    for name in "$base" "$lower"; do
+      rm -f "$out/$name.ppu" "$out/$name.o" "$out/$name.rsj" "$out/$name.rst"
+    done
+  done
+}
+
 if [ -f "$mark" ]; then
   # A resource (.res) is linked into the unit that names it in {$R ...}
   # when THAT unit compiles, and FPC does not track the .res at all. The
@@ -49,14 +61,19 @@ if [ -f "$mark" ]; then
                "$(dirname "$changed")"/*.pas "$(dirname "$changed")"/*.pp 2>/dev/null ;;
       *)     printf '%s\n' "$changed" ;;
     esac
-  done |
-  while IFS= read -r src; do
-    base=$(basename "$src")
-    base=${base%.*}
-    lower=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')
-    for name in "$base" "$lower"; do
-      rm -f "$out/$name.ppu" "$out/$name.o" "$out/$name.rsj" "$out/$name.rst"
-    done
-  done
+  done | sweep_units
+fi
+
+# The version string is compiled in from the PASCLAW_VERSION environment
+# variable ({$I %PASCLAW_VERSION%}), which FPC does not track either: after
+# a commit, an incremental build kept the previous version, so `pasclaw
+# version` named an old commit. When the Makefile passes a version that
+# differs from the one the last sweep saw, the units that read it go.
+if [ -n "${PASCLAW_VERSION+set}" ]; then
+  vfile="$out/.sweep-version"
+  if [ ! -f "$vfile" ] || [ "$(cat "$vfile")" != "$PASCLAW_VERSION" ]; then
+    grep -rl -F '%PASCLAW_VERSION%' --include='*.pas' --include='*.pp' "$@" 2>/dev/null | sweep_units
+    printf '%s' "$PASCLAW_VERSION" > "$vfile"
+  fi
 fi
 mv -f "$next" "$mark"

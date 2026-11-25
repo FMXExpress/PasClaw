@@ -210,9 +210,14 @@ PASCLAW_SOURCES := $(shell find src -type f \( -name '*.pas' -o -name '*.dpr' -o
 # rebuilt and the old code is linked. Once per make run, before any recipe,
 # drop the units whose sources changed since the previous run started.
 # See scripts/sweep-stale-units.sh; pinned by test-stale-units.
-STALE_UNIT_SWEEP := $(shell sh scripts/sweep-stale-units.sh $(BUILDDIR)/lib src)
+STALE_UNIT_SWEEP := $(shell PASCLAW_VERSION='$(VERSION)' sh scripts/sweep-stale-units.sh $(BUILDDIR)/lib src)
 
-$(BIN): $(WEBUI_RES) $(PASCLAW_SOURCES) | $(BUILDDIR) $(INDY_DIR)
+# The sweep rewrites .sweep-version only when the version changed, so a
+# commit that touched no source (docs only) still relinks with the new
+# version string. The empty rule keeps make quiet if the file is missing.
+$(BUILDDIR)/lib/.sweep-version: ;
+
+$(BIN): $(WEBUI_RES) $(PASCLAW_SOURCES) $(BUILDDIR)/lib/.sweep-version | $(BUILDDIR) $(INDY_DIR)
 	@mkdir -p $(BUILDDIR)/lib
 	PASCLAW_VERSION='$(VERSION)' $(FPC) $(FPCFLAGS) src/pasclaw/PasClaw.dpr -o$(BIN)
 

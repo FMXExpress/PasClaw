@@ -86,4 +86,24 @@ sh "$here/sweep-stale-units.sh" "$dir/rlib" "$dir/rsrc"
 [ ! -f "$dir/rlib/w.ppu" ] && [ ! -f "$dir/rlib/w.o" ] || { echo "FAIL: a changed .res left the unit that includes it compiled"; exit 1; }
 [ -f "$dir/rlib/v.ppu" ] || { echo "FAIL: a changed .res swept a unit that does not include it"; exit 1; }
 echo "  ok: a changed .res sweeps the unit that includes it, and only that one"
+
+# The version comes from $PASCLAW_VERSION at compile time; FPC alone keeps
+# the old one when only the variable changed. A sweep that is passed a new
+# version sweeps the unit that reads it; the same version again keeps it.
+mkdir -p "$dir/vsrc" "$dir/vlib"
+printf 'unit vu;\n{$MODE DELPHI}\ninterface\nfunction V: string;\nimplementation\nfunction V: string; begin Result := {$I %%PASCLAW_VERSION%%}; end;\nend.\n' > "$dir/vsrc/vu.pas"
+printf 'program vp;\nuses vu;\nbegin WriteLn(V); end.\n' > "$dir/vp.pas"
+vbuild() {
+  PASCLAW_VERSION=$1 "$FPC" -Fu"$dir/vsrc" -FU"$dir/vlib" -FE"$dir" "$dir/vp.pas" > "$dir/fpc.log" 2>&1 || { cat "$dir/fpc.log"; exit 1; }
+  "$dir/vp"
+}
+PASCLAW_VERSION=v1 sh "$here/sweep-stale-units.sh" "$dir/vlib" "$dir/vsrc"
+[ "$(vbuild v1)" = v1 ] || { echo "FAIL: first version build"; exit 1; }
+[ "$(vbuild v2)" = v1 ] && echo "  ok: FPC alone keeps the old version string"
+PASCLAW_VERSION=v2 sh "$here/sweep-stale-units.sh" "$dir/vlib" "$dir/vsrc"
+got=$(vbuild v2)
+[ "$got" = v2 ] || { echo "FAIL: after a sweep with a new version the build still says '$got'"; exit 1; }
+PASCLAW_VERSION=v2 sh "$here/sweep-stale-units.sh" "$dir/vlib" "$dir/vsrc"
+[ -f "$dir/vlib/vu.ppu" ] || { echo "FAIL: the same version again swept the unit"; exit 1; }
+echo "  ok: a new version sweeps the unit that reads it; the same one keeps it"
 echo PASS
