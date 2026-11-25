@@ -143,6 +143,10 @@ Conversations are kept — only the `meta.stats` block of each session file is e
 
 The gateway's own stateless API endpoints (`/v1/chat`, `/v1/chat/completions`, `/v1/responses`) accumulate into per-endpoint synthetic session files (`_gateway_v1_chat.json`, `_gateway_v1_chat_completions.json`, `_gateway_v1_responses.json`) so calls driven through the web UI chat or any other OpenAI/Anthropic-compatible client also show up in `/v1/stats`. Each endpoint gets one bucket regardless of model — `Meta.Model` tracks the most recent request's model, so the `by_model` rollup reflects the latest call rather than per-call breakdown for those buckets. Concurrent gateway requests serialise the bucket update through a single critical section.
 
+### Advisor buckets
+
+Calls to the [advisor](./advisor.md) are counted in buckets of their own, one per advisor provider and model (`_gateway_advisor_<provider>-<model>-<hash>.json`, one turn per consultation), on every surface. `by_model` and `by_provider` therefore show the advisor's tokens under the advisor's model instead of adding them to the session that asked. They share the gateway buckets' prefix, so session lists hide them and a reset deletes them.
+
 ### Web UI Stats tab
 
 `pasclaw gateway` serves a Stats tab that auto-refreshes every 10s and renders the cards + rollup tables. When `stats_collection_enabled: false` the panel shows a hint pointing at the config flag rather than a wall of zeros. **Reset totals** asks first, then sets every counter back to zero (see [Resetting the totals](#resetting-the-totals)).

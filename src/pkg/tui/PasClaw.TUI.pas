@@ -372,6 +372,7 @@ uses
                                      `pasclaw init` on the CLI. }
   PasClaw.Markdown.Render,
   PasClaw.Providers.Catalog,       { TProviderSpec -- for TModelRefreshThread }
+  PasClaw.Agent.Advisor,           { /advisor -- the second model the agent consults }
   PasClaw.Agent.AutoRouter.Apply   { ApplyAutoRoute -- cheap per-turn routing.
                                      PasClaw.Config moved to the interface uses
                                      (TConfig is now referenced by the TTUI
@@ -1905,7 +1906,7 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /tasks /undo [N] /redo [N] /mode [plan|build|improve]')
+      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /tasks /undo [N] /redo [N] /mode [plan|build|improve] /advisor [off|on|model]')
     else if Text = '/mode' then
       Flash('mode: ' + ModeName(FMode) + '  (Tab in chat to cycle; /mode plan|build|improve)')
     (* Through ParseMode, not a list of literals.
@@ -1934,6 +1935,10 @@ begin
     end
     else if (Text = '/tools') and (FRegistry <> nil) then
       Flash(Format('registered tools: %d', [FRegistry.Count]))
+    { The registry asks the advisor settings on every lookup, so the tool
+      appears or goes with the next request. }
+    else if (Text = '/advisor') or (Copy(Text, 1, 9) = '/advisor ') then
+      Flash(AdvisorCommand(Copy(Text, 10, MaxInt)))
     else if Text = '/theme' then
       OpenThemeMenu
     else if Text = '/model' then
@@ -3035,6 +3040,7 @@ begin
   PrintLn('  /undo [N]      rewind file-edits over the last N turns (default 1)');
   PrintLn('  /redo [N]      replay the last N undone snapshots (zpaq backend only)');
   PrintLn('  /init [flags]  generate a starter AGENTS.md for this project');
+  PrintLn('  ' + AdvisorCommandHelp);
   PrintLn('  /quit          exit');
 end;
 
@@ -3156,6 +3162,11 @@ begin
   if (Cmd = '/init') or (Copy(Cmd, 1, 6) = '/init ') then
   begin
     HandleInitCommand(Copy(Cmd, 7, MaxInt));
+    Exit;
+  end;
+  if (Cmd = '/advisor') or (Copy(Cmd, 1, 9) = '/advisor ') then
+  begin
+    PrintLn(AdvisorCommand(Copy(Cmd, 10, MaxInt)));
     Exit;
   end;
   if (Cmd = '/redo') or (Copy(Cmd, 1, 6) = '/redo ') then

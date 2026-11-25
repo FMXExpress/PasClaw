@@ -66,6 +66,7 @@ uses
   PasClaw.Cron.Scheduler,
   PasClaw.Stream.Reliability,
   PasClaw.Agent.SubagentBg,   { RegisterSubagentTools -- spawn on the gateway loop }
+  PasClaw.Agent.Advisor,      { advisor tool + --advisor / --no-advisor }
   PasClaw.Gateway.Server,
   PasClaw.Channels.Telegram,
   PasClaw.Channels.LINE,
@@ -253,6 +254,8 @@ var
   BackendDesc, ShellSessionId: string;
   ProfileName: string;
   pi: Integer;
+  AdvisorSpec: string;
+  NoAdvisor: Boolean;
 begin
   { Pre-scan for --profile so LoadConfig sees it. Profile selection
     has its own precedence chain (CLI > PASCLAW_PROFILE > config.json
@@ -289,6 +292,14 @@ begin
   ShellSessionId := '';
   try
     Args := ParseGw(Argv, Cfg);
+    { The advisor: config, then --advisor / --no-advisor, for every request
+      this process serves. }
+    if not (ParseAdvisorFlags(Argv, AdvisorSpec, NoAdvisor, Err) and
+            ApplyAdvisorFlags(Cfg, AdvisorSpec, NoAdvisor, Err)) then
+    begin
+      PrintErr(FormatCLIError(Err, 'pasclaw gateway'));
+      Exit(2);
+    end;
     { Install the configured shell backend so shell_exec / execute_code run
       where the operator asked -- including docker. The gateway uses ONE
       container for the whole process (like the TUI): every request /
@@ -358,6 +369,9 @@ begin
         RegisterOutputCacheTool(Reg);
       { send_message self-gates on Cfg.Channels. Codex P2 on PR #230. }
       RegisterSendMessageTool(Reg);
+      { advisor: listed while an advisor model is set (config.json's
+        "advisor", or --advisor). }
+      RegisterAdvisorTool(Reg, Cfg);
       if Cfg.CronToolEnabled then RegisterCronTool(Reg);
       (* The SCREEN tool, always. It arranges windows in a browser --
          it does nothing at all without a desktop connected, and it is

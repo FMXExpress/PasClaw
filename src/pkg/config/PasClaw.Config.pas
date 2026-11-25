@@ -674,6 +674,25 @@ type
     GoogleSearch: Boolean;
   end;
 
+  (* "advisor": a second model the agent can consult mid-task through the
+     `advisor` tool (PasClaw.Agent.Advisor). Off while Model is empty --
+     there is no sensible default model to send a transcript to.
+     MaxCallsPerTurn bounds how often one user turn may ask (each call is a
+     request carrying the transcript); MaxContextChars bounds the transcript
+     sent, keeping the most recent part. *)
+  TAdvisorConfig = record
+    Provider:        string;    { a providers[] name; '' = default_provider }
+    Model:           string;    { '' = no advisor }
+    MaxCallsPerTurn: Integer;
+    MaxContextChars: Integer;
+  end;
+
+const
+  AdvisorDefaultMaxCallsPerTurn = 3;
+  AdvisorDefaultMaxContextChars = 60000;
+
+type
+
   TConfig = class
   public
     DefaultProvider: string;
@@ -1137,6 +1156,7 @@ type
     AnthropicServerTools: TAnthropicServerToolsConfig;
     OpenAIServerTools:    TOpenAIServerToolsConfig;
     GeminiServerTools:    TGeminiServerToolsConfig;
+    Advisor:              TAdvisorConfig;
     StreamReliability:    TStreamReliabilityConfig;
     (* Agent-authored / self-improving skills. All sub-switches
        default off -- see TSelfImprovingSkillsConfig. *)
@@ -1622,6 +1642,10 @@ begin
     (gemini-3.5-flash) accepts the field. See the type comment for
     the model-compat caveat. }
   GeminiServerTools.GoogleSearch        := True;
+  Advisor.Provider        := '';
+  Advisor.Model           := '';   { off until a model is named }
+  Advisor.MaxCallsPerTurn := AdvisorDefaultMaxCallsPerTurn;
+  Advisor.MaxContextChars := AdvisorDefaultMaxContextChars;
   { Stream reliability defaults match the UltraCode-Shim shipping
     config -- conservative enough that operators on healthy
     backends never notice, aggressive enough to recover the
@@ -2193,6 +2217,19 @@ begin
     Tmp := TJsonObject.Create;
     Tmp.PutBool('google_search', GeminiServerTools.GoogleSearch);
     Root.PutObject('gemini_server_tools', Tmp);
+
+    { advisor: provider and model always, so the web UI's Settings form --
+      which renders exactly the keys GET /v1/config returns -- has the two
+      fields an operator must fill in to turn it on. The two limits only
+      once changed, so a stock config does not pin today's defaults. }
+    Tmp := TJsonObject.Create;
+    Tmp.PutStr('provider', Advisor.Provider);
+    Tmp.PutStr('model',    Advisor.Model);
+    if Advisor.MaxCallsPerTurn <> AdvisorDefaultMaxCallsPerTurn then
+      Tmp.PutInt('max_calls_per_turn', Advisor.MaxCallsPerTurn);
+    if Advisor.MaxContextChars <> AdvisorDefaultMaxContextChars then
+      Tmp.PutInt('max_context_chars', Advisor.MaxContextChars);
+    Root.PutObject('advisor', Tmp);
 
     { Emit stream_reliability only when at least one knob differs
       from the defaults -- keeps stock configs tidy. The reader
@@ -2944,6 +2981,19 @@ begin
     try
       GeminiServerTools.GoogleSearch :=
         Obj.GetBool('google_search', GeminiServerTools.GoogleSearch);
+    finally
+      Obj.Free;
+    end;
+
+    Obj := Root.ChildObject('advisor');
+    if Obj <> nil then
+    try
+      Advisor.Provider := Trim(Obj.GetStr('provider', Advisor.Provider));
+      Advisor.Model    := Trim(Obj.GetStr('model',    Advisor.Model));
+      Advisor.MaxCallsPerTurn :=
+        Integer(Obj.GetInt('max_calls_per_turn', Advisor.MaxCallsPerTurn));
+      Advisor.MaxContextChars :=
+        Integer(Obj.GetInt('max_context_chars', Advisor.MaxContextChars));
     finally
       Obj.Free;
     end;

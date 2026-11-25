@@ -247,6 +247,13 @@ begin
               IntToStr(A.SelfImprovingSkills.Distiller.MinToolCalls),
               IntToStr(B.SelfImprovingSkills.Distiller.MinToolCalls));
   AddRow(Rows, 'auto_router.enabled',      BoolStr(A.AutoRouter.Enabled),   BoolStr(B.AutoRouter.Enabled));
+  { A profile may carry an advisor (a "review" profile that consults a
+    second model); the diff should say so. }
+  AddRow(Rows, 'advisor.provider',         A.Advisor.Provider,              B.Advisor.Provider);
+  AddRow(Rows, 'advisor.model',            A.Advisor.Model,                 B.Advisor.Model);
+  AddRow(Rows, 'advisor.max_calls_per_turn',
+              IntToStr(A.Advisor.MaxCallsPerTurn),
+              IntToStr(B.Advisor.MaxCallsPerTurn));
   AddRow(Rows, 'prompt_cache.enabled',     BoolStr(A.PromptCache.Enabled),  BoolStr(B.PromptCache.Enabled));
   AddRow(Rows, 'prompt_cache.ttl',         A.PromptCache.TTL,               B.PromptCache.TTL);
   AddRow(Rows, 'sandbox.restrict_to_workspace',

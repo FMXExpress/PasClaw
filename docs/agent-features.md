@@ -30,6 +30,7 @@ row is weak evidence while presence is strong.
 | State machine constraining tools per phase | statewright [S] | ⚠️ mode gates, not per-phase [P] |
 | Parallel tool dispatch | common [S] | ✅ read-only batching [P] |
 | Subagent fan-out via orchestration scripts | AgentSPEX, JS orchestration [S] | ✅ `spawn*` [P] |
+| Advisor model the agent consults mid-task | Claude Code Advisor tool, OpenClaw Advisor (experimental) [K] | ✅ `advisor` tool, on request only [P] |
 | Loop-detection middleware | [S] | ❌ iteration cap only [P] |
 
 ## 2. Context management & compaction

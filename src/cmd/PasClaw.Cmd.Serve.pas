@@ -62,6 +62,7 @@ uses
   PasClaw.Tools.DelphiBuild,
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.SendMessage,
+  PasClaw.Agent.Advisor,          { advisor tool + --advisor / --no-advisor }
   PasClaw.Tools.Cron,             { cron tool -- gated on cron_tool_enabled }
   PasClaw.Projects.Tools,         { project / task -- the desktop board }
   PasClaw.Projects.Store,         { SetClaimLeaseMinutes }
@@ -165,6 +166,8 @@ var
   KindSelected: TShellBackendKind;
   BackendDesc, ShellSessionId, ProfileName: string;
   pi: Integer;
+  AdvisorSpec: string;
+  NoAdvisor: Boolean;
 begin
   { Pre-scan for --profile so LoadConfig sees it. Same shape as
     Cmd.Gateway -- precedence stays CLI > PASCLAW_PROFILE > config.json
@@ -195,6 +198,14 @@ begin
   Scheduler := nil;   { so the finally is safe if we Exit before starting it }
   try
     Args := ParseServe(Argv, Cfg);
+    { The advisor: config, then --advisor / --no-advisor, for every request
+      this process serves. }
+    if not (ParseAdvisorFlags(Argv, AdvisorSpec, NoAdvisor, Err) and
+            ApplyAdvisorFlags(Cfg, AdvisorSpec, NoAdvisor, Err)) then
+    begin
+      PrintErr(FormatCLIError(Err, 'pasclaw serve'));
+      Exit(2);
+    end;
     { Install the active shell backend so shell_exec / execute_code run on
       the backend the operator configured -- including docker. serve uses
       ONE container for the whole process (like the TUI): every /v1 request
@@ -273,6 +284,9 @@ begin
         RegisterOutputCacheTool(Reg);
       { send_message self-gates on Cfg.Channels. Codex P2 on PR #230. }
       RegisterSendMessageTool(Reg);
+      { advisor: listed while an advisor model is set (config.json's
+        "advisor", or --advisor). }
+      RegisterAdvisorTool(Reg, Cfg);
       { cron tool: opt-in (model-scheduled background jobs). Runs existing
         skills only; the running scheduler picks up its config edits live. }
       if Cfg.CronToolEnabled then RegisterCronTool(Reg);

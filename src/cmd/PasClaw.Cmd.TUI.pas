@@ -51,6 +51,7 @@ uses
   PasClaw.Skills.Disclosure,
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg,
+  PasClaw.Agent.Advisor,           { advisor tool + --advisor / --no-advisor }
   PasClaw.Session.Store,           { NewSessionId -- stable per-launch id for
                                      the TUI's single shell container }
   PasClaw.TUI;
@@ -67,6 +68,8 @@ type
     BackendOverride: string;
     Profile:         string;   { --profile <name>; PR #291 }
     Attach:          Boolean;  { --attach: client of the running gateway (line mode) }
+    Advisor:         string;   { --advisor <[provider:]model> }
+    NoAdvisor:       Boolean;  { --no-advisor }
   end;
 
 function ParseArgs(const Argv: array of string; var A: TTUIArgs): Boolean;
@@ -74,10 +77,15 @@ var
   i: Integer;
 begin
   Result := True;
+  { Whole-record zero first, as DefaultAgentArgs does: Attach was never
+    assigned here, so it held whatever the caller's stack did -- and a
+    stray True sent a plain `pasclaw tui` looking for a gateway. }
+  A := Default(TTUIArgs);
   A.Model := ''; A.Provider := ''; A.Session := ''; A.Theme := '';
   A.NoMCP := False; A.NoTools := False; A.NoHashline := False;
   A.BackendOverride := '';
   A.Profile := '';
+  A.Advisor := ''; A.NoAdvisor := False;
   i := 0;
   while i <= High(Argv) do
   begin
@@ -91,6 +99,8 @@ begin
     if Argv[i] = '--no-hashline'  then begin A.NoHashline := True; Inc(i); Continue; end;
     if Argv[i] = '--attach'       then begin A.Attach     := True; Inc(i); Continue; end;
     if Argv[i] = '--profile'      then begin if i = High(Argv) then Exit(False); A.Profile  := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--advisor'      then begin if i = High(Argv) then Exit(False); A.Advisor  := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--no-advisor'   then begin A.NoAdvisor  := True; Inc(i); Continue; end;
     Inc(i);
   end;
 end;
@@ -140,6 +150,7 @@ begin
       if A.NoHashline then Unsupported := Unsupported + '--no-hashline, ';
       if A.BackendOverride <> '' then Unsupported := Unsupported + '--backend, ';
       if A.Profile <> '' then Unsupported := Unsupported + '--profile, ';
+      if (A.Advisor <> '') or A.NoAdvisor then Unsupported := Unsupported + '--advisor/--no-advisor, ';
       if Unsupported <> '' then
       begin
         SetLength(Unsupported, Length(Unsupported) - 2);
@@ -157,6 +168,14 @@ begin
     PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + AttachReason);
     Cfg.Free;
     Exit(1);
+  end;
+  { The advisor: config, then --advisor / --no-advisor; /advisor in the
+    chat changes it from there. }
+  if not ApplyAdvisorFlags(Cfg, A.Advisor, A.NoAdvisor, Err) then
+  begin
+    PrintErr(FormatCLIError(Err, 'pasclaw tui'));
+    Cfg.Free;
+    Exit(2);
   end;
   ConfigureSandbox(Cfg.Sandbox, '');
   { Docker backend: the TUI runs ONE container for its whole process,
@@ -249,6 +268,9 @@ begin
         notification tool is silently missing on the surface the
         operator actually uses. }
       RegisterSendMessageTool(Reg);
+      { advisor: listed while an advisor model is set (config, --advisor,
+        /advisor). }
+      RegisterAdvisorTool(Reg, Cfg);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }
       RegisterSkillManageTool(Reg, Cfg);

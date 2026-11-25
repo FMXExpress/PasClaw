@@ -14,6 +14,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 
 - [Providers](./providers.md) — the 19-entry catalog (Anthropic / OpenAI / Gemini / Groq / DeepSeek / OpenRouter / Ollama / vLLM / ...), fallback chain, prompt caching.
 - [Tools](./tools.md) — built-in tools the model sees on every turn (`fs_read`, `fs_write`, `fs_grep`, `shell_exec`, `web_search`, `web_fetch`, `memory_search`, `session_search`, `kb_*`, `vault_*`, `send_message`, `execute_code`, `spawn`, `tool_output_get`).
+- [Advisor](./advisor.md) — a second model the agent consults mid-task through the `advisor` tool: `advisor.*` config, `--advisor` / `--no-advisor`, `/advisor`, what it is sent, the per-turn cap.
 - [Web search](./web-search.md) — `web_search` / `web_fetch` providers and configuration.
 - [Memory](./memory.md) — the three tiers, the always-loaded budget, `workspace/memory/`, FTS5 + hybrid vector backend, `memory_fetch`.
 - [Maintenance](./maintenance.md) — `pasclaw maintain`: the nightly pass that sweeps facts, sizes the core memory, audits skills and reviews the day.

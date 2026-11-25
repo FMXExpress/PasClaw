@@ -355,6 +355,25 @@ type
   to the session that started it. }
 function CurrentDispatchDrainKey: string;
 
+(* The conversation of the turn dispatching on this thread, for a tool that
+   reads the work so far rather than the outside world -- the advisor, which
+   hands it to a second model. Hist is a copy of the loop's running history:
+   the turn's messages up to and including the assistant message that made
+   the call. Results of the calls in that same round are not in it yet.
+
+   False, with Hist empty, outside a tool loop's own dispatch: an
+   execute_code script's RPC call, a workflow step, an MCP client, a test
+   calling RunTool directly. Those have no conversation to hand over. *)
+function CurrentDispatchHistory(out Hist: TMessageArray): Boolean;
+
+(* Count one more use of Key in the turn dispatching on this thread and
+   return the new count -- 1 the first time. A turn is one RunToolLoop call:
+   the next user message starts at zero again, and a subagent's loop counts
+   on its own. Calls running side by side in one parallel batch each count
+   once. 0 outside a tool loop's own dispatch (see CurrentDispatchHistory).
+   For a tool with a per-turn budget: the advisor's max_calls_per_turn. *)
+function BumpTurnCounter(const Key: string): Integer;
+
 { An IToolDispatcher applying this loop's gates (see PasClaw.Tools.Registry.
   IToolDispatcher). The RPC path obtains one via GCaptureDispatcher inside a
   dispatch; this is the direct constructor for tests. }
@@ -472,6 +491,7 @@ function StripTurnClock(const S: string): string;
 implementation
 
 uses
+  SyncObjs,                 { TCriticalSection -- TDispatchTurn's counters }
   PasClaw.Logger,
   PasClaw.JSON,
   PasClaw.Hashline,
@@ -516,12 +536,61 @@ begin
 end;
 
 type
+  (* What a tool can learn about the turn it runs in (CurrentDispatchHistory,
+     BumpTurnCounter). One per RunToolLoop call, owned by it.
+
+     Hist points at RunToolLoop's own history variable rather than holding a
+     copy, so a turn that never calls such a tool pays nothing. Reading it
+     from a tool is safe because nothing writes the history while tools run:
+     the loop thread either runs the call itself or waits for the batch's
+     workers, and appends results only after they have all joined. *)
+  TDispatchTurn = class
+  private
+    FLock: TCriticalSection;
+    FCounts: TStringList;    { Key=count, guarded by FLock: parallel workers bump it }
+  public
+    Hist: ^TMessageArray;
+    constructor Create;
+    destructor Destroy; override;
+    function Bump(const Key: string): Integer;
+  end;
+
+constructor TDispatchTurn.Create;
+begin
+  inherited Create;
+  FLock := TCriticalSection.Create;
+  FCounts := TStringList.Create;
+end;
+
+destructor TDispatchTurn.Destroy;
+begin
+  FCounts.Free;
+  FLock.Free;
+  inherited Destroy;
+end;
+
+function TDispatchTurn.Bump(const Key: string): Integer;
+begin
+  FLock.Acquire;
+  try
+    Result := StrToIntDef(FCounts.Values[Key], 0) + 1;
+    FCounts.Values[Key] := IntToStr(Result);
+  finally
+    FLock.Release;
+  end;
+end;
+
+type
   { Per-call work unit. The same record is filled in by a worker thread
     (parallel) or by an inline call (serial), then read by the main
     loop to append the tool_result to history. Workers never touch the
     history array directly -- race-free by construction. }
   TToolCallDispatch = record
     Call:       TToolCall;
+    { The turn this call belongs to, published to the handler's thread for
+      CurrentDispatchHistory / BumpTurnCounter. nil on the paths that have
+      no turn (the script RPC and workflow dispatchers). }
+    Turn:       TDispatchTurn;
     ResultText: string;
     Err:        string;
     { Set True when a BeforeToolCall hook short-circuited the tool;
@@ -850,11 +919,30 @@ threadvar
      RunToolLoop's frame; valid only while the handler runs, which is the
      only time it is read. *)
   GDispatchingCfg: PToolLoopConfig;
+  { The turn of the dispatch in flight on this thread, beside the config
+    above and with the same lifetime: set for the duration of the handler. }
+  GDispatchingTurn: TDispatchTurn;
 
 function CurrentDispatchDrainKey: string;
 begin
   if GDispatchingCfg = nil then Result := ''
   else Result := GDispatchingCfg^.BackgroundDrainKey;
+end;
+
+function CurrentDispatchHistory(out Hist: TMessageArray): Boolean;
+var
+  T: TDispatchTurn;
+begin
+  Hist := nil;
+  T := GDispatchingTurn;
+  Result := (T <> nil) and (T.Hist <> nil);
+  if Result then Hist := Copy(T.Hist^, 0, Length(T.Hist^));
+end;
+
+function BumpTurnCounter(const Key: string): Integer;
+begin
+  if GDispatchingTurn = nil then Result := 0
+  else Result := GDispatchingTurn.Bump(Key);
 end;
 
 { True = proceed. False = refused; Refusal holds the tool result. }
@@ -1005,6 +1093,7 @@ var
   ArgsObj: TJsonObject;
   HasUnsup: Boolean;
   SavedCfg: PToolLoopConfig;
+  SavedTurn: TDispatchTurn;
   SavedWs, SavedSid: string;
   SavedGate: Boolean;
 begin
@@ -1016,6 +1105,10 @@ begin
   SetActiveConfig(Cfg.ActiveConfig);
   SavedCfg := GDispatchingCfg;
   GDispatchingCfg := @Cfg;
+  { The turn, the same way. Saved and restored rather than cleared, like
+    the config pointer: a tool that dispatches others nests. }
+  SavedTurn := GDispatchingTurn;
+  GDispatchingTurn := D.Turn;
   SavedGate := DispatchGatePassed;
   SetDispatchGatePassed(False);
   SavedWs := ThreadSandboxWorkspace;
@@ -1100,6 +1193,7 @@ begin
     SetDispatchGatePassed(SavedGate);
     if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(SavedWs);
     if Cfg.ShellSessionId <> '' then SetThreadShellSessionId(SavedSid);
+    GDispatchingTurn := SavedTurn;
     GDispatchingCfg := SavedCfg;
     SetActiveConfig(nil);
   end;
@@ -2115,6 +2209,7 @@ var
   Truncated: Boolean;
   SavedSpaceGate: Boolean;   { SPACE gate: caller's value, restored in finally }
   TurnSpan, ChatSpan, ToolSpan: TOtelSpan;
+  Turn: TDispatchTurn;       { what this turn's tools may read: CurrentDispatchHistory }
 begin
   (* Clear the WHOLE result, not the handful of fields this used to
      name. `out` finalises the managed fields and leaves the rest
@@ -2150,6 +2245,8 @@ begin
     the span. TurnSpan is nil when OTel is off; all Set/Finish
     helpers tolerate nil. }
   TurnSpan := StartSpan('openclaw.agent.turn', oskInternal, '');
+  Turn := TDispatchTurn.Create;
+  Turn.Hist := @Hist;
   try
     SetAttrStr(TurnSpan, 'gen_ai.request.model',  Cfg.Model);
     SetAttrStr(TurnSpan, 'gen_ai.operation.name', 'chat');
@@ -2835,6 +2932,7 @@ begin
     for i := 0 to High(Resp.ToolCalls) do
     begin
       Dispatches[i].Call       := Resp.ToolCalls[i];
+      Dispatches[i].Turn       := Turn;
       Dispatches[i].ResultText := '';
       Dispatches[i].Err        := '';
       Dispatches[i].Cancelled  := False;
@@ -3198,6 +3296,9 @@ begin
     if not Result then SetStatus(TurnSpan, oscError, 'agent turn returned false');
     FinishSpan(TurnSpan);
     GSpacePlanDone := SavedSpaceGate;
+    { Every batch has joined by now (a parallel batch waits for all its
+      workers), so no handler still holds it. }
+    Turn.Free;
   end;
 end;
 

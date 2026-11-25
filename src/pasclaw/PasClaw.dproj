@@ -334,6 +334,7 @@
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Steering.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.AutoRouter.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Goals.pas"/>
+        <DCCReference Include="..\pkg\agent\PasClaw.Agent.Advisor.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Orient.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Heartbeat.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Promptware.pas"/>

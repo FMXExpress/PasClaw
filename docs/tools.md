@@ -28,6 +28,7 @@ PasClaw exposes a fixed set of tools to the model on every turn (plus MCP-bridge
 | `spawn_background` | Same, asynchronous. Returns a handle; parent loop keeps working. |
 | `spawn_status` / `spawn_wait` / `spawn_cancel` | Manage background-subagent handles. |
 | `worktree_create` / `worktree_list` / `worktree_remove` | Git worktrees: a separate checkout per parallel task. `spawn*` take `worktree: "<branch>"` to run a subagent inside one. |
+| `advisor` | Ask a second model for a second opinion: it gets a condensed transcript of the conversation and the question, runs no tools, answers briefly. Listed only while an advisor model is set. See [Advisor](./advisor.md). |
 | `skill_<name>` | Pascal-side tools registered from `kind: shell` / `kind: prompt` skills. |
 | MCP-bridged | Every tool a configured MCP server exports — see [MCP servers](./mcp.md). |
 
@@ -156,6 +157,10 @@ Optional `worktree: "<branch>"` runs the child inside a git worktree for that br
 ### `spawn_background(agent, prompt)` (asynchronous)
 
 Returns a handle and the parent loop keeps working. When the job finishes its result is pushed into the next loop iteration as a `[background subagent results]` block in the system prompt (same channel `pasclaw steer` uses). Companion tools: `spawn_status(handle)`, `spawn_wait(handle, timeout_sec)`, `spawn_cancel(handle)`; a cancelled subagent stops at its next step (a model call already in flight finishes first) and its result is discarded. Up to `background_jobs_max` (6) concurrent jobs per session. Jobs die with the session — coordinator teardown abandons still-running workers and they self-free. The last 50 finished jobs are kept for `spawn_status` / `spawn_wait` and the gateway's **Background** tab, which shows each one's transcript or output and can stop a job or send a finished subagent a follow-up ([gateway.md](gateway.md#v1background--background-jobs)). Takes the same `worktree` argument as `spawn`.
+
+## `advisor(question)`
+
+A second model the agent consults mid-task. The tool is listed only while an advisor model is set (`advisor.model` in config, `--advisor` on the command line, or `/advisor <model>` in the REPL or TUI). Each call sends the advisor a system prompt that makes it a brief second-opinion reviewer, a condensed transcript of the current conversation (user and assistant text, tool calls with arguments, tool results; the oldest part cut to `advisor.max_context_chars`, with a note) and the question, with no tools; the advisor's answer is the tool result. Read-only, so it runs in plan mode and in parallel batches. At most `advisor.max_calls_per_turn` (3) calls per user turn; the next one is refused with a message saying so. Subagents inherit it through `"tools": ["*"]` and get their own cap per turn. It works only as a direct tool call — a script's `tool advisor` or a workflow step has no conversation to give it. See [Advisor](./advisor.md).
 
 ## Git worktrees
 
