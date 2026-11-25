@@ -496,7 +496,7 @@ var
   Src, R: TMessageArray;
   i: Integer;
   T: Boolean;
-  Big: string;
+  Big, Cut: string;
   O: TJsonObject;
 begin
   { 1 task + 150 rounds of (assistant with a call, tool result) = 301 }
@@ -530,8 +530,14 @@ begin
   Src[2] := MakeMessage(mrTool, Big);
   R := BoundTranscript(Src, T);
   AssertTrue(T, 'trimmed when cut');
-  AssertTrue(Length(R[2].Content) < BgTranscriptMsgChars + 100, 'a big message is cut');
-  AssertContains(R[2].Content, '[cut: 500 more characters]', 'and says how much');
+  AssertTrue(Length(R[2].Content) <= BgTranscriptMsgChars, 'a big message is cut, marker included');
+  AssertContains(R[2].Content, '[cut: 564 more characters]', 'and says how much');
+  { The live transcript is bounded again on every append: a second pass
+    must leave a cut message as it is, marker and count included. }
+  Cut := R[2].Content;
+  R := BoundTranscript(R, T);
+  AssertEq(R[2].Content, Cut, 'cutting again changes nothing');
+  AssertTrue(not T, 'and reports nothing trimmed');
   AssertTrue(Length(R[1].ToolCalls[0].Func.Arguments) < BgTranscriptArgChars, 'big arguments shrink');
   O := TJsonObject.Parse(R[1].ToolCalls[0].Func.Arguments);
   AssertTrue(O <> nil, 'and stay JSON');

@@ -503,10 +503,15 @@ begin
 end;
 
 function CutText(const S: string; MaxLen: Integer): string;
+{ At most MaxLen characters with the marker: the live transcript is bounded
+  again on every append, and a text that came out longer than the cap would
+  be cut a second time, its marker then counting only the old marker. }
+var
+  Head: string;
 begin
   if Length(S) <= MaxLen then Exit(S);
-  Result := Utf8SafeTruncate(S, MaxLen) +
-            Format(#10'... [cut: %d more characters]', [Length(S) - MaxLen]);
+  Head := Utf8SafeTruncate(S, MaxLen - 64);
+  Result := Head + Format(#10'... [cut: %d more characters]', [Length(S) - Length(Head)]);
 end;
 
 function BoundTranscript(const Msgs: TMessageArray; out Trimmed: Boolean): TMessageArray;
@@ -540,8 +545,9 @@ begin
         Args := Msgs[i].ToolCalls[j].Func.Arguments;
         if Length(Args) > BgTranscriptArgChars then
         begin
+          { Unchanged when no single field is over the threshold. }
           Result[i].ToolCalls[j].Func.Arguments := ElideLargeToolArgs(Args, BgTranscriptArgChars);
-          Trimmed := True;
+          if Result[i].ToolCalls[j].Func.Arguments <> Args then Trimmed := True;
         end;
       end;
     end;
