@@ -16,17 +16,32 @@
     2. GET <auth-server>/.well-known/oauth-authorization-server --
        discover the authorization, token, and (optional) registration
        endpoints.
-    3. If no client_id stored, POST to registration_endpoint as a
-       public client with the loopback redirect_uri. Persist the
-       returned client_id.
+    3. Get a client_id, in the order MCP 2026-07-28 asks for:
+       - Client ID Metadata Document: when the authorization server
+         advertises client_id_metadata_document_supported AND the operator
+         configured mcp_oauth_client_metadata_url, that HTTPS URL is the
+         client_id. Nothing is registered.
+       - Dynamic Client Registration (deprecated, kept for servers without
+         CIMD): POST to registration_endpoint as a public "native" client
+         (application_type -- OIDC servers otherwise assume "web" and
+         reject a loopback redirect) with the loopback redirect_uri. The
+         registration is stored with the issuer that made it and reused
+         only with that issuer and the same redirect_uri; when the
+         protected resource points at another authorization server, the
+         old client is not used and a new one is registered.
     4. Generate a 64-byte URL-safe code_verifier, derive
        code_challenge = BASE64URL(SHA256(verifier)), and a 32-byte
        state nonce.
     5. Stand up a one-shot TIdHTTPServer on a free loopback port,
        then shell-out the browser to the authorize URL.
     6. Browser → user consents → server redirects to
-       http://127.0.0.1:<port>/cb?code=...&state=...; the loopback
-       server captures code+state and unblocks the wait.
+       http://127.0.0.1:<port>/cb?code=...&state=...&iss=...; the loopback
+       server captures the parameters and unblocks the wait. Before the
+       code is used, RFC 9207: a present `iss` must equal the issuer
+       recorded from the server metadata (exact string comparison), and
+       when the metadata says authorization_response_iss_parameter_supported
+       an absent `iss` is refused too. A mismatched response's error text
+       is neither shown nor acted on -- it came from the wrong server.
     7. POST the code + verifier to token_endpoint, get back access
        + refresh tokens.
     8. Persist tokens to <home>/.pasclaw/oauth/<server-name>.json
@@ -72,15 +87,52 @@ type
       back a token whose MCP endpoint rejects as "Invalid token
       format" -- the symptom that motivated PR #138. }
     Resource:     string;
+    { The client registration ClientId belongs to: the issuer that made it
+      (credentials are bound to one authorization server), the redirect_uri
+      it was registered with, and how it was obtained -- "dcr" or "cimd". }
+    ClientIssuer:      string;
+    ClientRedirectURI: string;
+    ClientRegistration: string;
+  end;
+
+  { The parameters of the authorization redirect, as received. }
+  TAuthCallbackParams = record
+    Code:             string;
+    State:            string;
+    Iss:              string;
+    HasIss:           Boolean;
+    Error:            string;
+    ErrorDescription: string;
   end;
 
 { Run the full interactive flow for ServerName (the MCP entry name,
   used to derive the token-store path) against ServerURL (the MCP
   server's base URL, used for protected-resource discovery). Opens
   a browser tab and blocks until the loopback callback fires or the
-  timeout elapses. Returns False with ErrMsg populated on failure. }
+  timeout elapses. Returns False with ErrMsg populated on failure.
+  ClientMetadataURL is the operator's Client ID Metadata Document URL
+  (config mcp_oauth_client_metadata_url); '' = register with DCR. }
 function RunOAuthFlow(const ServerName, ServerURL: string;
-                      out ErrMsg: string): Boolean;
+                      out ErrMsg: string;
+                      const ClientMetadataURL: string = ''): Boolean;
+
+{ The checks on an authorization response, in the order they must run:
+  issuer (RFC 9207: a present iss must equal RecordedIssuer exactly; an
+  absent one is refused when IssParameterSupported), then state, then the
+  error the server reported, then the code. On success Code is the
+  authorization code to redeem. On an issuer mismatch ErrMsg does not
+  repeat the response's error text. Pure, for the unit test. }
+function ValidateAuthorizationResponse(const Cb: TAuthCallbackParams;
+  const ExpectedState, RecordedIssuer: string; IssParameterSupported: Boolean;
+  out Code, ErrMsg: string): Boolean;
+
+{ The body of a Dynamic Client Registration request (RFC 7591) for a
+  loopback redirect: a public, native client. Exposed for the unit test. }
+function ClientRegistrationBody(const RedirectURI: string): string;
+
+{ True when Tok holds a DCR registration PasClaw may reuse with Issuer:
+  same authorization server, a redirect_uri to listen on again. }
+function CanReuseClient(const Tok: TOAuthTokens; const Issuer: string): Boolean;
 
 { Returns the current access token for ServerName, refreshing it
   silently if it's within RefreshSlackSeconds of expiring and we have
@@ -229,6 +281,11 @@ begin
       Tok.RegEndpoint    := Obj.GetStr('reg_endpoint',   '');
       Tok.Resource       := Obj.GetStr('resource',       '');
       Tok.ExpiresAtUnix  := Obj.GetInt('expires_at_unix', 0);
+      { A file from before issuer binding: its client was made by the
+        issuer recorded beside it. }
+      Tok.ClientIssuer       := Obj.GetStr('client_issuer', Tok.Issuer);
+      Tok.ClientRedirectURI  := Obj.GetStr('client_redirect_uri', '');
+      Tok.ClientRegistration := Obj.GetStr('client_registration', 'dcr');
     finally
       Obj.Free;
     end;
@@ -259,6 +316,9 @@ begin
     Obj.PutStr('token_endpoint', Tok.TokenEndpoint);
     Obj.PutStr('reg_endpoint',   Tok.RegEndpoint);
     Obj.PutStr('resource',       Tok.Resource);
+    Obj.PutStr('client_issuer',       Tok.ClientIssuer);
+    Obj.PutStr('client_redirect_uri', Tok.ClientRedirectURI);
+    Obj.PutStr('client_registration', Tok.ClientRegistration);
     if Tok.ExpiresAtUnix > 0 then
       Obj.PutInt('expires_at_unix', Tok.ExpiresAtUnix);
     L := TStringList.Create;
@@ -344,6 +404,7 @@ end;
 function DiscoverEndpoints(const ServerURL: string;
                            out AuthEndpoint, TokenEndpoint, RegEndpoint,
                                Issuer, Resource: string;
+                           out IssSupported, CIMDSupported: Boolean;
                            out ErrMsg: string): Boolean;
 var
   Urls: TArray<string>;
@@ -361,6 +422,8 @@ begin
   RegEndpoint   := '';
   Issuer        := '';
   Resource      := '';
+  IssSupported  := False;
+  CIMDSupported := False;
   SetLength(Empty, 0);
 
   Urls := ProtectedResourceMetadataURLs(ServerURL);
@@ -436,6 +499,10 @@ begin
     AuthEndpoint  := AsObj.GetStr('authorization_endpoint', '');
     TokenEndpoint := AsObj.GetStr('token_endpoint', '');
     RegEndpoint   := AsObj.GetStr('registration_endpoint', '');
+    { RFC 9207: the server promises an iss on every authorization
+      response, so one without is refused. }
+    IssSupported  := AsObj.GetBool('authorization_response_iss_parameter_supported', False);
+    CIMDSupported := AsObj.GetBool('client_id_metadata_document_supported', False);
   finally
     AsObj.Free;
   end;
@@ -449,6 +516,35 @@ end;
 
 { ---------- Dynamic Client Registration (RFC 7591) ---------------- }
 
+function ClientRegistrationBody(const RedirectURI: string): string;
+var
+  O: TJsonObject;
+  A: TJsonArray;
+begin
+  O := TJsonObject.Create;
+  try
+    O.PutStr('client_name', 'PasClaw');
+    A := TJsonArray.Create;
+    A.AddStr(RedirectURI);
+    O.PutArray('redirect_uris', A);
+    A := TJsonArray.Create;
+    A.AddStr('authorization_code');
+    A.AddStr('refresh_token');
+    O.PutArray('grant_types', A);
+    A := TJsonArray.Create;
+    A.AddStr('code');
+    O.PutArray('response_types', A);
+    O.PutStr('token_endpoint_auth_method', 'none');
+    { A CLI with a loopback redirect is a native app. MCP 2026-07-28
+      requires the client to say so: OIDC registration defaults to "web",
+      whose rules refuse an http://127.0.0.1 redirect. }
+    O.PutStr('application_type', 'native');
+    Result := O.ToJSON;
+  finally
+    O.Free;
+  end;
+end;
+
 function RegisterClient(const RegEndpoint, RedirectURI: string;
                         out ClientId: string; out ErrMsg: string): Boolean;
 var
@@ -461,12 +557,7 @@ begin
   ErrMsg := '';
   ClientId := '';
   SetLength(Empty, 0);
-  Body :=
-    '{"client_name":"PasClaw",' +
-    '"redirect_uris":["' + RedirectURI + '"],' +
-    '"grant_types":["authorization_code","refresh_token"],' +
-    '"response_types":["code"],' +
-    '"token_endpoint_auth_method":"none"}';
+  Body := ClientRegistrationBody(RedirectURI);
   Resp := PostRaw(RegEndpoint, 'application/json', Body, Empty, 15, '', 'application/json');
   if Resp.ErrorMsg <> '' then
   begin
@@ -523,38 +614,146 @@ end;
 
 { ---------- Loopback callback server ------------------------------ }
 
-type
-  TCallbackResult = record
-    Code:  string;
-    State: string;
-    Error: string;
-  end;
+{ ---------- Authorization response validation (RFC 9207) -------- }
 
+function ValidateAuthorizationResponse(const Cb: TAuthCallbackParams;
+  const ExpectedState, RecordedIssuer: string; IssParameterSupported: Boolean;
+  out Code, ErrMsg: string): Boolean;
+begin
+  Result := False;
+  Code := '';
+  ErrMsg := '';
+  { Issuer first: a response from another authorization server (a mix-up
+    attack) must not be acted on at all -- not its code, and not its error
+    text either. Simple string comparison, no normalisation: RFC 9207 2.4
+    and MCP 2026-07-28 forbid case folding, port elision or trailing-slash
+    games here. }
+  if Cb.HasIss then
+  begin
+    if Cb.Iss <> RecordedIssuer then
+    begin
+      ErrMsg := Format('authorization response names issuer "%s", but the ' +
+        'authorization server is "%s" -- refusing it (RFC 9207 mix-up protection)',
+        [Cb.Iss, RecordedIssuer]);
+      Exit;
+    end;
+  end
+  else if IssParameterSupported then
+  begin
+    ErrMsg := 'authorization response has no "iss" although the authorization ' +
+              'server advertises authorization_response_iss_parameter_supported -- refusing it';
+    Exit;
+  end;
+  if Cb.State <> ExpectedState then
+  begin
+    ErrMsg := 'state mismatch -- possible CSRF; refusing';
+    Exit;
+  end;
+  if Cb.Error <> '' then
+  begin
+    ErrMsg := Cb.Error;
+    if Cb.ErrorDescription <> '' then ErrMsg := ErrMsg + ': ' + Cb.ErrorDescription;
+    Exit;
+  end;
+  if Cb.Code = '' then
+  begin
+    ErrMsg := 'authorization response carries no code';
+    Exit;
+  end;
+  Code := Cb.Code;
+  Result := True;
+end;
+
+function CanReuseClient(const Tok: TOAuthTokens; const Issuer: string): Boolean;
+begin
+  { Client credentials belong to the authorization server that issued
+    them; never present one to another. A redirect_uri is needed too: the
+    registration pinned it, so the callback must listen there again. }
+  Result := (Tok.ClientRegistration = 'dcr') and (Tok.ClientId <> '') and
+            (Tok.ClientIssuer <> '') and (Tok.ClientIssuer = Issuer) and
+            (Tok.ClientRedirectURI <> '');
+end;
+
+function PortOfURL(const URL: string): Integer;
+var
+  P, Q: Integer;
+  Rest: string;
+begin
+  Result := 0;
+  P := Pos('://', URL);
+  if P = 0 then Exit;
+  Rest := Copy(URL, P + 3, MaxInt);
+  Q := Pos('/', Rest);
+  if Q > 0 then Rest := Copy(Rest, 1, Q - 1);
+  Q := Pos(':', Rest);
+  if Q = 0 then Exit;
+  Result := StrToIntDef(Copy(Rest, Q + 1, MaxInt), 0);
+end;
+
+function ValidClientMetadataURL(const URL: string; out ErrMsg: string): Boolean;
+var
+  Rest: string;
+begin
+  { draft-ietf-oauth-client-id-metadata-document: an https URL with a path. }
+  ErrMsg := '';
+  Result := False;
+  if LowerCase(Copy(URL, 1, 8)) <> 'https://' then
+  begin
+    ErrMsg := 'mcp_oauth_client_metadata_url must be an https:// URL: ' + URL;
+    Exit;
+  end;
+  Rest := Copy(URL, 9, MaxInt);
+  if (Pos('/', Rest) = 0) or (Pos('/', Rest) = Length(Rest)) then
+  begin
+    ErrMsg := 'mcp_oauth_client_metadata_url needs a path (e.g. ' +
+              'https://example.com/pasclaw-client.json): ' + URL;
+    Exit;
+  end;
+  Result := True;
+end;
+
+{ ---------- Loopback callback server ------------------------------ }
+
+type
   TLoopbackServer = class
   private
     FHttp: TIdHTTPServer;
-    FResult: TCallbackResult;
+    FParams: TAuthCallbackParams;
     FGot:    Boolean;
+    FValid:  Boolean;
+    FCode:   string;
+    FError:  string;
     procedure HandleCommandGet(AContext: TIdContext;
                                 ARequest: TIdHTTPRequestInfo;
                                 AResponse: TIdHTTPResponseInfo);
   public
-    ExpectedState: string;  { caller sets this once after Create, before
-                              StartOnFreePort, so the handler can validate
-                              the redirect's state nonce. }
+    { Set once after Create, before the browser is sent off, so the handler
+      can validate the redirect: the state nonce, and the issuer recorded
+      from the authorization server's metadata (RFC 9207). }
+    ExpectedState:  string;
+    ExpectedIssuer: string;
+    IssSupported:   Boolean;
     constructor Create;
     destructor  Destroy; override;
-    function  StartOnFreePort: Integer;
+    { Listen on 127.0.0.1:Port (0 = any free port). Returns the port, or
+      -1 when it cannot be bound. }
+    function  StartOnPort(Port: Integer): Integer;
     function  WaitForCallback(TimeoutMs: Integer): Boolean;
     property  Got: Boolean read FGot;
-    property  CallbackResult: TCallbackResult read FResult;
+    property  Valid: Boolean read FValid;
+    property  Code: string read FCode;
+    property  Error: string read FError;
+    property  Params: TAuthCallbackParams read FParams;
   end;
 
 constructor TLoopbackServer.Create;
 begin
   inherited Create;
   ExpectedState := '';
+  ExpectedIssuer := '';
+  IssSupported := False;
   FGot := False;
+  FValid := False;
   FHttp := TIdHTTPServer.Create(nil);
   FHttp.OnCommandGet := HandleCommandGet;
 end;
@@ -566,23 +765,28 @@ begin
   inherited Destroy;
 end;
 
-function TLoopbackServer.StartOnFreePort: Integer;
+function TLoopbackServer.StartOnPort(Port: Integer): Integer;
 var
   Binding: TIdSocketHandle;
 begin
-  FHttp.Bindings.Clear;
-  Binding := FHttp.Bindings.Add;
-  Binding.IP   := '127.0.0.1';
-  Binding.Port := 0;     { ask the OS for a free port }
-  FHttp.Active := True;
-  Result := FHttp.Bindings[0].Port;
+  Result := -1;
+  try
+    if FHttp.Active then FHttp.Active := False;
+    FHttp.Bindings.Clear;
+    Binding := FHttp.Bindings.Add;
+    Binding.IP   := '127.0.0.1';
+    Binding.Port := Port;     { 0: ask the OS for a free port }
+    FHttp.Active := True;
+    Result := FHttp.Bindings[0].Port;
+  except
+    { the remembered port is taken: the caller falls back to a free one }
+    try FHttp.Active := False; except end;
+  end;
 end;
 
 procedure TLoopbackServer.HandleCommandGet(AContext: TIdContext;
                                             ARequest: TIdHTTPRequestInfo;
                                             AResponse: TIdHTTPResponseInfo);
-var
-  Code, State, Err: string;
 begin
   if ARequest.Document <> '/cb' then
   begin
@@ -590,37 +794,33 @@ begin
     AResponse.ContentText := 'not found';
     Exit;
   end;
-  Code  := ARequest.Params.Values['code'];
-  State := ARequest.Params.Values['state'];
-  Err   := ARequest.Params.Values['error'];
-  if Err <> '' then
+  FParams.Code             := ARequest.Params.Values['code'];
+  FParams.State            := ARequest.Params.Values['state'];
+  FParams.Error            := ARequest.Params.Values['error'];
+  FParams.ErrorDescription := ARequest.Params.Values['error_description'];
+  FParams.Iss              := ARequest.Params.Values['iss'];
+  FParams.HasIss           := ARequest.Params.IndexOfName('iss') >= 0;
+  FValid := ValidateAuthorizationResponse(FParams, ExpectedState, ExpectedIssuer,
+                                          IssSupported, FCode, FError);
+  AResponse.ResponseNo  := 200;
+  if FValid then
   begin
-    FResult.Error := Err + ': ' + ARequest.Params.Values['error_description'];
-    AResponse.ResponseNo  := 200;
+    AResponse.ContentType := 'text/html; charset=utf-8';
+    AResponse.ContentText :=
+      '<html><body style="font:14px sans-serif;padding:2em">' +
+      '<h2>PasClaw: authorization received.</h2>' +
+      '<p>You can close this tab and return to the terminal.</p>' +
+      '</body></html>';
+  end
+  else
+  begin
+    { Nothing the redirect carried is echoed into the page: it may come
+      from the wrong server, and the terminal has the details. }
+    if FParams.Error = '' then AResponse.ResponseNo := 400;
     AResponse.ContentType := 'text/plain; charset=utf-8';
     AResponse.ContentText :=
-      'PasClaw: authorization failed (' + Err + '). You can close this tab.';
-    FGot := True;
-    Exit;
+      'PasClaw: authorization failed. See the terminal for why; you can close this tab.';
   end;
-  if State <> ExpectedState then
-  begin
-    FResult.Error := 'state mismatch -- possible CSRF; refusing';
-    AResponse.ResponseNo  := 400;
-    AResponse.ContentType := 'text/plain; charset=utf-8';
-    AResponse.ContentText := FResult.Error;
-    FGot := True;
-    Exit;
-  end;
-  FResult.Code  := Code;
-  FResult.State := State;
-  AResponse.ResponseNo  := 200;
-  AResponse.ContentType := 'text/html; charset=utf-8';
-  AResponse.ContentText :=
-    '<html><body style="font:14px sans-serif;padding:2em">' +
-    '<h2>PasClaw: authorization received.</h2>' +
-    '<p>You can close this tab and return to the terminal.</p>' +
-    '</body></html>';
   FGot := True;
 end;
 
@@ -744,39 +944,95 @@ end;
 { ---------- High-level entry points ------------------------------- }
 
 function RunOAuthFlow(const ServerName, ServerURL: string;
-                      out ErrMsg: string): Boolean;
+                      out ErrMsg: string;
+                      const ClientMetadataURL: string): Boolean;
 var
   Auth, TokenEp, RegEp, Issuer, Resource: string;
-  NewTok: TOAuthTokens;
-  ClientId, Verifier, Challenge, State, RedirectURI: string;
+  IssSupported, CIMDSupported, HavePrev, Reused: Boolean;
+  Prev, NewTok: TOAuthTokens;
+  ClientId, Registration, Verifier, Challenge, State, RedirectURI, Dummy: string;
   VerBytes, ChalBytes, StateBytesB: TBytes;
   Server: TLoopbackServer;
   Port: Integer;
-  AuthorizeURL, Form, RespBody: string;
+  AuthorizeURL, Form, RespBody, CbErr: string;
   Status: Integer;
 begin
   Result := False;
   ErrMsg := '';
 
-  if not DiscoverEndpoints(ServerURL, Auth, TokenEp, RegEp, Issuer, Resource, ErrMsg) then
+  if not DiscoverEndpoints(ServerURL, Auth, TokenEp, RegEp, Issuer, Resource,
+                           IssSupported, CIMDSupported, ErrMsg) then
     Exit;
 
+  HavePrev := LoadTokens(ServerName, Prev, Dummy);
+  Reused := False;
+  ClientId := '';
+  Registration := '';
+  RedirectURI := '';
   Server := TLoopbackServer.Create;
   try
-    Port := Server.StartOnFreePort;
-    RedirectURI := Format('http://127.0.0.1:%d/cb', [Port]);
-
-    { Register a fresh public client on every auth run. The redirect_uri
-      is pinned at registration time; reusing a prior client_id with a
-      different ephemeral loopback port would fail server-side
-      redirect_uri-match validation. Re-registering is cheap for
-      RFC 7591 public clients (no secret, anonymous identity). }
-    if RegEp = '' then
+    if CIMDSupported and (ClientMetadataURL <> '') then
     begin
-      ErrMsg := 'no client_id available -- auth server does not expose registration_endpoint';
+      { Client ID Metadata Document: the URL is the client_id, the server
+        fetches it, nothing is registered. Portable across authorization
+        servers, so there is no issuer binding to check. }
+      if not ValidClientMetadataURL(ClientMetadataURL, ErrMsg) then Exit;
+      ClientId := ClientMetadataURL;
+      Registration := 'cimd';
+      Port := Server.StartOnPort(0);
+      WriteLn('Client: ', ClientId, ' (Client ID Metadata Document)');
+    end
+    else
+    begin
+      if ClientMetadataURL <> '' then
+        WriteLn('The authorization server does not advertise Client ID Metadata ',
+                'Document support; using dynamic client registration.');
+      if HavePrev and (Prev.ClientId <> '') and (Prev.ClientRegistration = 'dcr') and
+         (Prev.ClientIssuer <> '') and (Prev.ClientIssuer <> Issuer) then
+        WriteLn('The authorization server changed (', Prev.ClientIssuer, ' -> ',
+                Issuer, '): registering a new client.');
+      Port := -1;
+      if HavePrev and CanReuseClient(Prev, Issuer) then
+      begin
+        { The registration pinned its redirect_uri, so listen there again;
+          if that port is taken, register afresh on a free one. }
+        Port := Server.StartOnPort(PortOfURL(Prev.ClientRedirectURI));
+        if Port > 0 then
+        begin
+          ClientId := Prev.ClientId;
+          RedirectURI := Prev.ClientRedirectURI;
+          Registration := 'dcr';
+          Reused := True;
+          WriteLn('Client: reusing the registration made with ', Issuer);
+        end;
+      end;
+      if ClientId = '' then
+      begin
+        if Port <= 0 then Port := Server.StartOnPort(0);
+        if Port <= 0 then
+        begin
+          ErrMsg := 'cannot listen on 127.0.0.1 for the authorization callback';
+          Exit;
+        end;
+        RedirectURI := Format('http://127.0.0.1:%d/cb', [Port]);
+        if RegEp = '' then
+        begin
+          ErrMsg := 'no client_id available -- auth server does not expose registration_endpoint';
+          if CIMDSupported then
+            ErrMsg := ErrMsg + '; it accepts Client ID Metadata Documents, so set ' +
+                      'mcp_oauth_client_metadata_url to the HTTPS URL of one you host';
+          Exit;
+        end;
+        if not RegisterClient(RegEp, RedirectURI, ClientId, ErrMsg) then Exit;
+        Registration := 'dcr';
+      end;
+    end;
+    if Port <= 0 then
+    begin
+      ErrMsg := 'cannot listen on 127.0.0.1 for the authorization callback';
       Exit;
     end;
-    if not RegisterClient(RegEp, RedirectURI, ClientId, ErrMsg) then Exit;
+    if RedirectURI = '' then RedirectURI := Format('http://127.0.0.1:%d/cb', [Port]);
 
     VerBytes    := GetRandomBytes(PkceVerifierBytes);
     Verifier    := BytesToBase64URL(VerBytes);
@@ -784,7 +1040,11 @@ begin
     Challenge   := BytesToBase64URL(ChalBytes);
     StateBytesB := GetRandomBytes(StateBytes);
     State       := BytesToBase64URL(StateBytesB);
-    Server.ExpectedState := State;
+    { Kept beside the state and PKCE verifier, from the metadata we fetched:
+      the iss the redirect must carry back. }
+    Server.ExpectedState  := State;
+    Server.ExpectedIssuer := Issuer;
+    Server.IssSupported   := IssSupported;
 
     AuthorizeURL :=
       Auth +
@@ -803,24 +1063,38 @@ begin
 
     WriteLn('Opening browser to authorize PasClaw with ', ServerName, ':');
     WriteLn('  ', AuthorizeURL);
+    { A piped stdout (a script, a test) must see the URL before we block. }
+    Flush(Output);
     OpenBrowser(AuthorizeURL);
     WriteLn('Waiting for callback on ', RedirectURI, ' (up to ',
             AuthFlowTimeoutMs div 1000, 's)...');
+    Flush(Output);
 
     if not Server.WaitForCallback(AuthFlowTimeoutMs) then
     begin
       ErrMsg := 'timed out waiting for browser callback';
       Exit;
     end;
-    if Server.CallbackResult.Error <> '' then
+    if not Server.Valid then
     begin
-      ErrMsg := Server.CallbackResult.Error;
+      ErrMsg := Server.Error;
+      { A reused registration the server no longer knows: forget it, so the
+        next run registers a new client instead of failing the same way. }
+      CbErr := Server.Params.Error;
+      if Reused and ((CbErr = 'invalid_client') or (CbErr = 'unauthorized_client')) then
+      begin
+        Prev.ClientId := '';
+        Prev.ClientRedirectURI := '';
+        SaveTokens(ServerName, Prev);
+        ErrMsg := ErrMsg + ' -- dropped the stored client registration; run ' +
+                  'pasclaw mcp auth ' + ServerName + ' again to register a new one';
+      end;
       Exit;
     end;
 
     Form :=
       'grant_type=authorization_code' +
-      '&code='          + FormEncode(Server.CallbackResult.Code) +
+      '&code='          + FormEncode(Server.Code) +
       '&redirect_uri='  + FormEncode(RedirectURI) +
       '&client_id='     + FormEncode(ClientId) +
       '&code_verifier=' + FormEncode(Verifier);
@@ -835,12 +1109,16 @@ begin
       Exit;
     end;
 
+    NewTok := Default(TOAuthTokens);
     NewTok.ClientId      := ClientId;
     NewTok.Issuer        := Issuer;
     NewTok.AuthEndpoint  := Auth;
     NewTok.TokenEndpoint := TokenEp;
     NewTok.RegEndpoint   := RegEp;
     NewTok.Resource      := Resource;
+    NewTok.ClientIssuer       := Issuer;
+    NewTok.ClientRedirectURI  := RedirectURI;
+    NewTok.ClientRegistration := Registration;
     if not ParseTokenResponse(RespBody, NewTok, ErrMsg) then Exit;
 
     SaveTokens(ServerName, NewTok);
@@ -866,6 +1144,16 @@ begin
   if Tok.TokenEndpoint = '' then
   begin
     ErrMsg := 'no token_endpoint cached -- re-run `pasclaw mcp auth ' + ServerName + '`';
+    Exit;
+  end;
+  { A registered client is bound to the authorization server that issued
+    it; never present it to another one. (A CIMD client_id is a URL any
+    server can resolve, so it carries no such binding.) }
+  if (Tok.ClientRegistration <> 'cimd') and (Tok.ClientIssuer <> '') and
+     (Tok.Issuer <> '') and (Tok.ClientIssuer <> Tok.Issuer) then
+  begin
+    ErrMsg := 'the stored client was registered with ' + Tok.ClientIssuer +
+              ', not ' + Tok.Issuer + ' -- re-run `pasclaw mcp auth ' + ServerName + '`';
     Exit;
   end;
   Form :=

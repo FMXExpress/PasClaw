@@ -1113,7 +1113,7 @@
   <div id="tab-mcp" class="tab">
     <div class="pane">
       <table class="data" id="mcp-table">
-        <thead><tr><th>Name</th><th>Command</th><th>Args</th><th>Status</th></tr></thead>
+        <thead><tr><th>Name</th><th>Command</th><th>Args</th><th>Status</th><th>Protocol</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -3912,18 +3912,25 @@ const tabLoaders = {
     try {
       const j = await (await gwFetch("/v1/mcp")).json();
       if (!j.servers || !j.servers.length) {
-        tbody.innerHTML = `<tr><td colspan=4><div class="empty-pane">No MCP servers configured.</div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan=5><div class="empty-pane">No MCP servers configured.</div></td></tr>`;
         return;
       }
       for (const s of j.servers) {
         const tr = document.createElement("tr");
+        /* state/protocol_version come from the live connection; a disabled
+           server, or one this gateway never connected, has neither. */
+        const live = s.state ? ` · ${s.state}` : "";
+        const proto = s.protocol_version
+          ? `<span title="${escapeHtml(s.negotiation || "")}">${escapeHtml(s.protocol_version)}</span>`
+          : (s.error ? `<span title="${escapeHtml(s.error)}">—</span>` : "—");
         tr.innerHTML = `<td>${escapeHtml(s.name)}</td>`
                      + `<td>${escapeHtml(s.cmd)}</td>`
                      + `<td>${escapeHtml(s.args || "")}</td>`
-                     + `<td><span class="badge ${s.enabled?"on":"off"}">${s.enabled?"enabled":"disabled"}</span></td>`;
+                     + `<td><span class="badge ${s.enabled?"on":"off"}">${s.enabled?"enabled":"disabled"}</span>${escapeHtml(live)}</td>`
+                     + `<td>${proto}</td>`;
         tbody.appendChild(tr);
       }
-    } catch (e) { tbody.innerHTML = `<tr><td colspan=4>${escapeHtml(String(e))}</td></tr>`; }
+    } catch (e) { tbody.innerHTML = `<tr><td colspan=5>${escapeHtml(String(e))}</td></tr>`; }
   },
 
   async cron() {

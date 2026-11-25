@@ -343,6 +343,7 @@ implementation
 
 uses
   PasClaw.Workspaces,
+  PasClaw.MCP.Elicit,              { ConsoleElicitationHandler -- MCP forms/URLs on the line REPL }
   Classes,
   DateUtils,
   PasClaw.CliUI,
@@ -3361,6 +3362,10 @@ begin
   Cfg.OnToolCall    := LiveToolCallLine;
   Cfg.OnToolResult  := LiveToolResultLine;
   Cfg.OnAsk         := AskPermission;  { permissions "ask" rules prompt on stdin }
+  { MCP servers asking the user for input (forms, URLs) prompt there too.
+    The rich Delphi TUI has no form surface in its footer, so it leaves
+    this nil and such requests are declined with a note to the model. }
+  Cfg.Elicitor      := ConsoleElicitationHandler;
   { Background subagents on the FPC line-based path. Codex on
     PR #212: Cmd.TUI registers spawn_background for FPC builds too,
     so without this binding a job would start but its result would

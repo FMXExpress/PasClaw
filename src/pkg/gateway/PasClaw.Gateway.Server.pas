@@ -2539,8 +2539,12 @@ var
   Root: TJsonObject;
   Arr: TJsonArray;
   Item: TJsonObject;
-  i: Integer;
+  i, j: Integer;
+  Live: TMCPServerStatusArray;
 begin
+  { What each server negotiated, for the web UI's MCP tab. Only servers
+    this gateway connected have an entry; a disabled one has none. }
+  Live := MCPServerStatuses;
   Root := TJsonObject.Create;
   try
     Arr := TJsonArray.Create;
@@ -2551,6 +2555,17 @@ begin
       Item.PutStr ('cmd',     FCfg.MCPServers[i].Cmd);
       Item.PutStr ('args',    FCfg.MCPServers[i].Args);
       Item.PutBool('enabled', FCfg.MCPServers[i].Enabled);
+      for j := 0 to High(Live) do
+        if SameText(Live[j].Name, FCfg.MCPServers[i].Name) then
+        begin
+          Item.PutStr('state',            Live[j].State);
+          Item.PutStr('protocol_version', Live[j].ProtocolVersion);
+          Item.PutStr('negotiation',      Live[j].Negotiation);
+          Item.PutStr('server_name',      Live[j].ServerName);
+          Item.PutStr('server_version',   Live[j].ServerVersion);
+          if Live[j].Error <> '' then Item.PutStr('error', Live[j].Error);
+          Break;
+        end;
       Arr.AddObject(Item);
     end;
     Root.PutArray('servers', Arr);

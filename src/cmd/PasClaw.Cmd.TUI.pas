@@ -45,6 +45,7 @@ uses
                                      -- same session-lifecycle hooks as Cmd.Agent }
   PasClaw.Shell.Backend.Factory,   { InstallShellBackend }
   PasClaw.MCP.Bridge,
+  PasClaw.MCP.Elicit,        { the line REPL answers MCP elicitation at the keyboard }
   PasClaw.Skills.Loader,
   PasClaw.Tools.DB,
   PasClaw.Skills.Manage,
@@ -278,6 +279,12 @@ begin
     end;
 
     SetLength(MCPClients, 0);
+    {$IFDEF FPC}
+    { The FPC TUI is a line REPL with a person at the keyboard, so legacy
+      servers are told at initialize that it can answer elicitation. The
+      rich Delphi TUI cannot show a form, so it declares nothing. }
+    SetMCPProcessElicitationHandler(ConsoleElicitationHandler);
+    {$ENDIF}
     if (Reg <> nil) and (not A.NoMCP) then
       MCPClients := ConnectMCPServers(Cfg, Reg)
     else if Reg <> nil then

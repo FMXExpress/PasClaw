@@ -50,6 +50,11 @@ type
     function GetInt (const Key: string; Default: Int64 = 0): Int64;
     function GetBool(const Key: string; Default: Boolean = False): Boolean;
     function GetFloat(const Key: string; Default: Double = 0): Double;
+    { The member's value as JSON text, whatever its type (a string comes
+      back quoted). Default when the key is missing. For echoing a value
+      the caller must not reinterpret -- a schema default, an opaque
+      token. }
+    function GetRaw  (const Key: string; const Default: string = ''): string;
     function ChildObject(const Key: string): TJsonObject;   { nil if absent }
     function ChildArray (const Key: string): TJsonArray;    { nil if absent }
     procedure PutStr  (const Key, Value: string);
@@ -77,6 +82,7 @@ type
     function ItemStr   (Index: Integer; const Default: string = ''): string;
     function ItemInt   (Index: Integer; Default: Int64 = 0): Int64;
     function ItemBool  (Index: Integer; Default: Boolean = False): Boolean;
+    function ItemRaw   (Index: Integer; const Default: string = ''): string;   { JSON text of any item }
     function ItemObject(Index: Integer): TJsonObject;   { nil if not object }
     function ItemArray (Index: Integer): TJsonArray;    { nil if not array }
     procedure AddStr   (const Value: string);
@@ -104,6 +110,13 @@ function JsonEscape(const S: string): string;
   unchanged: a string id stays a quoted string, an integer id stays a number,
   and a missing, null or other id is 'null'. }
 function JsonIdLiteral(Obj: TJsonObject): string;
+
+{ Parse S as an object / array, or nil when it is not one -- malformed
+  input included, where TJsonObject.Parse raises under FPC. For text from
+  outside (a server's reply, a child's stdout) that must not abort the
+  caller. }
+function JsonTryParse(const S: string): TJsonObject;
+function JsonTryParseArray(const S: string): TJsonArray;
 
 implementation
 
@@ -507,6 +520,14 @@ begin
   Result := fpjson.TJSONObject(FBacking).Get(Key, Default);
 end;
 
+function TJsonObject.GetRaw(const Key: string; const Default: string): string;
+var
+  D: TJSONData;
+begin
+  D := fpjson.TJSONObject(FBacking).Find(Key);
+  if D = nil then Result := Default else Result := D.AsJSON;
+end;
+
 function TJsonObject.ChildObject(const Key: string): TJsonObject;
 var
   D: TJSONData;
@@ -682,6 +703,15 @@ begin
   Arr := fpjson.TJSONArray(FBacking);
   if (Index < 0) or (Index >= Arr.Count) then Exit(Default);
   try Result := Arr.Booleans[Index]; except Result := Default; end;
+end;
+
+function TJsonArray.ItemRaw(Index: Integer; const Default: string): string;
+var
+  Arr: fpjson.TJSONArray;
+begin
+  Arr := fpjson.TJSONArray(FBacking);
+  if (Index < 0) or (Index >= Arr.Count) then Exit(Default);
+  Result := Arr[Index].AsJSON;
 end;
 
 function TJsonArray.ItemObject(Index: Integer): TJsonObject;
@@ -896,6 +926,14 @@ begin
     Result := Default;
 end;
 
+function TJsonObject.GetRaw(const Key: string; const Default: string): string;
+var
+  V: System.JSON.TJSONValue;
+begin
+  V := System.JSON.TJSONObject(FBacking).GetValue(Key);
+  if V = nil then Result := Default else Result := V.ToJSON;
+end;
+
 function TJsonObject.ChildObject(const Key: string): TJsonObject;
 var
   V: System.JSON.TJSONValue;
@@ -1076,6 +1114,12 @@ begin
   else Result := Default;
 end;
 
+function TJsonArray.ItemRaw(Index: Integer; const Default: string): string;
+begin
+  if (Index < 0) or (Index >= Count) then Exit(Default);
+  Result := System.JSON.TJSONArray(FBacking).Items[Index].ToJSON;
+end;
+
 function TJsonArray.ItemObject(Index: Integer): TJsonObject;
 var
   V: System.JSON.TJSONValue;
@@ -1163,6 +1207,24 @@ begin
 end;
 
 {$ENDIF}
+
+function JsonTryParse(const S: string): TJsonObject;
+begin
+  try
+    Result := TJsonObject.Parse(S);
+  except
+    Result := nil;
+  end;
+end;
+
+function JsonTryParseArray(const S: string): TJsonArray;
+begin
+  try
+    Result := TJsonArray.Parse(S);
+  except
+    Result := nil;
+  end;
+end;
 
 function JsonIdLiteral(Obj: TJsonObject): string;
 {$IFDEF FPC}

@@ -39,7 +39,8 @@ begin
   PrintLn('  remove <name>             delete an MCP server entry');
   PrintLn('  list                      list configured servers');
   PrintLn('  show <name>               show one server in detail');
-  PrintLn('  test <name>               probe a server: initialize + tools/list');
+  PrintLn('  test <name>               probe a server: negotiate the protocol');
+  PrintLn('                            (server/discover, else initialize) + tools/list');
   PrintLn('  edit                      open config in $EDITOR');
   PrintLn('  catalog                   list public MCP servers (pasclaw.dev hub,');
   PrintLn('                            falls back to built-in 5 when offline)');
@@ -178,7 +179,7 @@ var
   i, j: Integer;
   Client: TMCPBaseClient;
   Tools: TMCPToolArray;
-  Err: string;
+  Err, Era: string;
 begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
   Cfg := LoadConfig;
@@ -206,8 +207,13 @@ begin
             PrintLn(Ansi.Red + '✗ ' + Err + Ansi.Reset);
             Exit(1);
           end;
-          PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'initialize OK');
-          PrintLn('  server: ' + Client.ServerInfo.Name + ' ' + Client.ServerInfo.Version);
+          PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'connected');
+          PrintLn('  server:   ' + Client.ServerInfo.Name + ' ' + Client.ServerInfo.Version);
+          { Which MCP revision this server speaks, and how that was settled
+            (the server/discover probe, or initialize after it). }
+          if Client.ServerInfo.Modern then Era := 'stateless' else Era := 'handshake';
+          PrintLn('  protocol: ' + Client.ServerInfo.ProtocolVersion + ' (' + Era +
+                  ', via ' + Client.ServerInfo.Negotiation + ')');
           if Client.ListTools(Tools, Err) then
           begin
             PrintLn(Format('  tools (%d):', [Length(Tools)]));
@@ -487,11 +493,13 @@ function DoAuth(const Argv: array of string): Integer;
 var
   Cfg: TConfig;
   i: Integer;
-  URL, ErrMsg: string;
+  URL, ErrMsg, MetadataURL: string;
 begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
   Cfg := LoadConfig;
   try
+    { Client ID Metadata Document, when the operator hosts one; else DCR. }
+    MetadataURL := Cfg.MCPOAuthClientMetadataURL;
     URL := '';
     for i := 0 to High(Cfg.MCPServers) do
       if SameText(Cfg.MCPServers[i].Name, Argv[1]) then
@@ -517,7 +525,7 @@ begin
     Cfg.Free;
   end;
 
-  if RunOAuthFlow(Argv[1], URL, ErrMsg) then
+  if RunOAuthFlow(Argv[1], URL, ErrMsg, MetadataURL) then
   begin
     PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'authorized ' + Argv[1] +
             ' -- tokens written to ' + OAuthTokenPath(Argv[1]));

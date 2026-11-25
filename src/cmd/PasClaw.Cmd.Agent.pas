@@ -66,6 +66,7 @@ uses
   PasClaw.Agent.Prune,
   PasClaw.MCP.Bridge,
   PasClaw.MCP.Disclosure,   { tool_search must exist even with --no-mcp }
+  PasClaw.MCP.Elicit,       { the REPL answers MCP elicitation at the keyboard }
   PasClaw.Skills.Loader,
   PasClaw.Skills.Slash,       { /name -> prompt skill expansion in the REPL }
   PasClaw.Skills.Manage,
@@ -711,6 +712,12 @@ begin
     AskPermission, so the rule never quietly becomes allow. }
   if Handlers <> nil then
     Result.OnAsk := Handlers.AskPermission;
+  { MCP elicitation (a server asking the user to fill in a form or visit a
+    URL) is answered at the keyboard in the REPL only; one-shot and piped
+    runs leave it nil and the request is declined with a note to the
+    model. }
+  if (Handlers <> nil) and Handlers.Interactive then
+    Result.Elicitor := ConsoleElicitationHandler;
   Result.Fallbacks     := ResolveFallbacks(Cfg, Result.FallbackModels);
   Result.Options       := DefaultChatOptions;
   { ToolsEnabled tracks the registry we are about to hand RunToolLoop
@@ -1752,6 +1759,9 @@ begin
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
+  { Before the connect: a legacy server learns at initialize whether this
+    client can answer its elicitation/create, and here someone can. }
+  SetMCPProcessElicitationHandler(ConsoleElicitationHandler);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);

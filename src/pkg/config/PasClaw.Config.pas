@@ -767,6 +767,14 @@ type
        conversion that would not come out shorter is declined. See
        PasClaw.MCP.Compact. *)
     MCPCompactResults: Boolean;
+    (* MCPOAuthClientMetadataURL -- `mcp_oauth_client_metadata_url`: the
+       HTTPS URL of a Client ID Metadata Document (CIMD) the operator hosts
+       for PasClaw. When an MCP server's authorization server advertises
+       client_id_metadata_document_supported, `pasclaw mcp auth` uses this
+       URL as its client_id instead of registering a client (Dynamic Client
+       Registration, deprecated in MCP 2026-07-28). Empty (the default):
+       PasClaw hosts no such document, so DCR is used as before. *)
+    MCPOAuthClientMetadataURL: string;
     (* Compaction -- conversation-history compaction knobs, threaded
        into every RunToolLoop site (CLI agent, gateway chat, desktop
        page generation). The "compaction" block was DOCUMENTED long
@@ -2284,6 +2292,8 @@ begin
       explicit choice. Emit only the OFF, so on-keepers keep a clean file. }
     if not MCPCompactResults then
       Root.PutBool('mcp_compact_results', False);
+    if MCPOAuthClientMetadataURL <> '' then
+      Root.PutStr('mcp_oauth_client_metadata_url', MCPOAuthClientMetadataURL);
 
     { compaction: same emit-only-when-changed shape. A block of five
       defaults in every config.json would read as five decisions the
@@ -2704,6 +2714,8 @@ begin
                                                   BuiltinProgressiveDisclosure);
     MCPCompactResults := Root.GetBool('mcp_compact_results',
                                       MCPCompactResults);
+    MCPOAuthClientMetadataURL := Root.GetStr('mcp_oauth_client_metadata_url',
+                                             MCPOAuthClientMetadataURL);
     PlanModel := Root.GetStr('plan_model', PlanModel);
     Obj := Root.ChildObject('prune');
     if Obj <> nil then

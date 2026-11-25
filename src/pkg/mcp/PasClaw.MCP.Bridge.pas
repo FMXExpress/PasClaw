@@ -91,6 +91,24 @@ procedure FreeMCPClients(var Clients: TMCPClientList);
 function MCPCallStructured(const NamespacedName, ArgsJSON: string;
   out ResultText, ResultJSON, ErrMsg: string): Boolean;
 
+type
+  { One connected (or connecting) MCP server as this process sees it. }
+  TMCPServerStatus = record
+    Name:            string;   { the configured mcp_servers[].name }
+    State:           string;   { connecting | ready | failed }
+    ProtocolVersion: string;   { negotiated revision; '' until connected }
+    Negotiation:     string;   { "server/discover" or "initialize (probe: ...)" }
+    ServerName:      string;   { serverInfo.name the server reported }
+    ServerVersion:   string;
+    Error:           string;   { why the connect failed (State = failed) }
+  end;
+  TMCPServerStatusArray = array of TMCPServerStatus;
+
+{ The servers ConnectMCPServers started in this process, with what each
+  negotiated. Empty in a process that connected none (`--no-mcp`, a CLI
+  command that never connects). The gateway's GET /v1/mcp reads this. }
+function MCPServerStatuses: TMCPServerStatusArray;
+
 implementation
 
 uses
@@ -132,6 +150,7 @@ type
     FDispatchLock: TCriticalSection;  { guards FDispatches concurrent grow/scan }
     FDispatches:  TList;              { TList of TMCPToolDispatch -- owned }
     FCompact:     Boolean;            { snapshot of Cfg.MCPCompactResults }
+    FInfo:        TMCPServerInfo;     { what the live client negotiated }
   public
     constructor Create(const AName: string; ACompact: Boolean = False);
     destructor  Destroy; override;
@@ -145,6 +164,7 @@ type
                        out ResultText, ResultJSON, ErrMsg: string): Boolean;
     function  FindDispatchFor(const ToolName: string): TMCPToolDispatch;
     function  AddDispatch(const ToolName: string): TMCPToolDispatch;
+    function  Status: TMCPServerStatus;
     property Name: string read FName;
   end;
 
@@ -218,9 +238,42 @@ begin
     FClient := C;
     FState  := lsReady;
     FError  := '';
+    if C <> nil then FInfo := C.ServerInfo;
   finally
     FLock.Release;
   end;
+end;
+
+function TMCPServerState.Status: TMCPServerStatus;
+begin
+  FLock.Acquire;
+  try
+    Result.Name := FName;
+    case FState of
+      lsLoading: Result.State := 'connecting';
+      lsReady:   Result.State := 'ready';
+    else
+      Result.State := 'failed';
+    end;
+    Result.ProtocolVersion := FInfo.ProtocolVersion;
+    Result.Negotiation     := FInfo.Negotiation;
+    Result.ServerName      := FInfo.Name;
+    Result.ServerVersion   := FInfo.Version;
+    Result.Error           := FError;
+  finally
+    FLock.Release;
+  end;
+end;
+
+function MCPServerStatuses: TMCPServerStatusArray;
+var
+  i: Integer;
+begin
+  SetLength(Result, 0);
+  if GStates = nil then Exit;
+  SetLength(Result, GStates.Count);
+  for i := 0 to GStates.Count - 1 do
+    Result[i] := TMCPServerState(GStates[i]).Status;
 end;
 
 procedure TMCPServerState.SetFailed(const Err: string);
@@ -533,6 +586,9 @@ begin
     begin
       LogInfo('mcp[%s] cache fresh (%ds old < %ds TTL) -- reusing cached tools, skipping live tools/list',
               [FCfg.Name, Age, Int64(MCPRefreshTTLSeconds)]);
+      { The client never listed these, but building a request can need
+        their schemas (HTTP mirrors x-mcp-header arguments into headers). }
+      if LoadCachedTools(FCfg.Name, Tools) then FClient.SetKnownTools(Tools);
       FState.SetReady(FClient);
       FClient := nil;
       Exit;
@@ -544,7 +600,9 @@ begin
       FState.SetFailed(Err);
       Exit;
     end;
-    LogInfo('mcp[%s] live connect OK (%d tools)', [FCfg.Name, Length(Tools)]);
+    LogInfo('mcp[%s] live connect OK (%d tools, MCP %s via %s)',
+            [FCfg.Name, Length(Tools), FClient.ServerInfo.ProtocolVersion,
+             FClient.ServerInfo.Negotiation]);
     SaveCachedTools(FCfg.Name, Tools);
     { Cheap early-out before taking the lock -- the cache is already saved. }
     if Terminated then Exit;

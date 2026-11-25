@@ -29,6 +29,7 @@ uses
   PasClaw.Identity,
   PasClaw.Stream.Reliability,
   PasClaw.Permissions,   { the ordered allow/deny/ask gate + TPermAskFn }
+  PasClaw.MCP.Elicit,    { TMCPElicitationHandler -- Elicitor below }
   PasClaw.Config;   { TConfig + SetActiveConfig for the per-dispatch override }
 
 type
@@ -226,6 +227,14 @@ type
        then refuses: it must never quietly become allow. "Allow for
        this session" is remembered under SteeringKey. *)
     OnAsk:          TPermAskFn;
+    (* Who answers when an MCP server asks the user for input during one of
+       this loop's tool calls (MCP elicitation: a form to fill in, or a URL
+       to visit). Published on the dispatching thread like Workspace below,
+       so the MCP client finds it whichever thread runs the call. nil (the
+       Default) means nobody is there: the request is declined and the model
+       is told what was asked -- the gateway, one-shot runs, subagents and
+       ACP all leave it nil. The REPLs set the console handler. Not owned. *)
+    Elicitor:       TMCPElicitationHandler;
     (* The directory this loop's tools work in, when it is not the
        process-wide sandbox workspace: a subagent given a git worktree.
        DispatchOneToolCall sets it as the thread's sandbox workspace
@@ -1096,6 +1105,7 @@ var
   SavedTurn: TDispatchTurn;
   SavedWs, SavedSid: string;
   SavedGate: Boolean;
+  SavedElicitor: TMCPElicitationHandler;
 begin
   { Publish this run's config to the dispatching thread (loop thread for
     serial/mutating tools, worker thread for parallel read-only ones) so any
@@ -1115,6 +1125,10 @@ begin
   if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(Cfg.Workspace);
   SavedSid := ThreadShellSessionId;
   if Cfg.ShellSessionId <> '' then SetThreadShellSessionId(Cfg.ShellSessionId);
+  { Always set, nil included: a worker thread must not inherit an answer
+    path from whatever ran on it before. }
+  SavedElicitor := ThreadMCPElicitationHandler;
+  SetThreadMCPElicitationHandler(Cfg.Elicitor);
   try
   D.Err        := '';
   D.ResultText := '';
@@ -1194,6 +1208,7 @@ begin
     if Cfg.Workspace <> '' then SetThreadSandboxWorkspace(SavedWs);
     if Cfg.ShellSessionId <> '' then SetThreadShellSessionId(SavedSid);
     GDispatchingTurn := SavedTurn;
+    SetThreadMCPElicitationHandler(SavedElicitor);
     GDispatchingCfg := SavedCfg;
     SetActiveConfig(nil);
   end;

@@ -15773,6 +15773,13 @@ begin
                 Text.AppendLine('  status:  enabled')
               else
                 Text.AppendLine('  status:  disabled');
+              { Live connection, when the gateway connected this server: its
+                state and the MCP revision it negotiated. }
+              if JsonAsString(Row, 'state') <> '' then
+                Text.AppendLine('  live:    ' + JsonAsString(Row, 'state'));
+              if JsonAsString(Row, 'protocol_version') <> '' then
+                Text.AppendLine('  protocol: ' + JsonAsString(Row, 'protocol_version') +
+                  ' (' + JsonAsString(Row, 'negotiation') + ')');
             end;
       end
       else

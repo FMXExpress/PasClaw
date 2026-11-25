@@ -254,6 +254,9 @@
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Result.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.StdioClient.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.HttpClient.pas"/>
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Client.pas"/>
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Elicit.pas"/>
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Headers.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Catalog.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Bridge.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Disclosure.pas"/>
