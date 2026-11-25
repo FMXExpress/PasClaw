@@ -1905,7 +1905,7 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /undo [N] /redo [N] /mode [plan|build|improve]')
+      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /tasks /undo [N] /redo [N] /mode [plan|build|improve]')
     else if Text = '/mode' then
       Flash('mode: ' + ModeName(FMode) + '  (Tab in chat to cycle; /mode plan|build|improve)')
     (* Through ParseMode, not a list of literals.
@@ -1940,6 +1940,8 @@ begin
       OpenModelMenu
     else if Text = '/stats' then
       OpenStatsOverlay
+    else if Text = '/tasks' then
+      Flash(BackgroundJobsSummary)
     else if (Text = '/undo') or (Copy(Text, 1, 6) = '/undo ') then
       HandleUndoCommand(Copy(Text, 7, MaxInt))
     else if (Text = '/init') or (Copy(Text, 1, 6) = '/init ') then
@@ -3026,6 +3028,7 @@ begin
   PrintLn(Ansi.Bold + 'TUI commands:' + Ansi.Reset);
   PrintLn('  /help          show this');
   PrintLn('  /tools         list registered tools');
+  PrintLn('  /tasks         list background jobs, running first');
   PrintLn('  /clear         clear the screen');
   PrintLn('  /model         list cached models for the default provider');
   PrintLn('  /model <id>    switch the active model for this session');
@@ -3136,6 +3139,7 @@ begin
   if (Cmd = '/quit') or (Cmd = '/exit') or (Cmd = '/q') then begin FQuit := True; Exit; end;
   if Cmd = '/clear' then begin Print(#27'[2J' + #27'[H'); DrawHeader; Exit; end;
   if Cmd = '/tools' then begin ShowTools; Exit; end;
+  if Cmd = '/tasks' then begin PrintLn(FormatBackgroundJobsText); Exit; end;
   if Cmd = '/help'  then begin ShowHelp;  Exit; end;
   if (Cmd = '/undo') or (Copy(Cmd, 1, 6) = '/undo ') then
   begin

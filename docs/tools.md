@@ -155,7 +155,7 @@ Optional `worktree: "<branch>"` runs the child inside a git worktree for that br
 
 ### `spawn_background(agent, prompt)` (asynchronous)
 
-Returns a handle and the parent loop keeps working. When the job finishes its result is pushed into the next loop iteration as a `[background subagent results]` block in the system prompt (same channel `pasclaw steer` uses). Companion tools: `spawn_status(handle)`, `spawn_wait(handle, timeout_sec)`, `spawn_cancel(handle)`. Up to `background_jobs_max` (6) concurrent jobs per session. Jobs die with the session — coordinator teardown abandons still-running workers and they self-free. Takes the same `worktree` argument as `spawn`.
+Returns a handle and the parent loop keeps working. When the job finishes its result is pushed into the next loop iteration as a `[background subagent results]` block in the system prompt (same channel `pasclaw steer` uses). Companion tools: `spawn_status(handle)`, `spawn_wait(handle, timeout_sec)`, `spawn_cancel(handle)`; a cancelled subagent stops at its next step (a model call already in flight finishes first) and its result is discarded. Up to `background_jobs_max` (6) concurrent jobs per session. Jobs die with the session — coordinator teardown abandons still-running workers and they self-free. The last 50 finished jobs are kept for `spawn_status` / `spawn_wait` and the gateway's **Background** tab, which shows each one's transcript or output and can stop a job or send a finished subagent a follow-up ([gateway.md](gateway.md#v1background--background-jobs)). Takes the same `worktree` argument as `spawn`.
 
 ## Git worktrees
 

@@ -42,10 +42,10 @@
     - Job state transitions are guarded by a per-job critical
       section so the coordinator can read/cancel without racing the
       worker thread.
-    - Cancel is advisory: RunToolLoop doesn't poll Terminated, so a
-      cancelled job keeps running until its current provider call
-      completes; its result is then discarded. Same limitation the
-      TUI's bounded-wait teardown has.
+    - Cancel is advisory for a subagent: the loop checks for it at its
+      step boundaries (ShouldCancel), so a model call already on the
+      wire finishes first; the result is then discarded. A shell job on
+      the local backend is killed.
     - Coordinator teardown abandons still-running jobs: they're
       flagged, self-free on completion, and die with the process.
       Their results are lost -- consistent with "background jobs
@@ -53,6 +53,13 @@
 
   Concurrency cap: MaxConcurrentBackground (4). The 5th spawn gets
   a clean error telling the model to wait for or cancel something.
+
+  History: finished jobs stay for spawn_wait, spawn_status and the
+  gateway's Background view, at most BackgroundHistoryMax of them per
+  coordinator (the oldest go first, those already delivered to the
+  model before those that were not). Each job keeps a bounded copy of
+  what its subagent said and did (FMessages), which is also what a
+  follow-up message (ContinueBackgroundJob) continues from.
 *)
 unit PasClaw.Agent.SubagentBg;
 
@@ -81,6 +88,24 @@ const
     come back via spawn_wait; the fold just has to carry enough
     for the model to decide whether it needs the rest. }
   DrainPreviewChars = 2000;
+  (* Finished jobs a coordinator keeps. Before this nothing was ever
+     dropped: a gateway, which shares one coordinator across every chat
+     for its whole life, grew the list -- each job holding its result and
+     registry -- without bound. *)
+  BackgroundHistoryMax = 50;
+  (* The transcript a job keeps of its subagent, for viewing and to
+     continue from. A message is cut at BgTranscriptMsgChars (tool-call
+     arguments are elided past BgTranscriptArgChars, keeping them valid
+     JSON); past BgTranscriptMaxMessages or BgTranscriptMaxChars the
+     oldest messages after the first prompt go. 50 jobs at the cap stay
+     around 13 MB. *)
+  BgTranscriptMaxMessages = 200;
+  BgTranscriptMsgChars    = 16384;
+  BgTranscriptArgChars    = 4096;
+  BgTranscriptMaxChars    = 262144;
+  { The shell output kept for viewing: the TAIL, where a build or a test
+    run says how it ended. Also the cap on a running job's live tail. }
+  BgOutputViewChars = 65536;
 
 type
   TBgJobState = (bjRunning, bjDone, bjFailed, bjCancelled);
@@ -138,13 +163,70 @@ type
     FAbandoned:  Boolean;            { coordinator gone; self-free }
     FStartedAt:  TDateTime;
     FFinishedAt: TDateTime;
+    { Git branch a subagent works in, '' when none (FWorkDir then holds
+      its worktree path; for a shell job FWorkDir is the cwd). }
+    FWorktree:   string;
+    (* What the subagent said and did, under FStateLock. Built from the
+       loop's callbacks while it runs, so a viewer sees progress, then
+       replaced by the loop's own final history, which a follow-up
+       continues from. Always passed through BoundTranscript. *)
+    FMessages:   TMessageArray;
+    FTrimmed:    Boolean;            { BoundTranscript dropped or cut something }
+    { The loop's system prompt at the end -- a compaction summary lives
+      there, so a follow-up must start from it, not the spec's. }
+    FFinalSystemPrompt: string;
+    { A follow-up job: the conversation it continues (its prompt is the
+      new message), and the links both ways. }
+    FSeedHistory:   TMessageArray;
+    FContinuedFrom: string;
+    FContinuedBy:   string;          { the latest follow-up of this job }
+    { The tail of a running local shell job's output, so it can be
+      watched before it ends. Under FStateLock. }
+    FLiveOut:    TBytes;
+    { Holders of this job outside the coordinator lock (spawn_wait while it
+      polls). Pruning skips a pinned job. Under the coordinator's FLock. }
+    FPins:       Integer;
     procedure RunShellJob;
     procedure NotifyDone;
+    { RunToolLoop callbacks (the job's own thread) feeding FMessages. }
+    procedure LiveAppend(const M: TMessage);
+    procedure LiveText(const S: string);
+    procedure LiveToolCall(const Name, ArgsJSON: string);
+    procedure LiveToolResult(const Name, ResultText, Err: string);
+    { ShouldCancel: the loop stops at its next step once a cancel came. }
+    function  CancelAsked: Boolean;
   protected
     procedure Execute; override;
   public
     destructor Destroy; override;
   end;
+
+  (* A copy of one job, taken under its locks, for viewers: the gateway's
+     /v1/background routes and the `/tasks` command. FinishedAt is 0 until
+     the job's thread has ended; a cancelled job whose thread is still
+     finishing a model call reads State = 'cancelled' with Stopping set.
+     Messages / Output are filled only by GetBackgroundJob. *)
+  TBgJobInfo = record
+    Handle, Kind, AgentName, Command, Prompt, State, Session: string;
+    StartedAt, FinishedAt: TDateTime;
+    ElapsedSec: Int64;
+    Stopping:   Boolean;
+    ResultText, ErrMsg: string;
+    ExitCode:   Integer;             { shell, once finished; -1 otherwise }
+    Collected:  Boolean;             { its result reached its chat's model }
+    Killable:   Boolean;             { a live local process cancel can kill }
+    Worktree:   string;
+    ContinuedFrom, ContinuedBy: string;
+    Messages:   TMessageArray;
+    Trimmed:    Boolean;
+    Output:     string;              { shell: the output tail }
+    OutputTruncated: Boolean;
+  end;
+  TBgJobInfoArray = array of TBgJobInfo;
+
+  TBgCancelOutcome = (bcoNotFound, bcoKilled, bcoAdvisory, bcoAlreadyFinished);
+  TBgContinueOutcome = (bmoStarted, bmoNotFound, bmoEmptyText, bmoNotSubagent,
+                        bmoRunning, bmoNoSuchAgent, bmoAtCap);
 
   TBackgroundSpawnCoordinator = class
   private
@@ -162,7 +244,11 @@ type
     function RunningCount: Integer;
     function SlotsInUse: Integer;   { RunningCount + FReserved; caller holds FLock }
     function MaxJobs: Integer;
-    function NewHandle: string;
+    function NewHandle(const Prefix: string): string;
+    { Drop finished jobs past BackgroundHistoryMax. Caller holds FLock. }
+    procedure PruneHistory;
+    { Copy one job for a viewer. Caller holds FLock. }
+    procedure FillInfo(J: TBgJob; WithDetail: Boolean; out Info: TBgJobInfo);
   public
     constructor Create(const ACtx: TSubagentContext;
                        const ASpecs: TSubagentSpecArray);
@@ -191,6 +277,14 @@ type
       drain key matches; '' means every job (the TUI/CLI shape, one
       session per coordinator). }
     function DrainFinishedBlock(MaxChars: Integer; const Key: string = ''): string;
+
+    { Viewer operations; the global functions below walk every
+      coordinator with these. }
+    procedure AppendInfos(var Arr: TBgJobInfoArray);
+    function  GetInfo(const Handle: string; out Info: TBgJobInfo): Boolean;
+    function  CancelJob(const Handle: string; out Msg: string): TBgCancelOutcome;
+    function  ContinueJob(const Handle, Text: string;
+                          out NewJobHandle, Msg: string): TBgContinueOutcome;
   end;
 
 (* Register spawn_background / spawn_status / spawn_wait /
@@ -240,6 +334,39 @@ procedure FireBackgroundDone(const Key, Handle, Summary: string);
 procedure RegisterSubagentTools(Cfg: TConfig; Provider: ILLMProvider;
                                 Reg: TToolRegistry; const DefaultModel: string);
 
+(* Background work across the whole process -- every coordinator, so on
+   the gateway every chat's jobs, not one session's. What the gateway's
+   /v1/background routes and the `/tasks` command show.
+
+   ListBackgroundJobs: running (and still-stopping) jobs first, then the
+   rest, newest first within each; no transcripts.
+   GetBackgroundJob: one job with its transcript (a subagent) or its
+   output tail (a shell job).
+   CancelBackgroundJob: spawn_cancel's path. bcoAdvisory means the job was
+   marked and will stop by itself (a subagent at its next step, a shell
+   job under the docker backend), bcoKilled that a local process was.
+   ContinueBackgroundJob: a follow-up message to a finished subagent. A
+   new job continues that subagent's conversation with Text, in the same
+   chat, workspace and agent; the two are linked (ContinuedFrom /
+   ContinuedBy). Refused for a shell job and for a job still running. *)
+function ListBackgroundJobs: TBgJobInfoArray;
+function GetBackgroundJob(const Handle: string; out Info: TBgJobInfo): Boolean;
+function CancelBackgroundJob(const Handle: string; out Msg: string): TBgCancelOutcome;
+function ContinueBackgroundJob(const Handle, Text: string;
+                               out NewHandle, Msg: string): TBgContinueOutcome;
+
+{ The jobs as a plain-text list, for `/tasks` in `pasclaw agent` and the
+  TUI. One line per job, running first; a note when there are none. }
+function FormatBackgroundJobsText: string;
+{ The same in one line, for the positioned TUI's footer flash. }
+function BackgroundJobsSummary: string;
+
+(* Apply the transcript bounds (the BgTranscript constants). Cut messages keep
+   their role and structure; dropped ones go from the front, after the
+   first message, and never leave a tool result without its call.
+   Trimmed is set when anything was cut or dropped. Exposed for tests. *)
+function BoundTranscript(const Msgs: TMessageArray; out Trimmed: Boolean): TMessageArray;
+
 implementation
 
 uses
@@ -255,6 +382,7 @@ uses
   PasClaw.MCP.Disclosure,      { per-registry tool_search for bg subagents }
   PasClaw.Crypto.Random,
   PasClaw.Checkpoints,
+  PasClaw.Utils,               { Utf8SafeTruncate -- transcript and preview cuts }
   PasClaw.Tools.ToolLoop;
 
 type
@@ -363,6 +491,169 @@ begin
   Result := Result + '"';
 end;
 
+{ ------------------------- transcript bounds ------------------------- }
+
+function TranscriptMsgSize(const M: TMessage): Integer;
+var
+  i: Integer;
+begin
+  Result := Length(M.Content);
+  for i := 0 to High(M.ToolCalls) do
+    Inc(Result, Length(M.ToolCalls[i].Func.Arguments) + Length(M.ToolCalls[i].Func.Name));
+end;
+
+function CutText(const S: string; MaxLen: Integer): string;
+begin
+  if Length(S) <= MaxLen then Exit(S);
+  Result := Utf8SafeTruncate(S, MaxLen) +
+            Format(#10'... [cut: %d more characters]', [Length(S) - MaxLen]);
+end;
+
+function BoundTranscript(const Msgs: TMessageArray; out Trimmed: Boolean): TMessageArray;
+var
+  i, j, k, Total, Dropped: Integer;
+  Args: string;
+begin
+  Trimmed := False;
+  { Copy, not share: the caller's array keeps changing on its own thread. }
+  Result := nil;
+  SetLength(Result, Length(Msgs));
+  Total := 0;
+  for i := 0 to High(Msgs) do
+  begin
+    Result[i] := Msgs[i];
+    if Length(Result[i].Content) > BgTranscriptMsgChars then
+    begin
+      Result[i].Content := CutText(Result[i].Content, BgTranscriptMsgChars);
+      Trimmed := True;
+    end;
+    if Length(Msgs[i].ToolCalls) > 0 then
+    begin
+      { A fresh array: the source's would be changed through a shared one. }
+      SetLength(Result[i].ToolCalls, 0);
+      SetLength(Result[i].ToolCalls, Length(Msgs[i].ToolCalls));
+      for j := 0 to High(Msgs[i].ToolCalls) do
+      begin
+        Result[i].ToolCalls[j] := Msgs[i].ToolCalls[j];
+        { Elided, never cut: a follow-up sends these back to the provider,
+          which wants valid JSON. }
+        Args := Msgs[i].ToolCalls[j].Func.Arguments;
+        if Length(Args) > BgTranscriptArgChars then
+        begin
+          Result[i].ToolCalls[j].Func.Arguments := ElideLargeToolArgs(Args, BgTranscriptArgChars);
+          Trimmed := True;
+        end;
+      end;
+    end;
+    Inc(Total, TranscriptMsgSize(Result[i]));
+  end;
+  (* Over a bound: drop Result[1..k-1], keeping the first message (the task
+     the subagent was given). Past the point where the bounds hold, keep
+     dropping tool results that would otherwise lead the kept part: a
+     provider refuses a tool message whose call is gone. One shift at the
+     end, so a long history costs one pass, not one per message. *)
+  k := 1;
+  Dropped := 0;
+  while (k <= High(Result)) and
+        ((Length(Result) - (k - 1) > BgTranscriptMaxMessages) or
+         (Total - Dropped > BgTranscriptMaxChars) or
+         ((k > 1) and (Result[k].Role = mrTool))) do
+  begin
+    Inc(Dropped, TranscriptMsgSize(Result[k]));
+    Inc(k);
+  end;
+  if k > 1 then
+  begin
+    for i := k to High(Result) do Result[i - k + 1] := Result[i];
+    SetLength(Result, Length(Result) - (k - 1));
+    Trimmed := True;
+  end;
+end;
+
+{ ------------------------- job: live transcript ---------------------- }
+
+procedure TBgJob.LiveAppend(const M: TMessage);
+var
+  N: Integer;
+  T: Boolean;
+begin
+  FStateLock.Enter;
+  try
+    N := Length(FMessages);
+    SetLength(FMessages, N + 1);
+    FMessages[N] := M;
+    { One pass over at most a few hundred messages, once per model round
+      or tool result -- nothing next to the call that produced them. }
+    FMessages := BoundTranscript(FMessages, T);
+    FTrimmed := FTrimmed or T;
+  finally
+    FStateLock.Leave;
+  end;
+end;
+
+procedure TBgJob.LiveText(const S: string);
+begin
+  LiveAppend(MakeMessage(mrAssistant, S));
+end;
+
+procedure TBgJob.LiveToolCall(const Name, ArgsJSON: string);
+(* The calls of one round arrive one by one after that round's text, if it
+   had any: they join the assistant message of the round, or start one when
+   the last message is a tool result (the previous round's) or the prompt.
+   No call ids are known here; the final history replaces all of this. *)
+var
+  N, k: Integer;
+  TC: TToolCall;
+  M: TMessage;
+begin
+  TC := Default(TToolCall);
+  TC.Kind := 'function';
+  TC.Func.Name := Name;
+  if Length(ArgsJSON) > BgTranscriptArgChars then
+    TC.Func.Arguments := ElideLargeToolArgs(ArgsJSON, BgTranscriptArgChars)
+  else
+    TC.Func.Arguments := ArgsJSON;
+  FStateLock.Enter;
+  try
+    N := Length(FMessages);
+    if (N > 0) and (FMessages[N - 1].Role = mrAssistant) then
+    begin
+      k := Length(FMessages[N - 1].ToolCalls);
+      TC.Id := Format('live-%d-%d', [N - 1, k]);
+      SetLength(FMessages[N - 1].ToolCalls, k + 1);
+      FMessages[N - 1].ToolCalls[k] := TC;
+      Exit;
+    end;
+  finally
+    FStateLock.Leave;
+  end;
+  M := MakeMessage(mrAssistant, '');
+  TC.Id := Format('live-%d-0', [N]);
+  SetLength(M.ToolCalls, 1);
+  M.ToolCalls[0] := TC;
+  LiveAppend(M);
+end;
+
+procedure TBgJob.LiveToolResult(const Name, ResultText, Err: string);
+var
+  M: TMessage;
+begin
+  if Err <> '' then M := MakeMessage(mrTool, 'error: ' + Err)
+  else M := MakeMessage(mrTool, ResultText);
+  M.Name := Name;
+  LiveAppend(M);
+end;
+
+function TBgJob.CancelAsked: Boolean;
+begin
+  FStateLock.Enter;
+  try
+    Result := FState = bjCancelled;
+  finally
+    FStateLock.Leave;
+  end;
+end;
+
 procedure TBgJob.NotifyDone;
 var
   Summary, Kind: string;
@@ -406,7 +697,7 @@ var
   Args: TStringList;
   Buf: array[0..4095] of Byte;
   Acc: TMemoryStream;
-  N, Total, Code: Integer;
+  N, Total, Code, LiveLen: Integer;
   Out_: string;
   StartT: TDateTime;
   TimedOut, Cancelled, Ok, Spawned: Boolean;
@@ -486,6 +777,17 @@ begin
           begin
             Acc.WriteBuffer(Buf, N);
             Inc(Total, N);
+            { The tail a viewer sees while the command runs. }
+            FStateLock.Enter;
+            try
+              LiveLen := Length(FLiveOut);
+              SetLength(FLiveOut, LiveLen + N);
+              Move(Buf[0], FLiveOut[LiveLen], N);
+              if Length(FLiveOut) > BgOutputViewChars then
+                FLiveOut := Copy(FLiveOut, Length(FLiveOut) - BgOutputViewChars, BgOutputViewChars);
+            finally
+              FStateLock.Leave;
+            end;
             if Total > OneShotMaxBytes then begin KillTree; Break; end;
           end
           else if not P.Running then Break;
@@ -526,8 +828,14 @@ begin
   try
     FFinishedAt := Now;
     FExitCode := Code;
+    FLiveOut := nil;   { the result below has it all now }
     if FState = bjCancelled then
-      { the cancel path set it; result discarded }
+    begin
+      { The cancel path set the state. Nothing delivers a cancelled job's
+        result to the model, but what a killed command printed is what
+        the operator wants to read in the Background view. }
+      if Ok then FResultText := Format('exit=%d'#10'%s', [Code, Out_]);
+    end
     else if Ok then
     begin
       FState := bjDone;
@@ -550,7 +858,8 @@ procedure TBgJob.Execute;
 var
   Hist: TMessageArray;
   Loop: TToolLoopResult;
-  Ok: Boolean;
+  Ok, T: Boolean;
+  i: Integer;
 begin
   if FKind = bjkShell then
   begin
@@ -558,6 +867,7 @@ begin
     Exit;
   end;
   Ok := False;
+  Loop := Default(TToolLoopResult);   { read below even when the loop never ran }
   try
     { Run this background loop under the parent's checkpoint session so
       its fs_write / fs_edit snapshots fold into the parent's turn (the
@@ -568,8 +878,18 @@ begin
       scenarios); dispatches set it from the config themselves. }
     SetThreadShellSessionId(FShellSessionId);
     try
-      SetLength(Hist, 1);
-      Hist[0] := MakeMessage(mrUser, FPrompt);
+      { A follow-up starts from the conversation it continues. }
+      SetLength(Hist, Length(FSeedHistory) + 1);
+      for i := 0 to High(FSeedHistory) do Hist[i] := FSeedHistory[i];
+      Hist[High(Hist)] := MakeMessage(mrUser, FPrompt);
+      FStateLock.Enter;
+      try
+        FMessages := BoundTranscript(Hist, T);
+        FTrimmed := T;
+        FSeedHistory := nil;   { held by FMessages and Hist from here }
+      finally
+        FStateLock.Leave;
+      end;
       Ok := RunToolLoop(TLoopCfgBox(FCfg).Cfg, Hist, Loop);
     finally
       { Cleared before the thread ends: Delphi does not finalize a
@@ -588,9 +908,47 @@ begin
     end;
   end;
 
+  { A provider that refused or could not be reached ends the loop "ok" with
+    its error as the content; that job did not do its task. 0 is a provider
+    that never sets the status. }
+  if Ok and (Loop.LastResp.StatusCode <> 0) and
+     ((Loop.LastResp.StatusCode < 200) or (Loop.LastResp.StatusCode >= 300)) then
+  begin
+    Ok := False;
+    FStateLock.Enter;
+    try
+      FErrMsg := Format('provider status %d: %s', [Loop.LastResp.StatusCode, Loop.Content]);
+    finally
+      FStateLock.Leave;
+    end;
+  end;
+
   FStateLock.Enter;
   try
     FFinishedAt := Now;
+    { The loop's own final history -- real call ids, compaction applied --
+      over the live copy, whenever it has one: also for a cancelled or
+      failed job, whose transcript shows how far it got. }
+    if Length(Loop.FinalMessages) > 0 then
+    begin
+      Hist := Loop.FinalMessages;
+      (* FinalMessages stops one message short: the answer is Loop.Content
+         and nowhere in the array (Cmd.Agent appends it the same way before
+         saving a session). Without it the view would show no answer and a
+         follow-up would continue a conversation the subagent never
+         finished. Not for a refusal (that text is an error, not a reply)
+         and not twice. *)
+      if Ok and (not Loop.Cancelled) and (Trim(Loop.Content) <> '') and
+         not ((Hist[High(Hist)].Role = mrAssistant) and
+              (Hist[High(Hist)].Content = Loop.Content)) then
+      begin
+        SetLength(Hist, Length(Hist) + 1);
+        Hist[High(Hist)] := MakeMessage(mrAssistant, Loop.Content);
+      end;
+      FMessages := BoundTranscript(Hist, T);
+      FTrimmed := T;
+    end;
+    FFinalSystemPrompt := Loop.FinalSystemPrompt;
     if FState = bjCancelled then
       { Keep the cancelled marker; result discarded by policy. }
     else if Ok then
@@ -755,9 +1113,57 @@ begin
   end;
 end;
 
-function TBackgroundSpawnCoordinator.NewHandle: string;
+function TBackgroundSpawnCoordinator.NewHandle(const Prefix: string): string;
+{ 6 hex chars. Unique among the jobs kept: with a history to browse and
+  follow-ups addressed by handle, two jobs answering to one would be a
+  real mix-up. Caller holds FLock. }
 begin
-  Result := 'bg-' + RandHex(3);   { 6 hex chars; per-session scope }
+  repeat
+    Result := Prefix + RandHex(3);
+  until FindJob(Result) = nil;
+end;
+
+procedure WireJobLoop(Job: TBgJob; Box: TLoopCfgBox);
+{ The loop's callbacks that feed the job's live transcript, and the cancel
+  check at its step boundaries. Bound to THIS job -- a follow-up copies
+  another job's config and must not keep reporting into that one. }
+begin
+  Box.Cfg.OnText       := Job.LiveText;
+  Box.Cfg.OnToolCall   := Job.LiveToolCall;
+  Box.Cfg.OnToolResult := Job.LiveToolResult;
+  Box.Cfg.ShouldCancel := Job.CancelAsked;
+end;
+
+procedure TBackgroundSpawnCoordinator.PruneHistory;
+(* Keep at most BackgroundHistoryMax finished jobs: drop the oldest beyond
+   that, first among those whose result already reached the model (drained
+   or waited for), then the rest. Only a job whose thread has ended (its
+   state is final and Free does not wait) and that nobody holds outside
+   the lock (spawn_wait) goes. Caller holds FLock. *)
+var
+  i, Done, Excess, Pass: Integer;
+  J: TBgJob;
+begin
+  Done := 0;
+  for i := 0 to FJobs.Count - 1 do
+    if TBgJob(FJobs[i]).Finished then Inc(Done);
+  Excess := Done - BackgroundHistoryMax;
+  for Pass := 0 to 1 do
+  begin
+    i := 0;
+    while (Excess > 0) and (i < FJobs.Count) do
+    begin
+      J := TBgJob(FJobs[i]);
+      if J.Finished and (J.FPins = 0) and ((Pass = 1) or J.FCollected) then
+      begin
+        FJobs.Delete(i);
+        J.Free;
+        Dec(Excess);
+      end
+      else
+        Inc(i);
+    end;
+  end;
 end;
 
 function TBackgroundSpawnCoordinator.SlotsInUse: Integer;
@@ -889,7 +1295,7 @@ begin
     Job := TBgJob.Create(True);   { suspended }
     Job.FStateLock := TCriticalSection.Create;
     Job.FKind      := bjkSubagent;
-    Job.FHandle    := NewHandle;
+    Job.FHandle    := NewHandle('bg-');
     Job.FAgentName := AgentName;
     Job.FPrompt    := Prompt;
     Job.FState     := bjRunning;
@@ -924,9 +1330,7 @@ begin
     Box.Cfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(Box.Cfg.Options, FCtx.PromptCache);
     Box.Cfg.Options.SystemPrompt := SysPrompt;
-    Box.Cfg.OnText        := nil;
-    Box.Cfg.OnToolCall    := nil;
-    Box.Cfg.OnToolResult  := nil;
+    WireJobLoop(Job, Box);
     { The job's thread has no thread-scoped context of its own, so what
       the parent's dispatch had is copied in: the worktree, else the
       parent's thread workspace ('' when it has none = the process-wide
@@ -939,7 +1343,10 @@ begin
         'You are working in the git worktree ' + WorkDir + ' (branch ' + Worktree + '). ' +
         'Relative paths and shell commands resolve there. Commit your work on that branch.';
     Job.FCfg := Box;
+    Job.FWorkDir  := WorkDir;
+    Job.FWorktree := Worktree;
     FJobs.Add(Job);
+    PruneHistory;
     LogInfo('subagent bg-spawn: handle=%s name=%s model=%s tools=%d workspace=%s',
             [Job.FHandle, AgentName, Model, Job.FChildReg.Count, WorkDir]);
     Job.Start;
@@ -1002,7 +1409,7 @@ begin
     Job := TBgJob.Create(True);
     Job.FStateLock := TCriticalSection.Create;
     Job.FKind      := bjkShell;
-    Job.FHandle    := 'sh-' + RandHex(3);
+    Job.FHandle    := NewHandle('sh-');
     Job.FAgentName := 'shell';
     Job.FCommand   := Cmd;
     Job.FWorkDir   := WorkDir;
@@ -1017,6 +1424,7 @@ begin
     Job.FChildReg := nil;
     Job.FCfg := nil;
     FJobs.Add(Job);
+    PruneHistory;
     LogInfo('shell bg: handle=%s cwd=%s timeout=%dms cmd=%s',
             [Job.FHandle, WorkDir, Job.FTimeoutMs, Copy(Cmd, 1, 120)]);
     Job.Start;
@@ -1110,9 +1518,12 @@ begin
   if TimeoutSec < 1 then TimeoutSec := 1;
   if TimeoutSec > MaxTimeout then TimeoutSec := MaxTimeout;
 
+  { Pinned while this polls outside the lock: a job that finishes meanwhile
+    must not be pruned and freed under us by another spawn. }
   FLock.Enter;
   try
     Job := FindJob(Handle);
+    if Job <> nil then Inc(Job.FPins);
   finally
     FLock.Leave;
   end;
@@ -1122,77 +1533,112 @@ begin
     Exit;
   end;
 
-  Deadline := IncSecond(Now, TimeoutSec);
-  repeat
-    Job.FStateLock.Enter;
-    try
-      St := Job.FState;
-      if St <> bjRunning then
-      begin
-        case St of
-          bjDone:
-            begin
-              Job.FCollected := True;  { full result delivered here;
-                                         don't re-deliver via drain }
-              Result := Job.FResultText;
-            end;
-          bjFailed:    ErrMsg := 'spawn_wait: job failed: ' + Job.FErrMsg;
-          bjCancelled: ErrMsg := 'spawn_wait: job was cancelled';
+  try
+    Deadline := IncSecond(Now, TimeoutSec);
+    repeat
+      Job.FStateLock.Enter;
+      try
+        St := Job.FState;
+        if St <> bjRunning then
+        begin
+          case St of
+            bjDone:
+              begin
+                Job.FCollected := True;  { full result delivered here;
+                                           don't re-deliver via drain }
+                Result := Job.FResultText;
+              end;
+            bjFailed:    ErrMsg := 'spawn_wait: job failed: ' + Job.FErrMsg;
+            bjCancelled: ErrMsg := 'spawn_wait: job was cancelled';
+          end;
+          Exit;
         end;
-        Exit;
+      finally
+        Job.FStateLock.Leave;
       end;
-    finally
-      Job.FStateLock.Leave;
-    end;
-    Sleep(150);
-  until Now >= Deadline;
+      Sleep(150);
+    until Now >= Deadline;
 
-  Result := Format('(still running after %ds -- handle=%s; its result will ' +
-                   'be delivered automatically when ready, or spawn_wait again)',
-                   [TimeoutSec, Handle]);
+    Result := Format('(still running after %ds -- handle=%s; its result will ' +
+                     'be delivered automatically when ready, or spawn_wait again)',
+                     [TimeoutSec, Handle]);
+  finally
+    FLock.Enter;
+    try
+      Dec(Job.FPins);
+    finally
+      FLock.Leave;
+    end;
+  end;
 end;
 
 function TBackgroundSpawnCoordinator.HandleCancel(
   const ArgsJSON: string; out ErrMsg: string): string;
 var
   Handle: string;
-  Job: TBgJob;
 begin
   Result := '';
   ErrMsg := '';
   Handle := ParseArgStr(ArgsJSON, 'handle');
   if Handle = '' then begin ErrMsg := 'spawn_cancel: handle required'; Exit; end;
+  if CancelJob(Handle, Result) = bcoNotFound then
+  begin
+    Result := '';
+    ErrMsg := 'spawn_cancel: no job with handle ' + Handle;
+  end;
+end;
 
+function TBackgroundSpawnCoordinator.CancelJob(const Handle: string;
+                                               out Msg: string): TBgCancelOutcome;
+var
+  Job: TBgJob;
+begin
+  Msg := '';
   FLock.Enter;
   try
     Job := FindJob(Handle);
-    if Job = nil then
-    begin
-      ErrMsg := 'spawn_cancel: no job with handle ' + Handle;
-      Exit;
-    end;
+    if Job = nil then Exit(bcoNotFound);
     Job.FStateLock.Enter;
     try
       if Job.FState = bjRunning then
       begin
         Job.FState := bjCancelled;
         if (Job.FKind = bjkShell) and (Job.FProc <> nil) then
+        begin
           { A shell job on the local backend has a process to kill. The
             job's own thread does the killing: its run loop polls the
             state every few tens of milliseconds and calls Terminate on
             the process it owns. Not from here -- TProcess is not
             thread-safe, and a Terminate racing the owner's Running /
             ReadAvailable is a double reap. }
-          Result := 'job ' + Handle + ' killed'
+          Msg := 'job ' + Handle + ' killed';
+          Result := bcoKilled;
+        end
+        else if Job.FKind = bjkShell then
+        begin
+          { A shell job on a non-local backend: nothing to kill from here;
+            the cancelled marker makes the job discard its result. }
+          Msg := 'job ' + Handle + ' marked cancelled; its result will be ' +
+                 'discarded (the command runs in the shell backend and ' +
+                 'is not killed from here)';
+          Result := bcoAdvisory;
+        end
         else
-          { Advisory only: a subagent keeps running until its current
-            provider call returns; the cancelled marker makes Execute
-            discard the result. A shell job on a non-local backend is
-            the same -- nothing to kill from here. }
-          Result := 'job ' + Handle + ' marked cancelled; its result will be discarded';
+        begin
+          { A subagent: its loop checks at each step boundary (ShouldCancel)
+            and stops there, so a model call already on the wire finishes
+            first; the cancelled marker makes Execute discard the result. }
+          Msg := 'job ' + Handle + ' marked cancelled; it stops at its next ' +
+                 'step (a model call already in flight finishes first) and ' +
+                 'its result will be discarded';
+          Result := bcoAdvisory;
+        end;
       end
       else
-        Result := 'job ' + Handle + ' already ' + StateLabel(Job.FState);
+      begin
+        Msg := 'job ' + Handle + ' already ' + StateLabel(Job.FState);
+        Result := bcoAlreadyFinished;
+      end;
     finally
       Job.FStateLock.Leave;
     end;
@@ -1228,6 +1674,11 @@ begin
           Who := 'shell "' + Copy(Job.FCommand, 1, 80) + '"'
         else
           Who := 'agent "' + Job.FAgentName + '"';
+        { A follow-up the operator sent from the Background view: the model
+          did not start it, so say what it continues. }
+        if Job.FContinuedFrom <> '' then
+          Who := Who + ', follow-up to ' + Job.FContinuedFrom + ': "' +
+                 Utf8SafeTruncate(Job.FPrompt, 200) + '"';
         if Job.FState = bjDone then
         begin
           Preview := Job.FResultText;
@@ -1267,6 +1718,428 @@ begin
     if Result <> '' then Result := Result + sLineBreak;
     Result := Result + '[background shell results]' + sLineBreak + ShellBlock;
   end;
+end;
+
+{ --------------------------- viewers ----------------------------- }
+
+function OutputTail(const S: string; MaxLen: Integer; out Cut: Boolean): string;
+{ The last MaxLen characters of S, starting on a character boundary. }
+var
+  P: Integer;
+begin
+  Cut := Length(S) > MaxLen;
+  if not Cut then Exit(S);
+  P := Length(S) - MaxLen + 1;
+  {$IFDEF FPC}
+  while (P <= Length(S)) and ((Byte(S[P]) and $C0) = $80) do Inc(P);
+  {$ELSE}
+  if (Ord(S[P]) >= $DC00) and (Ord(S[P]) <= $DFFF) then Inc(P);
+  {$ENDIF}
+  Result := Copy(S, P, MaxLen);
+end;
+
+procedure TBackgroundSpawnCoordinator.FillInfo(J: TBgJob; WithDetail: Boolean;
+                                               out Info: TBgJobInfo);
+var
+  Raw: string;
+  B: TBytes;
+  i, NL: Integer;
+begin
+  Info := Default(TBgJobInfo);
+  J.FStateLock.Enter;
+  try
+    Info.Handle    := J.FHandle;
+    if J.FKind = bjkShell then Info.Kind := 'shell' else Info.Kind := 'subagent';
+    Info.AgentName := J.FAgentName;
+    Info.Command   := J.FCommand;
+    Info.Prompt    := J.FPrompt;
+    Info.State     := StateLabel(J.FState);
+    Info.Session   := J.FDrainKey;
+    Info.StartedAt := J.FStartedAt;
+    Info.FinishedAt := J.FFinishedAt;   { 0 until the thread is done }
+    Info.Stopping  := (J.FState = bjCancelled) and (J.FFinishedAt = 0);
+    if J.FFinishedAt = 0 then
+      Info.ElapsedSec := SecondsBetween(Now, J.FStartedAt)
+    else
+      Info.ElapsedSec := SecondsBetween(J.FFinishedAt, J.FStartedAt);
+    Info.ResultText := J.FResultText;
+    Info.ErrMsg     := J.FErrMsg;
+    Info.ExitCode   := -1;
+    if (J.FKind = bjkShell) and (J.FFinishedAt <> 0) then Info.ExitCode := J.FExitCode;
+    Info.Collected  := J.FCollected;
+    Info.Killable   := (J.FKind = bjkShell) and (J.FProc <> nil) and (J.FState = bjRunning);
+    Info.Worktree   := J.FWorktree;
+    Info.ContinuedFrom := J.FContinuedFrom;
+    Info.ContinuedBy   := J.FContinuedBy;
+    if not WithDetail then Exit;
+    if J.FKind = bjkSubagent then
+    begin
+      { A copy: FMessages goes on changing on the job's thread. }
+      Info.Messages := Copy(J.FMessages, 0, Length(J.FMessages));
+      Info.Trimmed  := J.FTrimmed;
+    end
+    else if J.FFinishedAt = 0 then
+    begin
+      B := Copy(J.FLiveOut, 0, Length(J.FLiveOut));
+      { The tail may start inside a character; begin at the next one, or
+        the decoder takes the whole tail for a legacy codepage. }
+      i := 0;
+      while (i < Length(B)) and (i < 3) and ((B[i] and $C0) = $80) do Inc(i);
+      if i > 0 then B := Copy(B, i, Length(B) - i);
+      if Length(B) > 0 then Info.Output := DecodeShellOutputBytes(B, Length(B));
+      Info.OutputTruncated := Length(J.FLiveOut) >= BgOutputViewChars;
+    end
+    else
+    begin
+      { The result is "exit=N" then the output; the code is ExitCode. }
+      Raw := J.FResultText;
+      if Raw = '' then Raw := J.FErrMsg
+      else
+      begin
+        NL := Pos(#10, Raw);
+        if (NL > 0) and (Copy(Raw, 1, 5) = 'exit=') then Raw := Copy(Raw, NL + 1, MaxInt);
+      end;
+      Info.Output := OutputTail(Raw, BgOutputViewChars, Info.OutputTruncated);
+    end;
+  finally
+    J.FStateLock.Leave;
+  end;
+end;
+
+procedure TBackgroundSpawnCoordinator.AppendInfos(var Arr: TBgJobInfoArray);
+var
+  i, N: Integer;
+begin
+  FLock.Enter;
+  try
+    N := Length(Arr);
+    SetLength(Arr, N + FJobs.Count);
+    for i := 0 to FJobs.Count - 1 do
+      FillInfo(TBgJob(FJobs[i]), False, Arr[N + i]);
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TBackgroundSpawnCoordinator.GetInfo(const Handle: string;
+                                             out Info: TBgJobInfo): Boolean;
+var
+  J: TBgJob;
+begin
+  FLock.Enter;
+  try
+    J := FindJob(Handle);
+    Result := J <> nil;
+    if Result then FillInfo(J, True, Info)
+    else Info := Default(TBgJobInfo);
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TBackgroundSpawnCoordinator.ContinueJob(const Handle, Text: string;
+  out NewJobHandle, Msg: string): TBgContinueOutcome;
+(* A follow-up to a finished subagent: a new job whose history is the old
+   job's transcript, whose prompt is Text, and which runs as the old one
+   did -- same agent, model, workspace or worktree, shell session,
+   checkpoint session and chat (so its result is delivered to that chat's
+   next turn, like any job of it). The old job's final system prompt is
+   used when it has one: a compaction summary lives there.
+
+   The transcript is the bounded copy (BoundTranscript): what was cut for
+   the view is cut for the follow-up too. *)
+var
+  Old, Job: TBgJob;
+  Spec: TSubagentSpec;
+  Box: TLoopCfgBox;
+  Hist: TMessageArray;
+  SysPrompt: string;
+  Busy: Boolean;
+begin
+  NewJobHandle := '';
+  Msg := '';
+  if Trim(Text) = '' then
+  begin
+    Msg := 'the message is empty';
+    Exit(bmoEmptyText);
+  end;
+  FLock.Enter;
+  try
+    Old := FindJob(Handle);
+    if Old = nil then
+    begin
+      Msg := 'no job with handle ' + Handle;
+      Exit(bmoNotFound);
+    end;
+    if Old.FKind <> bjkSubagent then
+    begin
+      Msg := 'job ' + Handle + ' is a shell command, not a subagent: there is ' +
+             'no conversation to continue';
+      Exit(bmoNotSubagent);
+    end;
+    Old.FStateLock.Enter;
+    try
+      { Still running, or cancelled but still finishing a model call: its
+        transcript is not final yet. }
+      Busy := Old.FFinishedAt = 0;
+      Hist := Copy(Old.FMessages, 0, Length(Old.FMessages));
+      SysPrompt := Old.FFinalSystemPrompt;
+    finally
+      Old.FStateLock.Leave;
+    end;
+    if Busy then
+    begin
+      Msg := 'job ' + Handle + ' is still running; message it once it has finished';
+      Exit(bmoRunning);
+    end;
+    if not FindSpec(Old.FAgentName, Spec) then
+    begin
+      Msg := 'no subagent named "' + Old.FAgentName + '" any more';
+      Exit(bmoNoSuchAgent);
+    end;
+    if SlotsInUse >= MaxJobs then
+    begin
+      Msg := Format('%d job(s) already running (cap %d); try again when one ' +
+                    'has finished', [SlotsInUse, MaxJobs]);
+      Exit(bmoAtCap);
+    end;
+
+    Job := TBgJob.Create(True);   { suspended }
+    Job.FStateLock := TCriticalSection.Create;
+    Job.FKind      := bjkSubagent;
+    Job.FHandle    := NewHandle('bg-');
+    Job.FAgentName := Old.FAgentName;
+    Job.FPrompt    := Text;
+    Job.FState     := bjRunning;
+    Job.FStartedAt := Now;
+    Job.FCheckpointHandle := Old.FCheckpointHandle;
+    Job.FDrainKey  := Old.FDrainKey;
+    Job.FShellSessionId := Old.FShellSessionId;
+    Job.FWorkDir   := Old.FWorkDir;
+    Job.FWorktree  := Old.FWorktree;
+    Job.FSeedHistory := Hist;
+    Job.FContinuedFrom := Old.FHandle;
+    Job.FChildReg  := BuildFilteredRegistry(FCtx.ParentRegistry, Spec.Tools);
+    { The old job's loop settings (model, iterations, fallbacks, prompt
+      options, workspace, shell session) on a registry of its own: the old
+      job owns its registry and may be pruned while this one runs. }
+    Box := TLoopCfgBox.Create;
+    Box.Cfg := TLoopCfgBox(Old.FCfg).Cfg;
+    Box.Cfg.Registry := Job.FChildReg;
+    if (FCtx.Cfg <> nil) and (Length(Job.FChildReg.DeferredNames) > 0) then
+      Job.FChildDisc := RegisterMCPDisclosureTools(Job.FChildReg, FCtx.Cfg, False);
+    if SysPrompt <> '' then Box.Cfg.Options.SystemPrompt := SysPrompt;
+    WireJobLoop(Job, Box);
+    Job.FCfg := Box;
+    Old.FStateLock.Enter;
+    try
+      Old.FContinuedBy := Job.FHandle;
+    finally
+      Old.FStateLock.Leave;
+    end;
+    FJobs.Add(Job);
+    PruneHistory;
+    LogInfo('subagent bg-follow-up: handle=%s continues=%s name=%s history=%d',
+            [Job.FHandle, Handle, Job.FAgentName, Length(Hist)]);
+    NewJobHandle := Job.FHandle;
+    Job.Start;
+    Result := bmoStarted;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+{ Every coordinator, under GMapLock, which the caller holds. The lock keeps
+  a key-registered coordinator from being destroyed while it is used
+  (Destroy unregisters under it first); the module-owned ones live until
+  finalization. Lock order is GMapLock, then a coordinator's FLock --
+  nothing takes them the other way round. }
+procedure CollectCoordinators(L: TList);
+var
+  i: Integer;
+begin
+  for i := 0 to GMap.Count - 1 do
+    if L.IndexOf(GMap.Objects[i]) < 0 then L.Add(GMap.Objects[i]);
+  if GCoordinators <> nil then
+    for i := 0 to GCoordinators.Count - 1 do
+      if L.IndexOf(GCoordinators[i]) < 0 then L.Add(GCoordinators[i]);
+end;
+
+function JobSortsBefore(const A, B: TBgJobInfo): Boolean;
+{ Running (and still-stopping) first, then newest first. }
+var
+  ALive, BLive: Boolean;
+begin
+  ALive := A.FinishedAt = 0;
+  BLive := B.FinishedAt = 0;
+  if ALive <> BLive then Exit(ALive);
+  Result := A.StartedAt > B.StartedAt;
+end;
+
+function ListBackgroundJobs: TBgJobInfoArray;
+var
+  L: TList;
+  i, j: Integer;
+  Tmp: TBgJobInfo;
+begin
+  Result := nil;
+  if GMapLock = nil then Exit;
+  L := TList.Create;
+  try
+    GMapLock.Enter;
+    try
+      CollectCoordinators(L);
+      for i := 0 to L.Count - 1 do
+        TBackgroundSpawnCoordinator(L[i]).AppendInfos(Result);
+    finally
+      GMapLock.Leave;
+    end;
+  finally
+    L.Free;
+  end;
+  { Insertion sort: a few dozen entries. }
+  for i := 1 to High(Result) do
+  begin
+    Tmp := Result[i];
+    j := i - 1;
+    while (j >= 0) and JobSortsBefore(Tmp, Result[j]) do
+    begin
+      Result[j + 1] := Result[j];
+      Dec(j);
+    end;
+    Result[j + 1] := Tmp;
+  end;
+end;
+
+function GetBackgroundJob(const Handle: string; out Info: TBgJobInfo): Boolean;
+var
+  L: TList;
+  i: Integer;
+begin
+  Result := False;
+  Info := Default(TBgJobInfo);
+  if (GMapLock = nil) or (Handle = '') then Exit;
+  L := TList.Create;
+  try
+    GMapLock.Enter;
+    try
+      CollectCoordinators(L);
+      for i := 0 to L.Count - 1 do
+        if TBackgroundSpawnCoordinator(L[i]).GetInfo(Handle, Info) then Exit(True);
+    finally
+      GMapLock.Leave;
+    end;
+  finally
+    L.Free;
+  end;
+end;
+
+function CancelBackgroundJob(const Handle: string; out Msg: string): TBgCancelOutcome;
+var
+  L: TList;
+  i: Integer;
+begin
+  Result := bcoNotFound;
+  Msg := 'no job with handle ' + Handle;
+  if (GMapLock = nil) or (Handle = '') then Exit;
+  L := TList.Create;
+  try
+    GMapLock.Enter;
+    try
+      CollectCoordinators(L);
+      for i := 0 to L.Count - 1 do
+      begin
+        Result := TBackgroundSpawnCoordinator(L[i]).CancelJob(Handle, Msg);
+        if Result <> bcoNotFound then Exit;
+      end;
+      Msg := 'no job with handle ' + Handle;
+    finally
+      GMapLock.Leave;
+    end;
+  finally
+    L.Free;
+  end;
+end;
+
+function ContinueBackgroundJob(const Handle, Text: string;
+                               out NewHandle, Msg: string): TBgContinueOutcome;
+var
+  L: TList;
+  i: Integer;
+begin
+  Result := bmoNotFound;
+  NewHandle := '';
+  Msg := 'no job with handle ' + Handle;
+  if (GMapLock = nil) or (Handle = '') then Exit;
+  L := TList.Create;
+  try
+    GMapLock.Enter;
+    try
+      CollectCoordinators(L);
+      for i := 0 to L.Count - 1 do
+      begin
+        Result := TBackgroundSpawnCoordinator(L[i]).ContinueJob(Handle, Text, NewHandle, Msg);
+        if Result <> bmoNotFound then Exit;
+      end;
+      Msg := 'no job with handle ' + Handle;
+    finally
+      GMapLock.Leave;
+    end;
+  finally
+    L.Free;
+  end;
+end;
+
+function FormatBackgroundJobsText: string;
+var
+  Jobs: TBgJobInfoArray;
+  i: Integer;
+  What, St: string;
+begin
+  Jobs := ListBackgroundJobs;
+  if Length(Jobs) = 0 then
+    Exit('no background jobs -- the model starts them with spawn_background ' +
+         '(a subagent) or shell_background (a command)');
+  Result := '';
+  for i := 0 to High(Jobs) do
+  begin
+    if Jobs[i].Kind = 'shell' then
+      What := 'shell: ' + Utf8SafeTruncate(Jobs[i].Command, 60)
+    else
+      What := Jobs[i].AgentName + ': ' +
+              Utf8SafeTruncate(StringReplace(Jobs[i].Prompt, #10, ' ', [rfReplaceAll]), 60);
+    St := Jobs[i].State;
+    if Jobs[i].Stopping then St := 'stopping';
+    if (Jobs[i].Kind = 'shell') and (Jobs[i].ExitCode >= 0) then
+      St := St + Format(' exit=%d', [Jobs[i].ExitCode]);
+    if Result <> '' then Result := Result + sLineBreak;
+    Result := Result + Format('  %-9s  %-16s %5ds  %s', [Jobs[i].Handle, St,
+                              Jobs[i].ElapsedSec, What]);
+  end;
+end;
+
+function BackgroundJobsSummary: string;
+var
+  Jobs: TBgJobInfoArray;
+  i, Live, Done: Integer;
+  Names: string;
+begin
+  Jobs := ListBackgroundJobs;
+  Live := 0;
+  Done := 0;
+  Names := '';
+  for i := 0 to High(Jobs) do
+    if Jobs[i].FinishedAt = 0 then
+    begin
+      Inc(Live);
+      if Names <> '' then Names := Names + ', ';
+      Names := Names + Jobs[i].Handle + ' ' + Jobs[i].AgentName;
+    end
+    else
+      Inc(Done);
+  if Live + Done = 0 then Exit('no background jobs');
+  Result := Format('background: %d running, %d finished', [Live, Done]);
+  if Names <> '' then Result := Result + ' -- ' + Names;
 end;
 
 { ------------------- drain hook + registration -------------------- }
@@ -1441,8 +2314,8 @@ begin
 
   T.Name        := 'spawn_cancel';
   T.Description := 'Cancel a background job. A shell job is killed. A ' +
-                   'subagent is advisory: mid-provider-call it finishes that ' +
-                   'call first, then its result is discarded.';
+                   'subagent stops at its next step (a model call already ' +
+                   'in flight finishes first); its result is discarded.';
   T.Schema      :=
     '{"type":"object","properties":{' +
     '"handle":{"type":"string","description":"Handle returned by spawn_background."}},' +

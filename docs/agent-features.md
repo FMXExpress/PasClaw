@@ -259,6 +259,7 @@ edit → PR → human review* is now the same across every major tool [S].
 | **Per-agent git worktree isolation** | Intent — attribution "a property of the workspace itself" [S] | ✅ a subagent spawned with `worktree: "<branch>"` runs in its own checkout (per-thread sandbox workspace, `TToolLoopConfig.Workspace`); sessions record their `location` [P] |
 | Attribution without span propagation (structural, from the worktree boundary) | [S] | ⚠️ the boundary exists (one branch per subagent, commits land there); nothing yet reads it back as attribution [P] |
 | Free-tier background quota as a product lever | Jules: 15 tasks/day [S] | n/a (self-hosted) |
+| A view of background work: running and finished jobs, open one to read it, stop it, message a finished agent | Codex agent command center; Claude Code `/tasks` (finished subagents reopened and messaged); OpenClaw Subagents / Processes panels [S] | ✅ web UI **Background** tab over `GET /v1/background` (every chat's `spawn_background` / `shell_background` jobs, running count on the tab); a subagent's transcript with the chat's tool cards or a command's output; Stop; a follow-up to a finished subagent continues its conversation as a linked job; `/tasks` in the CLI and TUI. Cron stays on its own tab [P] |
 
 Worktree isolation is the standout: it solves attribution, conflict, and
 rollback in one move, structurally, with no instrumentation — and PasClaw's

@@ -1844,6 +1844,14 @@ begin
           PrintLn(Ansi.Red + '(steer push failed)' + Ansi.Reset);
         Continue;
       end;
+      if Line = '/tasks' then
+      begin
+        { Background jobs (spawn_background / shell_background) of this
+          process, running first -- the CLI's view of the gateway's
+          Background tab. }
+        PrintLn(FormatBackgroundJobsText);
+        Continue;
+      end;
       if Line = '/tools' then
       begin
         if Reg = nil then
@@ -1864,6 +1872,7 @@ begin
         PrintLn('  /compact     force a one-shot summariser pass on the history now');
         PrintLn('  /think       toggle extended thinking on the next turn (if the provider supports it)');
         PrintLn('  /tools       list registered tools');
+        PrintLn('  /tasks       list background jobs (spawn_background / shell_background), running first');
         PrintLn('  /mode [plan|build|improve]  show or set the mode (plan = read-only, build = full access, improve = measure-first loop)');
         PrintLn('  /steer <msg> queue a mid-loop steering message for the NEXT iteration');
         PrintLn('  /undo [N]    rewind N turns by restoring file checkpoints (default 1)');
