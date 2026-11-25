@@ -70,4 +70,20 @@ PATH="$dir/shim:$PATH" sh "$here/sweep-stale-units.sh" "$dir/lib" "$dir/src"
 sh "$here/sweep-stale-units.sh" "$dir/lib" "$dir/src"
 [ ! -f "$dir/lib/u.ppu" ] || { echo "FAIL: a source edited during a sweep was never swept: its unit is still there"; exit 1; }
 echo "  ok: a source edited during a sweep is swept by the next one"
+
+# A resource that changed (git brought a new webui.res; webui.html came with
+# it, so make built nothing) sweeps the unit that {$R}s it, and only that
+# one. The compiled units are stand-ins: only which files go matters here.
+mkdir -p "$dir/rsrc" "$dir/rlib"
+printf 'unit w;\ninterface\nimplementation\n{$R r.res}\nend.\n' > "$dir/rsrc/w.pas"
+printf 'unit v;\ninterface\nimplementation\nend.\n' > "$dir/rsrc/v.pas"
+touch -d 2020-01-01T00:00:00 "$dir/rsrc/w.pas" "$dir/rsrc/v.pas"
+printf 'old' > "$dir/rsrc/r.res"; touch -d 2020-01-01T00:00:00 "$dir/rsrc/r.res"
+touch "$dir/rlib/w.ppu" "$dir/rlib/w.o" "$dir/rlib/v.ppu" "$dir/rlib/v.o"
+touch -d 2020-01-01T00:00:01 "$dir/rlib/.sweep-mark"
+printf 'new' > "$dir/rsrc/r.res"; touch -d 2020-01-01T00:00:02 "$dir/rsrc/r.res"
+sh "$here/sweep-stale-units.sh" "$dir/rlib" "$dir/rsrc"
+[ ! -f "$dir/rlib/w.ppu" ] && [ ! -f "$dir/rlib/w.o" ] || { echo "FAIL: a changed .res left the unit that includes it compiled"; exit 1; }
+[ -f "$dir/rlib/v.ppu" ] || { echo "FAIL: a changed .res swept a unit that does not include it"; exit 1; }
+echo "  ok: a changed .res sweeps the unit that includes it, and only that one"
 echo PASS

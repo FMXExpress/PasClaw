@@ -35,7 +35,21 @@ next="$out/.sweep-mark.$$"
 touch "$next" 2>/dev/null || exit 0
 
 if [ -f "$mark" ]; then
-  find "$@" -type f \( -name '*.pas' -o -name '*.pp' \) -newer "$mark" 2>/dev/null |
+  # A resource (.res) is linked into the unit that names it in {$R ...}
+  # when THAT unit compiles, and FPC does not track the .res at all. The
+  # Makefile touches the web UI's unit when it builds webui.res itself, but
+  # a webui.res that git brought in (a pull, a merge) arrives with
+  # webui.html at the same time, nothing is rebuilt, and the binary shipped
+  # the previous web UI. So a changed .res sweeps the units beside it that
+  # name it.
+  find "$@" -type f \( -name '*.pas' -o -name '*.pp' -o -name '*.res' \) -newer "$mark" 2>/dev/null |
+  while IFS= read -r changed; do
+    case "$changed" in
+      *.res) grep -l -i -F "{\$R $(basename "$changed")}" \
+               "$(dirname "$changed")"/*.pas "$(dirname "$changed")"/*.pp 2>/dev/null ;;
+      *)     printf '%s\n' "$changed" ;;
+    esac
+  done |
   while IFS= read -r src; do
     base=$(basename "$src")
     base=${base%.*}
