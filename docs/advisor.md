@@ -36,9 +36,10 @@ In `config.json`:
 | `advisor.max_calls_per_turn` | `3` | Consultations allowed per user turn. Zero or less means the default. |
 | `advisor.max_context_chars` | `60000` | How much transcript to send, in characters (about 15,000 tokens). The most recent part is kept. Zero or less means the default; the floor is 2,000. |
 
-`provider` and `model` are always written to `config.json`, so the web UI's
-**Settings** form, which shows exactly the keys `GET /v1/config` returns, has
-fields for them. The two limits are written only once you change them.
+`provider` and `model` are always written to `config.json`; the two limits
+are written only once you change them. The web UI's **Settings** tab shows all
+four under Models & providers → Advisor either way, at their defaults until
+they are set.
 A [profile](./configuration.md#profiles) file can carry an `advisor` block like
 any other key, and `pasclaw profile diff` shows `advisor.provider`,
 `advisor.model` and `advisor.max_calls_per_turn` when two profiles differ.

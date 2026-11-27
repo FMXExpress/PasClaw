@@ -49,7 +49,8 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/skills` | GET | Installed skills (`name`, `description`, `kind`, `path`, `dir`). |
 | `/v1/memory` | GET | Files in `workspace/memory/` with sizes. |
 | `/v1/memory/<name>` | GET | Contents of one memory file (rejects path-traversal). |
-| `/v1/config` | GET | Full config with `providers[].api_key` masked to `•••`. |
+| `/v1/config` | GET | The running config with every secret masked to `•••` (`providers[].api_key`, `mcp_servers[].env`, `gateway.token`, `web_search.api_key`, `decision_models.backends[].api_key`, `channels[].target`, `crons[].channel_target`, the values of `diagnostics.otel.headers`). `?source=file` returns `config.json` as saved instead, masked the same way: what the web UI's Settings tab edits, since a saved change other than the provider block reaches the running config only at a restart. |
+| `/v1/config` | PUT | Replace `config.json` with the body, checked by parsing it as a config first. A secret sent back as `•••` keeps its saved value (list entries are matched by `name`, cron jobs by `id`); any other value replaces it. The provider, model, fallback and router settings apply at once; the rest at the next restart. |
 | `/v1/fs?path=…` | GET | Directory listing (entries + sizes + dir flag); defaults to `$PASCLAW_HOME/workspace`. A relative `path` here and on the routes below means the agent's workspace, as it does for the file tools, so the chat's Files menu gets the file `write_file("out.txt")` wrote; the listing reports its `path`, `workspace_root` and `cwd_root` absolute. |
 | `/v1/fs/read?path=…` | GET | File contents capped at 256 KB; `truncated` flag on response. |
 | `/v1/logs` | GET | SSE tail of the gateway log buffer (1000-entry ring); recent buffer dumps first, then live. |
@@ -81,7 +82,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | **Cron** | List cron entries and their last-fire timestamps. |
 | **Skills** | List installed skills. |
 | **Logs** | Live tail via SSE from the gateway's in-process ring buffer. |
-| **Settings** | Read-only config view (provider API keys masked). |
+| **Settings** | An editor for `config.json`, in sections (Models & providers, Agent, Tools & sandbox, Memory & knowledge, MCP servers, Gateway & security, Channels, Scheduling, Diagnostics, Backup & transfer, Advanced) with a search over names, keys and descriptions. Each setting shows its name, a line on what it does and its config key, with a switch, a select, a number with its unit or a list editor; providers, MCP servers, channels, cron jobs, subagents and skills are cards. Secrets are write-only: a field says whether a value is saved, and left empty keeps it. A bar along the bottom counts unsaved changes and holds **Save** and **Discard**; invalid values are refused inline, and leaving the tab with unsaved changes asks first. After a save, the changes that wait for a restart are listed at the top of the tab. A key the page does not describe is shown under **Other** and saved as it came. **Edit as JSON** edits the whole file, checked before it is saved. **Backup & transfer** holds workspace export and import. |
 | **Stats** | Auto-refreshing token + tool-call + truncation-savings cards + `by_provider` / `by_model` rollups (when `stats_collection_enabled`). **Reset totals** puts every counter back to zero. |
 
 ## OpenAI-compatible client

@@ -368,7 +368,19 @@ type
     procedure HandleMemoryFactDelete(const IdStr: string;
                                 AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryFactsExport(AResp: TIdHTTPResponseInfo);
-    procedure HandleConfig(AResp: TIdHTTPResponseInfo);
+    { GET /v1/config -- the running config, secrets masked. With
+      ?source=file, config.json as saved instead (also masked): what the
+      web UI's Settings editor edits, so a change saved earlier and still
+      waiting for a restart is shown, and kept by the next save. }
+    procedure HandleConfig(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+    (* config.json as written -- ${VAR} markers NOT resolved, no profile
+       layer -- re-serialised through TConfig; Fallback when the file is
+       missing or does not parse. The base the PUT restores masked secrets
+       from, and the ?source=file view of GET. Unresolved on purpose: a
+       kept secret goes back to the file as its marker, not as the value
+       the marker stood for, and a marker in any other field is shown and
+       saved as written. *)
+    function SavedConfigJSON(const Fallback: string): string;
     { PUT /v1/config -- persist an edited config from the web UI. Secrets
       sent back as the mask placeholder are preserved from the current
       config (client can set keys, never view them). Writes config.json;
@@ -2211,7 +2223,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory')  then HandleMemoryList(AResponse)
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 11) = '/v1/memory/') then
       HandleMemoryRead(Doc, ARequest, AResponse)
-    else if (ARequest.Command = 'GET')  and (Doc = '/v1/config')  then HandleConfig(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/config')  then HandleConfig(ARequest, AResponse)
     else if (ARequest.Command = 'PUT')  and (Doc = '/v1/config')  then HandleConfigWrite(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/stats')   then HandleStats(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/stats/reset') then HandleStatsReset(AResponse)
@@ -3763,7 +3775,32 @@ begin
   WriteBodyStream(AResp, FactsToMarkdown(Facts, Today));
 end;
 
-procedure TGatewayServer.HandleConfig(AResp: TIdHTTPResponseInfo);
+function TGatewayServer.SavedConfigJSON(const Fallback: string): string;
+var
+  Cur: TConfig;
+  Path: string;
+begin
+  Result := Fallback;
+  Path := GetConfigPath;
+  if not FileExists(Path) then Exit;
+  Cur := TConfig.Create;
+  try
+    try
+      (* Not ExpandEnvVarsInJSON: the save restores masked secrets from
+         this, and with markers resolved a Settings save wrote the value of
+         "api_key": "${ANTHROPIC_API_KEY}" into config.json in plain text
+         -- the secret the marker exists to keep out of the file. *)
+      Cur.FromJSON(ReadFileText(Path));
+      Result := Cur.ToJSON;
+    except
+      on E: Exception do Result := Fallback;
+    end;
+  finally
+    Cur.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleConfig(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
 var
   Body, Masked: string;
 begin
@@ -3784,6 +3821,12 @@ begin
   finally
     FApplyLock.Release;
   end;
+  { ?source=file: the saved file, not the running copy. A save of anything
+    but the provider block only reaches FCfg at the next restart, so an
+    editor that loaded the running copy would show the old value after a
+    reload -- and its next save would quietly put the old value back. }
+  if SameText(Trim(ARequest.Params.Values['source']), 'file') then
+    Body := SavedConfigJSON(Body);
   { The masking itself lives in PasClaw.Config.MaskConfigSecretsJSON so
     `pasclaw backup`'s config.redacted.json and this endpoint can never
     disagree about what counts as a secret (providers[].api_key,
@@ -3801,8 +3844,8 @@ end;
 procedure TGatewayServer.HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
                                            AResp: TIdHTTPResponseInfo);
 var
-  Body, Merged, BaseJSON, Path: string;
-  Tmp, Cur: TConfig;
+  Body, Merged, BaseJSON: string;
+  Tmp, Live: TConfig;
   Applied: Boolean;
 begin
   Applied := False;
@@ -3817,25 +3860,10 @@ begin
     changes apply on restart), so using it here would restore stale
     secrets: a second save -- after an earlier save then Reload -- would
     revert any key set in the meantime back to its boot-time value. Read
-    config.json directly (resolving env-var markers the same way
-    LoadConfig does) without LoadConfig's process-global side effects.
+    config.json directly (env-var markers left as written: SavedConfigJSON
+    says why) without LoadConfig's process-global side effects.
     Fall back to FCfg when the file is missing/unreadable. }
-  BaseJSON := FCfg.ToJSON;
-  Path := GetConfigPath;
-  if FileExists(Path) then
-  begin
-    Cur := TConfig.Create;
-    try
-      try
-        Cur.FromJSON(ExpandEnvVarsInJSON(ReadFileText(Path)));
-        BaseJSON := Cur.ToJSON;
-      except
-        on E: Exception do { keep the FCfg fallback } ;
-      end;
-    finally
-      Cur.Free;
-    end;
-  end;
+  BaseJSON := SavedConfigJSON(FCfg.ToJSON);
   { Restore masked secrets from the base config so a client that never
     saw the real api_key / env / token values can't blank them by sending
     the mask back. Raises EArgumentException on unparseable JSON. }
@@ -3870,11 +3898,19 @@ begin
         Exit;
       end;
     end;
-    { Hot-swap the primary provider + fallback chain from the just-saved config
-      so a provider/model change takes effect without a restart. Built from Tmp
-      before it's freed. Other settings (sandbox, mcp, crons) still need a
-      restart. }
-    Applied := ApplyProviderConfig(Tmp);
+    (* Hot-swap the primary provider + fallback chain from the just-saved
+       config so a provider/model change takes effect without a restart.
+       Other settings (sandbox, mcp, crons) still need a restart. From a
+       copy with its ${VAR} markers resolved, as LoadConfig resolves them at
+       the next start: the file keeps the markers (Merged has them, see
+       SavedConfigJSON), the running provider needs the values. *)
+    Live := TConfig.Create;
+    try
+      Live.FromJSON(ExpandEnvVarsInJSON(Merged));
+      Applied := ApplyProviderConfig(Live);
+    finally
+      Live.Free;
+    end;
   finally
     Tmp.Free;
   end;

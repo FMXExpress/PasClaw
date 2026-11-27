@@ -56,7 +56,10 @@ A saved workflow: an input feeding `read_file`, whose result feeds
 
 ![The settings tab](./web-ui-settings.png)
 
-`config.json` as a form, grouped by section. Secrets show as `•••`.
+`config.json` as an editor: sections down the side with a search box, a name, a
+line on what it does and the config key for each setting, providers as cards,
+and a bar along the bottom that counts unsaved changes. Saved keys are
+write-only fields that say whether a value is set.
 
 ## Web UI — phone width
 

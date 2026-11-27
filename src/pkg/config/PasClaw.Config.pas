@@ -1275,14 +1275,19 @@ const
    on-disk config, restoring any masked secret from CurrentJSON so the
    client can SET secrets without ever VIEWING them: a field left at the
    placeholder keeps the server's value; any other value overwrites it.
-   Restores providers[].api_key + mcp_servers[].env (matched by name) and
-   gateway.token. Returns the merged JSON; raises on unparseable input.
-   Exposed for tests. *)
+   Restores every field MaskConfigSecretsJSON masks: providers[].api_key,
+   mcp_servers[].env, channels[].target and decision_models.backends[].
+   api_key (matched by name), crons[].channel_target (matched by id),
+   diagnostics.otel.headers (matched by header name), gateway.token and
+   web_search.api_key. Returns the merged JSON; raises on unparseable
+   input. Exposed for tests. *)
 function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): string;
 
 (* The read side of the same contract: a config JSON with every populated
    secret -- providers[].api_key, mcp_servers[].env, gateway.token,
-   web_search.api_key -- replaced by MaskedSecretPlaceholder, and nothing
+   web_search.api_key, decision_models.backends[].api_key, channels[].
+   target, crons[].channel_target and the values of diagnostics.otel.
+   headers -- replaced by MaskedSecretPlaceholder, and nothing
    else changed. What the gateway's GET /v1/config serves, and what
    `pasclaw backup` puts in the archive as config.redacted.json: enough to
    rebuild a machine from, never enough to leak from. Returns '' when the
@@ -3675,6 +3680,28 @@ begin
   WriteFileText(GetConfigPath, C.ToJSON);
 end;
 
+{ Mask every non-empty value of a name -> value object whose values are all
+  secrets (diagnostics.otel.headers). Takes ownership of Obj; nil is fine. }
+procedure MaskObjectValues(Obj: TJsonObject);
+var
+  Keys: TStringList;
+  i: Integer;
+begin
+  if Obj = nil then Exit;
+  try
+    Keys := Obj.Keys;
+    try
+      for i := 0 to Keys.Count - 1 do
+        if Obj.GetStr(Keys[i], '') <> '' then
+          Obj.PutStr(Keys[i], MaskedSecretPlaceholder);
+    finally
+      Keys.Free;
+    end;
+  finally
+    Obj.Free;
+  end;
+end;
+
 function MaskConfigSecretsJSON(const JSON: string): string;
 var
   Root, Item, Item2: TJsonObject;
@@ -3810,6 +3837,24 @@ begin
       Arr.Free;
     end;
 
+    { diagnostics.otel.headers go on every OTLP POST, and what people put
+      there is the collector's credential (Authorization, x-honeycomb-team,
+      DD-API-KEY). Keep the header names -- they say what is configured --
+      and mask the values. }
+    Item := Root.ChildObject('diagnostics');
+    if Item <> nil then
+    try
+      Item2 := Item.ChildObject('otel');
+      if Item2 <> nil then
+      try
+        MaskObjectValues(Item2.ChildObject('headers'));
+      finally
+        Item2.Free;
+      end;
+    finally
+      Item.Free;
+    end;
+
     Result := Root.ToJSON;
   finally
     Root.Free;
@@ -3834,10 +3879,11 @@ function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): stri
     {$ENDIF}
   end;
 
-  { Find the named item in Arr and return its String field, or '' if no
-    match. Used to pull a secret back from the current config when the
-    edited body kept the placeholder. }
-  function LookupByName(Arr: TJsonArray; const Name, Field: string): string;
+  { Find the item in Arr whose KeyField equals Key and return its String
+    Field, or '' if no match. Used to pull a secret back from the current
+    config when the edited body kept the placeholder. KeyField is 'name'
+    for every list but crons, whose entries are identified by 'id'. }
+  function LookupBy(Arr: TJsonArray; const KeyField, Key, Field: string): string;
   var
     j: Integer;
     It: TJsonObject;
@@ -3849,7 +3895,7 @@ function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): stri
       It := Arr.ItemObject(j);
       if It = nil then Continue;
       try
-        if It.GetStr('name', '') = Name then
+        if It.GetStr(KeyField, '') = Key then
         begin
           Result := It.GetStr(Field, '');
           Exit;
@@ -3861,8 +3907,9 @@ function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): stri
   end;
 
   { For each item in EdArr whose Field == placeholder, restore it from the
-    same-named item in CurArr. }
-  procedure RestoreArray(EdArr, CurArr: TJsonArray; const Field: string);
+    item in CurArr with the same KeyField. }
+  procedure RestoreArray(EdArr, CurArr: TJsonArray; const Field: string;
+                         const KeyField: string = 'name');
   var
     i: Integer;
     It: TJsonObject;
@@ -3874,10 +3921,74 @@ function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): stri
       if It = nil then Continue;
       try
         if IsMask(It.GetStr(Field, '')) then
-          It.PutStr(Field, LookupByName(CurArr, It.GetStr('name', ''), Field));
+          It.PutStr(Field, LookupBy(CurArr, KeyField, It.GetStr(KeyField, ''), Field));
       finally
         It.Free;
       end;
+    end;
+  end;
+
+  { Restore the top-level array ArrKey's Field from Current, matched by
+    KeyField. Owns nothing it does not free. }
+  procedure RestoreTopArray(Edited, Current: TJsonObject;
+                            const ArrKey, Field, KeyField: string);
+  var
+    EdArr, CurArr: TJsonArray;
+  begin
+    EdArr := Edited.ChildArray(ArrKey);
+    if EdArr = nil then Exit;
+    try
+      if Current <> nil then CurArr := Current.ChildArray(ArrKey) else CurArr := nil;
+      try
+        RestoreArray(EdArr, CurArr, Field, KeyField);
+      finally
+        if CurArr <> nil then CurArr.Free;
+      end;
+    finally
+      EdArr.Free;
+    end;
+  end;
+
+  { diagnostics.otel.headers: each masked value comes back from the header
+    of the same name; a masked header the current config does not have
+    clears, as an unmatched provider key does. }
+  procedure RestoreOtelHeaders(Edited, Current: TJsonObject);
+  var
+    EdD, EdO, EdH, CurD, CurO, CurH: TJsonObject;
+    Keys: TStringList;
+    i: Integer;
+  begin
+    EdD := Edited.ChildObject('diagnostics');
+    if EdD = nil then Exit;
+    EdO := nil; EdH := nil; CurD := nil; CurO := nil; CurH := nil;
+    try
+      EdO := EdD.ChildObject('otel');
+      if EdO = nil then Exit;
+      EdH := EdO.ChildObject('headers');
+      if EdH = nil then Exit;
+      if Current <> nil then CurD := Current.ChildObject('diagnostics');
+      if CurD <> nil then CurO := CurD.ChildObject('otel');
+      if CurO <> nil then CurH := CurO.ChildObject('headers');
+      Keys := EdH.Keys;
+      try
+        for i := 0 to Keys.Count - 1 do
+          if IsMask(EdH.GetStr(Keys[i], '')) then
+          begin
+            if CurH <> nil then
+              EdH.PutStr(Keys[i], CurH.GetStr(Keys[i], ''))
+            else
+              EdH.PutStr(Keys[i], '');
+          end;
+      finally
+        Keys.Free;
+      end;
+    finally
+      if CurH <> nil then CurH.Free;
+      if CurO <> nil then CurO.Free;
+      if CurD <> nil then CurD.Free;
+      if EdH <> nil then EdH.Free;
+      if EdO <> nil then EdO.Free;
+      EdD.Free;
     end;
   end;
 
@@ -3985,6 +4096,15 @@ begin
       finally
         EdGw.Free;
       end;
+
+      { channels[].target and crons[].channel_target are masked on read
+        (webhook URLs carry their token), so a save that sent them back
+        untouched used to write the placeholder itself into config.json
+        and break every channel. Channels are matched by name, crons by
+        id -- what each list is keyed by elsewhere. }
+      RestoreTopArray(Edited, Current, 'channels', 'target',         'name');
+      RestoreTopArray(Edited, Current, 'crons',    'channel_target', 'id');
+      RestoreOtelHeaders(Edited, Current);
 
       Result := Edited.ToJSON;
     finally

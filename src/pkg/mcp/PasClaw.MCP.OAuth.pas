@@ -126,6 +126,19 @@ function ValidateAuthorizationResponse(const Cb: TAuthCallbackParams;
   const ExpectedState, RecordedIssuer: string; IssParameterSupported: Boolean;
   out Code, ErrMsg: string): Boolean;
 
+(* After a failed authorization: whether to forget the stored client
+   registration, because the authorization server said it no longer knows
+   it (invalid_client / unauthorized_client). Only for a response that
+   passed the issuer and state checks: anything on this machine, or any web
+   page the browser has open, can send a request to the loopback callback,
+   and one that could not pass them must not wipe a working registration --
+   the next refresh would then go out with an empty client_id. Reused: the
+   run presented a stored registration (a fresh one has nothing to forget).
+   Pure, for the unit test. *)
+function ShouldForgetClient(const Cb: TAuthCallbackParams;
+  const ExpectedState, RecordedIssuer: string; IssParameterSupported,
+  Reused: Boolean): Boolean;
+
 { The body of a Dynamic Client Registration request (RFC 7591) for a
   loopback redirect: a public, native client. Exposed for the unit test. }
 function ClientRegistrationBody(const RedirectURI: string): string;
@@ -616,12 +629,13 @@ end;
 
 { ---------- Authorization response validation (RFC 9207) -------- }
 
-function ValidateAuthorizationResponse(const Cb: TAuthCallbackParams;
+{ The checks that tie a response to this authorization request -- issuer,
+  then state. What a response says is only acted on after they pass. }
+function ResponseFromThisRequest(const Cb: TAuthCallbackParams;
   const ExpectedState, RecordedIssuer: string; IssParameterSupported: Boolean;
-  out Code, ErrMsg: string): Boolean;
+  out ErrMsg: string): Boolean;
 begin
   Result := False;
-  Code := '';
   ErrMsg := '';
   { Issuer first: a response from another authorization server (a mix-up
     attack) must not be acted on at all -- not its code, and not its error
@@ -649,6 +663,17 @@ begin
     ErrMsg := 'state mismatch -- possible CSRF; refusing';
     Exit;
   end;
+  Result := True;
+end;
+
+function ValidateAuthorizationResponse(const Cb: TAuthCallbackParams;
+  const ExpectedState, RecordedIssuer: string; IssParameterSupported: Boolean;
+  out Code, ErrMsg: string): Boolean;
+begin
+  Result := False;
+  Code := '';
+  if not ResponseFromThisRequest(Cb, ExpectedState, RecordedIssuer,
+                                 IssParameterSupported, ErrMsg) then Exit;
   if Cb.Error <> '' then
   begin
     ErrMsg := Cb.Error;
@@ -662,6 +687,18 @@ begin
   end;
   Code := Cb.Code;
   Result := True;
+end;
+
+function ShouldForgetClient(const Cb: TAuthCallbackParams;
+  const ExpectedState, RecordedIssuer: string; IssParameterSupported,
+  Reused: Boolean): Boolean;
+var
+  Ignored: string;
+begin
+  Result := Reused and
+            ((Cb.Error = 'invalid_client') or (Cb.Error = 'unauthorized_client')) and
+            ResponseFromThisRequest(Cb, ExpectedState, RecordedIssuer,
+                                    IssParameterSupported, Ignored);
 end;
 
 function CanReuseClient(const Tok: TOAuthTokens; const Issuer: string): Boolean;
@@ -954,7 +991,7 @@ var
   VerBytes, ChalBytes, StateBytesB: TBytes;
   Server: TLoopbackServer;
   Port: Integer;
-  AuthorizeURL, Form, RespBody, CbErr: string;
+  AuthorizeURL, Form, RespBody: string;
   Status: Integer;
 begin
   Result := False;
@@ -1079,9 +1116,11 @@ begin
     begin
       ErrMsg := Server.Error;
       { A reused registration the server no longer knows: forget it, so the
-        next run registers a new client instead of failing the same way. }
-      CbErr := Server.Params.Error;
-      if Reused and ((CbErr = 'invalid_client') or (CbErr = 'unauthorized_client')) then
+        next run registers a new client instead of failing the same way --
+        but only on a response that passed the issuer and state checks
+        (ShouldForgetClient says why). }
+      if ShouldForgetClient(Server.Params, Server.ExpectedState, Server.ExpectedIssuer,
+                            Server.IssSupported, Reused) then
       begin
         Prev.ClientId := '';
         Prev.ClientRedirectURI := '';

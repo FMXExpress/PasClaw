@@ -678,26 +678,176 @@
   #logs-view{flex:1;overflow:auto;margin:0;padding:.9rem 1.25rem;
     font:12px/1.55 var(--mono);white-space:pre-wrap;color:var(--text-2)}
 
-  /* ===== Settings tab ===== */
-  #config-view{font:12px/1.55 var(--mono);white-space:pre-wrap;color:var(--text-2);
-    padding:1rem;margin:0;overflow:auto;flex:1}
-  .settings-pane{flex:1;display:flex;flex-direction:column;min-width:0;padding:1rem 1.25rem;gap:.6rem}
-  .settings-bar{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+  /* Status line shared by the KB and Skills tabs. */
   .settings-status{font-size:12.5px;color:var(--text-3)}
   .settings-status.ok{color:var(--ok)} .settings-status.err{color:var(--danger)}
-  .settings-hint{margin:0;max-width:60rem;font-size:12.5px;line-height:1.5;color:var(--text-3)}
-  #config-edit{flex:1;min-height:0;resize:none;padding:.75rem .85rem;
+  .cfg-input{flex:1;min-width:0}   /* the onboarding dialog's selects */
+
+  /* ===== Settings tab =====
+     A section list (with search) beside one section of settings, and a bar
+     along the bottom that counts unsaved changes and holds Save. Each
+     setting is a row: its name, one line on what it does, the config key in
+     mono, then the control. Rows sit in panels like the other tabs' cards;
+     a changed row carries a warn-coloured edge, an invalid one a danger
+     edge. Below 760px the section list becomes a select. */
+  #tab-settings{flex-direction:column}
+  .set-shell{flex:1;min-height:0;display:flex}
+  .set-side{flex:0 0 15.5rem;min-width:0;display:flex;flex-direction:column;gap:.6rem;padding:1rem .7rem;
+    border-right:1px solid var(--border);background:var(--surface);overflow:auto}
+  .set-search{position:relative;display:block}
+  .set-search svg.ic{position:absolute;left:.55rem;top:50%;margin-top:-8px;color:var(--text-3);pointer-events:none}
+  .set-search input{width:100%;padding-left:1.95rem}
+  .set-nav{display:flex;flex-direction:column;gap:1px}
+  .set-nav button{display:flex;align-items:center;gap:.45rem;width:100%;text-align:left;background:transparent;
+    border:0;border-radius:var(--radius);padding:.38rem .6rem;color:var(--text-2);font-size:13px}
+  .set-nav button:hover{background:var(--surface-2);color:var(--text)}
+  .set-nav button[aria-current="true"]{background:var(--surface-3);color:var(--text);font-weight:550}
+  .set-nav button.miss{color:var(--text-3)}
+  .set-nav .n{margin-left:auto;font-size:11.5px;font-weight:400;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .set-nav .dot{width:6px;height:6px;border-radius:50%;background:var(--warn);flex:none}
+  #set-sec-select{display:none}
+  .set-side-foot{margin-top:auto;display:flex;flex-direction:column;gap:.15rem;padding-top:.6rem;
+    border-top:1px solid var(--border)}
+  .set-side-foot .icon-btn{border-color:transparent;padding:.34rem .6rem}
+  .set-main{flex:1;min-width:0;overflow:auto;padding:1.5rem 2rem 3rem}
+  .set-form,.set-raw,.set-banners{max-width:50rem;margin:0 auto}
+  .set-sec[hidden],.set-group[hidden],.set-row[hidden]{display:none}
+  .set-sec:not([hidden])~.set-sec:not([hidden]){margin-top:2.25rem}
+  .set-sec-head h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .set-sec-head h2:focus{outline:none}
+  .set-sec-head p{margin:.3rem 0 0;max-width:42rem;font-size:13px;line-height:1.55;color:var(--text-2)}
+  .set-note{display:flex;align-items:center;gap:.4rem;margin-top:.5rem;font-size:12px;color:var(--text-3)}
+  .set-group{margin-top:1.4rem}
+  .set-group-title{margin:0 0 .5rem;font-size:13px;font-weight:600;color:var(--text)}
+  .set-group-title code{font:12px var(--mono);font-weight:500}
+  .set-group-desc{margin:-.25rem 0 .55rem;font-size:12.5px;line-height:1.5;color:var(--text-3)}
+  .set-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg)}
+  .set-row{display:grid;grid-template-columns:minmax(0,1fr);row-gap:.45rem;padding:.85rem 1rem;
+    border-top:1px solid var(--border)}
+  .set-panel>.set-row:first-child,.set-panel>.set-row[hidden]+.set-row{border-top:0}
+  .set-panel>.set-row:first-child{border-top-left-radius:var(--radius-lg);border-top-right-radius:var(--radius-lg)}
+  .set-panel>.set-row:last-child{border-bottom-left-radius:var(--radius-lg);border-bottom-right-radius:var(--radius-lg)}
+  .set-row.dirty{box-shadow:inset 3px 0 0 var(--warn)}
+  .set-row.invalid{box-shadow:inset 3px 0 0 var(--danger)}
+  /* A boolean: the switch sits right beside its name. */
+  .set-row.bool{grid-template-columns:auto minmax(0,1fr);column-gap:.75rem;align-items:start}
+  .set-row.bool>.switch{margin-top:1px}
+  .set-text{display:flex;flex-direction:column;gap:.2rem;min-width:0}
+  .set-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:.25rem .5rem;min-width:0}
+  .set-label{font-size:13.5px;font-weight:550;color:var(--text);cursor:default}
+  label.set-label{cursor:pointer}
+  .set-key{margin-left:auto;font:11.5px/1.5 var(--mono);color:var(--text-3);overflow-wrap:anywhere}
+  .set-desc{margin:0;font-size:12.5px;line-height:1.5;color:var(--text-2)}
+  .set-desc code,.set-group-desc code,.set-sec-head code,.set-banner code,.set-note code{font-size:.92em;
+    background:var(--surface-2);border-radius:4px;padding:.03rem .3rem}
+  .set-chip{display:inline-flex;align-items:center;gap:.25rem;padding:0 .45rem;border-radius:999px;font-size:11px;
+    font-weight:500;line-height:1.65;white-space:nowrap;background:var(--surface-3);color:var(--text-2)}
+  .set-chip svg.ic{width:12px;height:12px;vertical-align:-2px}
+  .set-chip.warn{background:var(--warn-soft);color:var(--warn)}
+  .set-chip.ok{background:var(--ok-soft);color:var(--ok)}
+  .set-chip.err{background:var(--danger-soft);color:var(--danger)}
+  .set-ctl{display:flex;align-items:center;flex-wrap:wrap;gap:.45rem;min-width:0}
+  .set-row>input:not([type=checkbox]),.set-row>textarea{width:100%;max-width:30rem}
+  .set-row>select{width:100%;max-width:24rem}
+  .set-row>input.num,.set-ctl>input.num{width:9.5rem}
+  .set-secret input::placeholder,.set-list-row input[type=password]::placeholder{font-family:var(--sans)}
+  .set-ctl textarea{resize:vertical;min-height:4.5rem}
+  .set-mono{font-family:var(--mono);font-size:12.5px}
+  .set-unit{font-size:12.5px;color:var(--text-3)}
+  .set-err{display:flex;align-items:flex-start;gap:.35rem;font-size:12.5px;line-height:1.45;color:var(--danger)}
+  .set-err:empty{display:none}
+  .set-err svg.ic{margin-top:1px}
+  .set-row.invalid input:not([type=checkbox]),.set-f.invalid input:not([type=checkbox]){border-color:var(--danger)}
+  .set-after{font-size:12px;color:var(--warn)}
+  .set-after:empty{display:none}
+
+  /* Switch: a real checkbox (role=switch) over a drawn track, so the label,
+     Space and the focus ring all work as for any checkbox. */
+  .switch{position:relative;display:inline-flex;flex:none;width:34px;height:20px}
+  .switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1}
+  .switch>span{position:absolute;inset:0;border-radius:999px;background:var(--surface-3);
+    border:1px solid var(--field-border);transition:background .15s,border-color .15s}
+  .switch>span::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+    background:var(--text-2);transition:transform .15s,background .15s}
+  .switch input:checked+span{background:var(--accent-solid);border-color:var(--accent-solid)}
+  .switch input:checked+span::after{transform:translateX(14px);background:var(--on-accent)}
+  .switch input:focus-visible+span{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* String lists: one input per entry, removed with x, added at the end. */
+  .set-list{display:flex;flex-direction:column;gap:.35rem;width:100%;max-width:34rem}
+  .set-list-row{display:flex;align-items:center;gap:.3rem}
+  .set-list-row>input,.set-list-row>select{flex:1;min-width:0}
+  .set-list-row>select{flex:0 1 11rem}
+  .set-x{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;padding:0;
+    background:transparent;border:1px solid transparent;color:var(--text-3)}
+  .set-x:hover{color:var(--danger);background:var(--danger-soft)}
+  .set-add{align-self:flex-start}
+  .set-empty{font-size:12.5px;color:var(--text-3)}
+
+  /* Secrets: a password field that never holds the saved value, and a
+     line saying whether one is set. */
+  .set-secret{display:flex;align-items:center;gap:.4rem;width:100%;max-width:30rem}
+  .set-secret input{flex:1;min-width:0;font-family:var(--mono);font-size:12.5px}
+  .set-secret-state{display:flex;align-items:center;flex-wrap:wrap;gap:.4rem;font-size:12px;color:var(--text-3)}
+  .set-secret-state[hidden]{display:none}
+  .set-link{background:none;border:0;padding:0;font-size:12px;color:var(--accent);text-decoration:underline;
+    text-underline-offset:2px}
+  .set-link:hover{background:none}
+
+  /* Cards: one per provider, MCP server, channel, cron job, subagent, skill. */
+  .set-cards{display:flex;flex-direction:column;gap:.7rem}
+  .set-item{border:1px solid var(--border);border-radius:8px;background:var(--surface-2);min-width:0}
+  .set-item.new{border-color:var(--accent-line)}
+  .set-item.dirty{border-color:var(--warn)}
+  .set-item.invalid{border-color:var(--danger-line)}
+  .set-item-head{display:flex;align-items:center;gap:.5rem;padding:.5rem .5rem .5rem .8rem;
+    border-bottom:1px solid var(--border);min-width:0}
+  .set-item-title{font-size:13px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .set-item-sub{font:11.5px var(--mono);color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .set-item-head .icon-btn{margin-left:auto;border-color:transparent;color:var(--text-3)}
+  .set-item-head .icon-btn:hover{color:var(--danger);background:var(--danger-soft)}
+  .set-item-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(15rem,100%),1fr));gap:.8rem 1rem;padding:.8rem}
+  .set-f{display:flex;flex-direction:column;gap:.3rem;min-width:0}
+  .set-f.wide{grid-column:1/-1}
+  .set-f>label,.set-f>.set-f-label{font-size:12px;font-weight:500;color:var(--text-2)}
+  .set-f>input:not([type=checkbox]),.set-f>select,.set-f>textarea{width:100%}
+  .set-f>textarea{resize:vertical;min-height:4.5rem}
+  .set-f .set-hint{font-size:11.5px;line-height:1.45;color:var(--text-3)}
+  .set-f-inline{display:flex;align-items:center;gap:.5rem;font-size:12.5px;color:var(--text-2)}
+  .set-json{margin:0;max-height:14rem;overflow:auto;padding:.55rem .7rem;border:1px solid var(--border);
+    border-radius:var(--radius);background:var(--code);font:12px/1.5 var(--mono);color:var(--text-2);
+    white-space:pre-wrap;word-break:break-word;width:100%}
+  .set-actions{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
+
+  .set-banner{display:flex;align-items:flex-start;gap:.55rem;margin-bottom:1.25rem;padding:.65rem .85rem;
+    border:1px solid var(--warn);border-radius:8px;background:var(--warn-soft);font-size:13px;line-height:1.5;color:var(--text)}
+  .set-banner.err{border-color:var(--danger-line);background:var(--danger-soft)}
+  .set-banner svg.ic{margin-top:2px;color:var(--warn)}
+  .set-banner.err svg.ic{color:var(--danger)}
+  .set-nomatch{padding:2.5rem 1rem;text-align:center;font-size:13px;color:var(--text-3)}
+
+  /* Advanced: the whole file as JSON. */
+  .set-raw{display:flex;flex-direction:column;gap:.6rem;min-height:100%}
+  .set-raw[hidden]{display:none}
+  .set-raw h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em}
+  .set-raw p{margin:0;font-size:13px;line-height:1.55;color:var(--text-2)}
+  #config-edit{flex:1;min-height:22rem;padding:.75rem .85rem;resize:vertical;tab-size:2;
     font:12.5px/1.55 var(--mono);white-space:pre;overflow:auto}
-  #config-form{flex:1;min-height:0;overflow:auto;padding-right:.5rem}
-  .cfg-section{max-width:60rem;margin:1.1rem 0 .4rem;padding-top:.9rem;border-top:1px solid var(--border);
-    font-size:13px;font-weight:600;color:var(--text)}
-  /* A section inside a section: a sub-heading, not another rule across the form. */
-  .cfg-section.sub{margin-top:.8rem;padding-top:0;border-top:0;font-size:12.5px;color:var(--text-2)}
-  .cfg-section:first-child{margin-top:.4rem;padding-top:0;border-top:0}
-  .cfg-row{display:flex;align-items:center;gap:.75rem;max-width:60rem;margin:.3rem 0}
-  .cfg-label{flex:0 0 38%;font-family:var(--mono);font-size:12.5px;color:var(--text-2);word-break:break-word}
-  .cfg-input{flex:1;min-width:0}
-  .cfg-check{width:16px;height:16px}
+  .set-raw-state{display:flex;align-items:center;gap:.4rem;font-size:12.5px;color:var(--ok)}
+  .set-raw-state.err{color:var(--danger)}
+
+  /* The save bar: always there, so Save is always in the same place. */
+  .set-bar{flex:none;display:flex;align-items:center;gap:.5rem;min-height:52px;padding:.55rem 1.25rem;
+    border-top:1px solid var(--border);background:var(--surface)}
+  .set-bar .spacer{flex:1}
+  .set-status{display:inline-flex;align-items:center;gap:.5rem;min-width:0;font-size:13px;color:var(--text-3)}
+  .set-status::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:var(--text-3)}
+  .set-status.dirty{color:var(--text)}
+  .set-status.dirty::before{background:var(--warn)}
+  .set-status.ok{color:var(--ok)} .set-status.ok::before{background:var(--ok)}
+  .set-status.err{color:var(--danger)} .set-status.err::before{background:var(--danger)}
+  .set-status.busy::before{background:var(--accent);animation:typingPulse 1.2s ease-in-out infinite}
+  .set-status span{overflow:hidden;text-overflow:ellipsis}
 
   /* ===== First-boot onboarding dialog ===== */
   #onboard-overlay{position:fixed;inset:0;z-index:200;display:flex;align-items:center;
@@ -855,9 +1005,20 @@
     #wfInspect{border-left:0;padding-left:0;border-top:1px solid var(--border);padding-top:.75rem}
     #log{padding:1rem .75rem 1.5rem}
     form.send{width:calc(100% - 1.5rem);margin-bottom:.75rem}
-    .pane,.settings-pane,#subpane-setup,#facts-box{padding:.9rem}
-    .cfg-row{flex-wrap:wrap;gap:.25rem}
-    .cfg-label{flex-basis:100%}
+    .pane,#subpane-setup,#facts-box{padding:.9rem}
+    /* Settings: the section list becomes a select under the search box. */
+    .set-shell{flex-direction:column}
+    .set-side{flex:none;flex-direction:row;flex-wrap:wrap;align-items:center;gap:.45rem;padding:.6rem .75rem;
+      border-right:0;border-bottom:1px solid var(--border);overflow:visible}
+    .set-search{flex:1 1 100%}
+    .set-nav{display:none}
+    #set-sec-select{display:block;flex:1 1 8rem;min-width:0}
+    .set-side-foot{margin:0;flex-direction:row;padding:0;border:0}
+    .set-side-foot .lbl{display:none}
+    .set-main{padding:1rem .75rem 1.5rem}
+    .set-row{padding:.8rem .8rem}
+    .set-key{margin-left:0;flex-basis:100%}
+    .set-bar{padding:.5rem .75rem}
     .params-summary{display:none}
   }
   @media (max-width:480px){
@@ -886,6 +1047,12 @@
   <symbol id="i-file" viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></symbol>
   <symbol id="i-back" viewBox="0 0 16 16"><path d="M9.75 3.5 5.25 8l4.5 4.5"/></symbol>
   <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4.25" y="4.25" width="7.5" height="7.5" rx="1.5"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3.25 3.25"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.75 4.25h10.5M6.25 4.25V2.75h3.5v1.5M4.25 4.25l.6 9h6.3l.6-9M6.75 6.75v4M9.25 6.75v4"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 16 16"><path d="M8 2.25 14.25 13H1.75z"/><path d="M8 6.5v3M8 11.25h.01"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="m3.25 8.5 3 3 6.5-7"/></symbol>
+  <symbol id="i-code" viewBox="0 0 16 16"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></symbol>
+  <symbol id="i-power" viewBox="0 0 16 16"><path d="M5 4.1a5 5 0 1 0 6 0M8 2.25v5.5"/></symbol>
 </defs></svg>
 <header>
   <span class="logo"><span class="blue">Pas</span><span class="red">Claw</span></span>
@@ -1383,24 +1550,44 @@
     </div>
   </div>
 
+  <!-- Settings: built by settingsInit() from GET /v1/config?source=file and
+       the SET_SECTIONS table in the script. -->
   <div id="tab-settings" class="tab">
-    <div class="settings-pane">
-      <div class="settings-bar">
-        <button class="primary" id="config-save">Save</button>
-        <button class="icon-btn" id="config-reload">Reload</button>
-        <button class="icon-btn" id="config-raw-toggle" title="Toggle the raw JSON editor (for adding/removing array entries the form can't)">Raw JSON</button>
-        <button class="icon-btn" id="ws-export" title="Download workspace/ (memory, skills, KB, sessions) as a zip with a top-level workspace/ dir — drops straight into `pasclaw build --workspace-in`. Secrets in config.json are NOT included."><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg>Export workspace</button>
-        <button class="icon-btn" id="ws-import" title="Upload a workspace.zip and overlay it onto workspace/ — files in the zip overwrite, others are kept. Restart serve/gateway to pick up new skills."><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>Import workspace</button>
-        <input type="file" id="ws-import-file" accept=".zip,application/zip" style="display:none">
-        <span id="config-status" class="settings-status"></span>
+    <div class="set-shell">
+      <div class="set-side" role="navigation" aria-label="Settings sections">
+        <label class="set-search"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="set-q" type="search" placeholder="Search settings" aria-label="Search settings"
+                 autocomplete="off" spellcheck="false"></label>
+        <select id="set-sec-select" aria-label="Settings section"></select>
+        <div class="set-nav" id="set-nav"></div>
+        <div class="set-side-foot">
+          <button type="button" class="icon-btn" id="config-raw-toggle" aria-pressed="false"
+                  title="Edit the whole config.json as JSON"><svg class="ic" aria-hidden="true"><use href="#i-code"/></svg><span class="lbl">Edit as JSON</span></button>
+          <button type="button" class="icon-btn" id="config-reload"
+                  title="Load config.json from the server again"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg><span class="lbl">Reload</span></button>
+        </div>
       </div>
-      <p class="settings-hint">Edits write <code>config.json</code> on the server and apply on the next
-        restart. Secrets are shown as <code>•••</code> — leave them to keep the current value, or type a
-        new one to change it (you can set keys here, never read them). Use <em>Raw JSON</em> to add or
-        remove list entries (providers, MCP servers, …) the form can't.</p>
-      <div id="config-form"></div>
-      <textarea id="config-edit" spellcheck="false" autocomplete="off" style="display:none">loading config…</textarea>
+      <div class="set-main" id="set-main">
+        <div class="set-banners" id="set-banners"></div>
+        <div class="set-form" id="config-form"><div class="empty-pane">Loading settings…</div></div>
+        <div class="set-raw" id="set-raw" hidden>
+          <h2 tabindex="-1" id="set-raw-title">Advanced: edit as JSON</h2>
+          <p>The whole of <code>config.json</code>. Secrets show as <code>•••</code>: leave one as it is to keep
+            it, or type a new value to replace it. The JSON is checked before it is saved.</p>
+          <textarea id="config-edit" spellcheck="false" autocomplete="off" aria-label="config.json as JSON"
+                    aria-describedby="set-raw-state"></textarea>
+          <div class="set-raw-state" id="set-raw-state" role="status"></div>
+        </div>
+      </div>
     </div>
+    <div class="set-bar" role="region" aria-label="Save settings">
+      <span id="config-status" class="set-status" role="status" aria-live="polite"><span>No unsaved changes</span></span>
+      <span class="spacer"></span>
+      <button type="button" class="icon-btn" id="config-discard" disabled>Discard</button>
+      <button type="button" class="primary" id="config-save" disabled>Save</button>
+    </div>
+    <input type="file" id="ws-import-file" accept=".zip,application/zip" hidden>
+    <datalist id="set-models"></datalist>
   </div>
 </main>
 
@@ -1712,6 +1899,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
 /* ===== Tab switching ===== */
 const tabLoaded = {};
+/* Optional per-tab hooks: leave() returns false to keep the tab open (the
+   Settings tab asks first when it holds unsaved changes); show() runs each
+   time an already-loaded tab is shown again. */
+const tabHooks = {};
 function isTab(name) {
   return !!document.querySelector('nav button[data-tab="' + name + '"]');
 }
@@ -1720,6 +1911,15 @@ function showTab(name) {
   // hand-edited #hash) so we never end up with every .tab hidden.
   const valid = isTab(name);
   if (!valid) name = "chat";
+  const cur = document.querySelector(".tab.active");
+  const curName = cur ? cur.id.replace(/^tab-/, "") : "";
+  if (curName && curName !== name && tabHooks[curName] && tabHooks[curName].leave
+      && tabHooks[curName].leave() === false) {
+    /* Staying: put the hash back without a history entry (replaceState
+       fires no hashchange, so this does not come round again). */
+    if (location.hash.slice(1) !== curName) history.replaceState(null, "", "#" + curName);
+    return;
+  }
   // Scope both the active-class toggle AND the click-handler wiring
   // to buttons that actually map to a tab (data-tab set). Without the
   // [data-tab] qualifier the new 🔑 token button in the nav would also
@@ -1743,6 +1943,8 @@ function showTab(name) {
   if (!tabLoaded[name] && typeof tabLoaders[name] === "function") {
     tabLoaders[name]();
     tabLoaded[name] = true;
+  } else if (curName !== name && tabHooks[name] && tabHooks[name].show) {
+    tabHooks[name].show();
   }
 }
 $$("nav button[data-tab]").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -3719,6 +3921,1345 @@ function initToolDetails() {
   });
 }
 
+/* ===== Settings =====
+   An editor for config.json that never loses what it does not understand.
+
+   The baseline is GET /v1/config?source=file: the saved file as TConfig
+   reads it, with every secret masked as "•••". Edits go into `draft`, a deep
+   copy of that baseline, and Save PUTs the whole draft. So a key this page
+   has no row for goes back exactly as it came, and the PUT body has the
+   shape the old flat form sent. A masked secret left alone goes back as the
+   mask, which the server swaps for the saved value
+   (RestoreMaskedConfigSecrets); typing a value replaces it.
+
+   SET_SECTIONS says how to present the keys PasClaw knows: a label, a line
+   on what the key does, the control, its choices, unit, limits and default,
+   and whether it applies live (the provider block, which the gateway swaps
+   in on save) or after a restart. TConfig leaves most settings out of the
+   file while they sit at their default, so a key missing from the file is
+   shown at its default and written only once it is changed. A key the table
+   does not know is listed under Other with a control picked from its value. */
+const SET_MASK = "•••";
+const SET_F = (path, type, label, desc, x) => Object.assign({ path, type, label, desc }, x || {});
+const SET_LOG_LEVELS = [["debug", "Debug"], ["info", "Info"], ["warn", "Warnings"], ["error", "Errors"], ["silent", "Silent"]];
+const SET_CHANNEL_KINDS = [["discord", "Discord webhook"], ["slack", "Slack webhook"], ["teams", "Teams webhook"],
+  ["webhook", "Generic webhook"], ["line", "LINE"], ["whatsapp", "WhatsApp"]];
+const SET_SECTIONS = [
+  { id: "models", title: "Models & providers",
+    intro: "Which models PasClaw calls and how. Provider, model, fallback and router changes apply as soon as you save; the rest after a restart.",
+    groups: [
+      { title: "Default model", fields: [
+        SET_F("default_provider", "provider", "Default provider", "The provider entry used when a request names none.", { live: 1, def: "anthropic" }),
+        SET_F("default_model", "model", "Default model", "Model id sent to the default provider.", { live: 1, def: "claude-opus-4-7", required: 1 }),
+      ] },
+      { title: "Providers", fields: [
+        SET_F("providers", "cards", "Providers", "The APIs PasClaw can call. A saved key can be replaced, never read back.", { live: 1, cards: "providers", def: [] }),
+      ] },
+      { title: "Fallbacks", fields: [
+        SET_F("fallbacks", "fallbacks", "Fallback chain",
+          "Tried in order when the default provider answers 429 or 5xx, or cannot be reached. A model here replaces that provider's default.",
+          { live: 1, paths: ["fallbacks", "fallback_models"], def: [] }),
+      ] },
+      { title: "Model tiers", fields: [
+        SET_F("fast_model", "model", "Fast model", "For work that does not need the main model, such as answer pages. Blank picks one: the router's easy tier, else a known small model, else the main model.", { def: "" }),
+        SET_F("plan_model", "model", "Plan model", "For planning (`pasclaw plan`) and the context pruner. Blank uses the main model.", { def: "" }),
+        SET_F("background_model", "model", "Background model", "For work outside your turn: fact distillation, compaction, the heartbeat, the goals judge. Blank uses the fast model, else the main model.", { def: "" }),
+        SET_F("context_window", "num", "Context window", "The model's window, for the context breakdown only. 0 draws it against the compaction threshold.", { def: 0, min: 0, unit: "tokens" }),
+      ] },
+      { title: "Auto-router", fields: [
+        SET_F("auto_router.enabled", "bool", "Route easy turns", "Send short, simple turns to a cheaper tier. Does nothing until an easy provider is set.", { live: 1, def: true }),
+        SET_F("auto_router.easy_provider", "provider", "Easy provider", "Provider for the turns the router calls easy.", { live: 1, def: "", none: "None" }),
+        SET_F("auto_router.easy_model", "model", "Easy model", "Model on that provider. Blank uses its default.", { live: 1, def: "" }),
+        SET_F("auto_router.easy_max_tokens", "num", "Easy turn limit", "Messages longer than this are never routed easy.", { live: 1, def: 500, min: 0, unit: "tokens" }),
+      ] },
+      { title: "Advisor", fields: [
+        SET_F("advisor.model", "model", "Advisor model", "A second model the agent may consult mid-task through the `advisor` tool. Blank turns the advisor off.", { def: "" }),
+        SET_F("advisor.provider", "provider", "Advisor provider", "Provider the advisor runs on.", { def: "", none: "Default provider" }),
+        SET_F("advisor.max_calls_per_turn", "num", "Calls per turn", "Consultations allowed in one user turn. 0 or less means the default (3).", { def: 3, unit: "calls" }),
+        SET_F("advisor.max_context_chars", "num", "Transcript sent", "Characters of transcript sent per call; the most recent part is kept.", { def: 60000, min: 0, unit: "chars" }),
+      ] },
+      { title: "Prompt cache", fields: [
+        SET_F("prompt_cache.enabled", "bool", "Prompt caching", "Mark the stable prefix of each request for the provider's prompt cache (Anthropic, OpenAI).", { def: true }),
+        SET_F("prompt_cache.ttl", "select", "Cache lifetime", "Anthropic only; OpenAI manages its own.", { def: "1h", opts: [["1h", "1 hour"], ["5m", "5 minutes"]] }),
+        SET_F("prompt_cache.warm", "bool", "Keep the cache warm", "After four idle minutes, send a small billed request every four minutes, up to 30 minutes after the last turn. Gateway and serve only.", { def: false }),
+      ] },
+      { title: "Provider-side tools", fields: [
+        SET_F("anthropic_server_tools.web_search", "bool", "Anthropic web search", "Let Claude search the web on Anthropic's side.", { live: 1, def: false }),
+        SET_F("anthropic_server_tools.web_search_max_uses", "num", "Searches per turn", "0 lets Anthropic decide.", { live: 1, def: 0, min: 0 }),
+        SET_F("anthropic_server_tools.web_fetch", "bool", "Anthropic web fetch", "Let Claude fetch pages on Anthropic's side.", { live: 1, def: false }),
+        SET_F("anthropic_server_tools.web_fetch_max_uses", "num", "Fetches per turn", "0 lets Anthropic decide.", { live: 1, def: 0, min: 0 }),
+        SET_F("openai_server_tools.web_search", "bool", "OpenAI web search", "Send `web_search_options` to OpenAI. Only its search models use it; others ignore it.", { live: 1, def: true }),
+        SET_F("gemini_server_tools.google_search", "bool", "Gemini Google Search", "Ground Gemini answers in Google Search. Turn off for Gemini 1.x models.", { live: 1, def: true }),
+        SET_F("relay_wait_timeout_ms", "num", "Relay wait", "How long a relay provider waits for a worker. 0 uses the built-in 5 minutes.", { live: 1, def: 0, min: 0, unit: "ms" }),
+      ] },
+    ] },
+  { id: "agent", title: "Agent",
+    intro: "How the agent loop runs: subagents, context management, extra instructions and checks.",
+    groups: [
+      { title: "Subagents", fields: [
+        SET_F("subagents_enabled", "bool", "Subagents", "The `spawn` and `spawn_background` tools, with a built-in general-purpose subagent.", { def: true }),
+        SET_F("subagents", "cards", "Named subagents", "Specialists the agent can hand work to by name.", { cards: "subagents", def: [] }),
+        SET_F("background_jobs_max", "num", "Background jobs at once", "Background subagents and shell commands running at the same time, per coordinator.", { def: 6, min: 1 }),
+      ] },
+      { title: "Context", fields: [
+        SET_F("compaction.enabled", "bool", "Compaction", "Summarise older history when the conversation grows past the threshold.", { def: true }),
+        SET_F("compaction.threshold_tokens", "num", "Compact above", "History plus system prompt, estimated.", { def: 80000, min: 0, unit: "tokens" }),
+        SET_F("compaction.retain_budget_tokens", "num", "Keep verbatim", "Recent history kept word for word.", { def: 20000, min: 0, unit: "tokens" }),
+        SET_F("compaction.recent_turns", "num", "Keep at least", "Never keep fewer recent messages than this.", { def: 8, min: 0, unit: "messages" }),
+        SET_F("compaction.summary_budget", "num", "Summary budget", "What the summariser is asked to stay under.", { def: 800, min: 0, unit: "tokens" }),
+        SET_F("prune.enabled", "bool", "Pruning", "Ask the plan model which old history no longer matters and delete it. One extra model call per pass.", { def: false }),
+        SET_F("prune.threshold_tokens", "num", "Prune above", "Prune only when the history is estimated above this.", { def: 60000, min: 0, unit: "tokens" }),
+        SET_F("prune.protect_tail_tokens", "num", "Protected tail", "The newest history, never offered to the pruner.", { def: 20000, min: 0, unit: "tokens" }),
+        SET_F("prune.min_candidate_tokens", "num", "Smallest candidate", "Shorter runs are not worth a decision.", { def: 400, min: 0, unit: "tokens" }),
+        SET_F("prune.preview_chars", "num", "Candidate preview", "Head and tail shown per candidate.", { def: 400, min: 0, unit: "chars" }),
+        SET_F("prune.min_iterations", "num", "Prune every", "Loop iterations between passes.", { def: 8, min: 0, unit: "iterations" }),
+        SET_F("tool_output_cap", "num", "Tool output cap", "Longer tool results are cut to a head and tail the model can expand with `tool_output_get`. 0 means no cap.", { def: 24576, min: 0, unit: "bytes" }),
+        SET_F("condense_reversible", "bool", "Reversible condensing", "When a condenser shrinks tool output, keep the original under a `tool_output_get` handle.", { def: false }),
+      ] },
+      { title: "Instructions", fields: [
+        SET_F("instructions", "list", "Extra instructions", "Rules appended after AGENTS.md: workspace files, globs or http(s) URLs.", { def: [], mono: 1, add: "Add a source", placeholder: "docs/style.md" }),
+        SET_F("orient_task_aware", "bool", "Task-aware memory", "Inject only the MEMORY.md sections that match the task, instead of the whole file.", { def: false }),
+        SET_F("hashline_enabled", "bool", "Hashline edits", "The `fs_edit_hashline` tool. Smaller models often misuse it.", { def: true }),
+        SET_F("promptware_enabled", "bool", "Prompt-injection scan", "Scan tool results and fetched pages for injected instructions.", { def: true }),
+        SET_F("render_markdown", "bool", "Terminal markdown", "Draw the model's markdown as styled text in `pasclaw agent` and `pasclaw tui`.", { def: true }),
+      ] },
+      { title: "Verification", fields: [
+        SET_F("verification.scenarios", "path", "Scenario directory", "Checks run after the final answer; failures go back to the model. Relative paths are under the PasClaw home. Blank turns it off.", { def: "" }),
+        SET_F("verification.max_rounds", "num", "Rounds per turn", "How many times failed checks are fed back.", { def: 2, min: 1, unit: "rounds" }),
+      ] },
+      { title: "Teams and decisions", fields: [
+        SET_F("teams.claim_lease_minutes", "num", "Task claim lease", "How long an agent's claim on a task lasts without the agent touching it.", { def: 120, min: 1, unit: "min" }),
+        SET_F("decisions.channel", "channel", "Decision channel", "Channel a new decision for you is posted to.", { def: "", none: "None" }),
+        SET_F("decisions.answer_from", "list", "Who may answer", "Sender identities, such as `telegram:12345`, whose reply answers a decision. Empty: nobody.", { def: [], mono: 1, add: "Add a sender", placeholder: "telegram:12345" }),
+      ] },
+      { title: "Checkpoints", fields: [
+        SET_F("checkpoints_enabled", "bool", "Edit checkpoints", "Copy each file before an edit so `/undo` can rewind.", { def: true }),
+        SET_F("checkpoints_keep_last", "num", "Turns kept", "Checkpointed turns kept per session. 0 means the default (32).", { def: 32, min: 0, unit: "turns" }),
+      ] },
+    ] },
+  { id: "tools", title: "Tools & sandbox",
+    intro: "What the agent's tools may touch, where shell commands run, and which optional tools are on.",
+    groups: [
+      { title: "Sandbox", fields: [
+        SET_F("sandbox.restrict_to_workspace", "bool", "Restrict to the workspace", "File tools refuse paths outside the workspace, and the shell stays in it.", { def: false }),
+        SET_F("sandbox.workspace", "path", "Workspace", "The directory the agent works in. Blank: the directory PasClaw started in.", { def: "" }),
+        SET_F("sandbox.allow_read_outside_workspace", "bool", "Read outside the workspace", "Allow reads anywhere while writes stay restricted.", { def: false }),
+        SET_F("sandbox.allow_read_paths", "list", "Also readable", "Regular expressions for paths that may be read anyway.", { def: [], mono: 1, add: "Add a pattern", placeholder: "^/usr/(include|share)/.*" }),
+        SET_F("sandbox.allow_write_paths", "list", "Also writable", "Regular expressions for paths that may be written anyway.", { def: [], mono: 1, add: "Add a pattern", placeholder: "^/tmp/agent/.*" }),
+        SET_F("sandbox.shell_deny_enabled", "bool", "Shell denylist", "Refuse dangerous commands: `sudo`, `rm`, `dd`, `curl | sh` and more. Turn off only for trusted automation.", { def: true }),
+        SET_F("sandbox.custom_shell_deny", "list", "Extra denied commands", "Substrings that also refuse a command, case-insensitive.", { def: [], mono: 1, add: "Add a substring", placeholder: "scp " }),
+        SET_F("sandbox.block_private_networks", "bool", "Block private networks", "`web_fetch` refuses private, loopback and link-local addresses, including cloud metadata.", { def: true }),
+      ] },
+      { title: "Shell", fields: [
+        SET_F("shell_backend", "select", "Run commands", "Where shell commands run.", { def: "local", opts: [["local", "On this machine"], ["docker", "In a Docker container"]] }),
+        SET_F("shell_timeout_sec", "num", "Command time limit", "For `shell_exec`, `execute_code` and shell skills. The command and everything it started are killed. 0 means no limit.", { def: 600, min: 0, unit: "s" }),
+        SET_F("shell_backend_docker.image", "text", "Docker image", "Image the container runs.", { def: "debian:bookworm-slim", mono: 1 }),
+        SET_F("shell_backend_docker.network", "select", "Docker network", "The container's network mode.", { def: "bridge", opts: [["bridge", "bridge"], ["host", "host"], ["none", "none"]] }),
+        SET_F("shell_backend_docker.user", "text", "Docker user", "Blank uses the image's default user.", { def: "", mono: 1 }),
+        SET_F("shell_backend_docker.privileged", "bool", "Privileged container", "Run the container with `--privileged`.", { def: false }),
+      ] },
+      { title: "Permissions", fields: [
+        SET_F("permissions", "json", "Permission rules", "Ordered allow, deny and ask rules checked at every tool call; the last match wins. Edit them as JSON.", { def: [] }),
+        SET_F("permissions_ask_timeout_sec", "num", "Ask timeout", "How long an ask waits for a person before it counts as refused.", { def: 300, min: 1, unit: "s" }),
+      ] },
+      { title: "Web", fields: [
+        SET_F("web_fetch_enabled", "bool", "Web fetch", "The `web_fetch` tool.", { def: true }),
+        SET_F("web_search.provider", "select", "Search provider", "Backend for `web_search`.", { def: "", opts: [["", "Automatic: a key in the environment, else DuckDuckGo"],
+          ["duckduckgo", "DuckDuckGo"], ["brave", "Brave"], ["tavily", "Tavily"], ["searxng", "SearXNG"], ["perplexity", "Perplexity"], ["gemini", "Gemini grounding"]] }),
+        SET_F("web_search.api_key", "secret", "Search API key", "Used when the provider's `PASCLAW_<NAME>_API_KEY` is not set in the environment.", { def: "" }),
+        SET_F("web_search.base_url", "url", "SearXNG URL", "Your SearXNG instance. Other providers ignore it.", { def: "" }),
+        SET_F("web_search.max_results", "num", "Results per query", "", { def: 5, min: 1, max: 25 }),
+      ] },
+      { title: "Optional tools", fields: [
+        SET_F("vault_tools_enabled", "bool", "Vault tools", "`vault_search` and `vault_get` over the pasclaw.dev registry.", { def: false }),
+        SET_F("cron_tool_enabled", "bool", "Cron tool", "Let the model add and remove scheduled jobs. A job can only run an installed skill.", { def: false }),
+        SET_F("desktop_tools_enabled", "bool", "Board tools", "The `project` and `task` tools for the desktop's project board.", { def: false }),
+        SET_F("agent_tools_enabled", "bool", "Agent tool", "Standing agents and the messages between them.", { def: false }),
+        SET_F("builtin_progressive_disclosure", "bool", "Defer long-tail tools", "Keep rarely used built-in tools behind `tool_search` until they are needed.", { def: true }),
+        SET_F("workflows_enabled", "bool", "Workflows", "The `/v1/workflows` routes and the Workflow tab.", { def: true }),
+        SET_F("workflows_auto_approve", "bool", "Use agent workflows unreviewed", "Put workflows the agent saves into use without asking you first.", { def: false }),
+        SET_F("worktree.enabled", "bool", "Git worktrees", "The `worktree_*` tools, and `worktree` on `spawn`.", { def: true }),
+        SET_F("worktree.directory", "path", "Worktree directory", "Where new worktrees go. Blank: beside the repository.", { def: "" }),
+      ] },
+      { title: "Skills", fields: [
+        SET_F("skills", "cards", "Installed skills", "Skills registered in config.json. The Skills tab installs and removes them.", { cards: "skills", def: [] }),
+        SET_F("self_improving_skills.distiller.enabled", "bool", "Skill drafts", "After a turn with many tool calls, draft a reusable skill for your approval.", { def: true }),
+        SET_F("self_improving_skills.distiller.min_tool_calls", "num", "Draft after", "Tool calls a turn needs before it is considered.", { def: 5, min: 0, unit: "calls" }),
+        SET_F("self_improving_skills.distiller.model", "model", "Draft model", "Blank uses the turn's own model.", { def: "" }),
+        SET_F("self_improving_skills.self_manage", "bool", "Agent-managed skills", "The `skill_manage` tool: the agent creates and edits skills.", { def: false }),
+        SET_F("self_improving_skills.progressive_disclosure", "bool", "Load skills on demand", "List skills by name and load each when needed, instead of putting all of them in the prompt.", { def: false }),
+        SET_F("self_improving_skills.auto_approve", "bool", "Use agent skills unreviewed", "Save skills the agent writes without waiting for your approval.", { def: false }),
+        SET_F("self_improving_skills.guard_deny", "list", "Extra skill denylist", "Substrings that reject a shell skill the agent wrote.", { def: [], mono: 1, add: "Add a substring" }),
+      ] },
+    ] },
+  { id: "memory", title: "Memory & knowledge",
+    intro: "How memory and the knowledge base are searched, and what is distilled from conversations.",
+    groups: [
+      { title: "Search", fields: [
+        SET_F("vector_search_enabled", "bool", "Vector search", "Hybrid keyword and vector search for `memory_search`, embedded on this machine.", { def: true }),
+        SET_F("rerank_search_enabled", "bool", "Rerank results", "Re-order memory and KB results with a reranker. The local model needs `pasclaw memory provision --rerank`.", { def: false }),
+        SET_F("rerank_backend", "select", "Reranker", "Which reranker scores the results.", { def: "auto", opts: [["auto", "Automatic: local if provisioned, else the chat model"], ["local", "Local model only"], ["llm", "The chat model"], ["off", "Off"]] }),
+        SET_F("rerank_model", "text", "Local reranker model", "Blank uses ms-marco-minilm.", { def: "", mono: 1 }),
+      ] },
+      { title: "Facts and memory files", fields: [
+        SET_F("memory_distill_enabled", "bool", "Distil facts", "After each turn, store lasting facts from it in the fact store. About one extra model call per turn.", { def: false }),
+        SET_F("memory_facts_budget", "num", "Facts in the prompt", "How much of the fact store is put in the prompt. 0 puts none.", { def: 2000, min: 0, unit: "bytes" }),
+        SET_F("memory_core_budget_bytes", "num", "Memory file cap", "Per always-loaded file (SOUL.md, USER.md, MEMORY.md, the daily notes). 0 means no cap.", { def: 16384, min: 0, unit: "bytes" }),
+      ] },
+    ] },
+  { id: "mcp", title: "MCP servers",
+    intro: "Model Context Protocol servers the agent can use, and how their tools are offered to the model.",
+    groups: [
+      { title: "Servers", fields: [
+        SET_F("mcp_servers", "cards", "Servers", "Each runs a command, or is reached at a URL. Its environment can carry keys, so it is write-only here.", { cards: "mcp_servers", def: [] }),
+      ] },
+      { title: "Tool exposure", fields: [
+        SET_F("mcp_codemode_default", "bool", "Code Mode by default", "MCP tools are called from `execute_code` scripts instead of being sent as tool schemas.", { def: true }),
+        SET_F("mcp_progressive_disclosure", "bool", "Defer MCP tools", "Keep MCP tool schemas behind `tool_search` until they are needed.", { def: true }),
+        SET_F("mcp_compact_results", "bool", "Compact table results", "Re-encode table-shaped MCP results as a table, when that comes out shorter.", { def: true }),
+        SET_F("mcp_oauth_client_metadata_url", "url", "OAuth client metadata URL", "An https Client ID Metadata Document you host. Blank uses dynamic client registration.", { def: "", url: "https" }),
+      ] },
+    ] },
+  { id: "gateway", title: "Gateway & security",
+    intro: "The HTTP gateway this page talks to: where it listens and who may call it.",
+    groups: [
+      { title: "Listening", fields: [
+        SET_F("gateway.bind_addr", "text", "Bind address", "127.0.0.1 keeps the gateway on this machine.", { def: "127.0.0.1", mono: 1, required: 1 }),
+        SET_F("gateway.port", "num", "Port", "", { def: 8088, min: 1, max: 65535 }),
+        SET_F("gateway.log_level", "select", "Log level", "What the gateway writes to its log. `--quiet` lowers it to errors.", { def: "info", opts: SET_LOG_LEVELS }),
+      ] },
+      { title: "Access", fields: [
+        SET_F("gateway.token", "secret", "Bearer token", "Required on `/v1/*` routes when set. `PASCLAW_GATEWAY_TOKEN` overrides it. Empty: only this machine, and other sites' pages are refused.", { def: "" }),
+        SET_F("gateway.allowed_hosts", "list", "Allowed host names", "With no token, names besides localhost the gateway answers to, such as a reverse proxy's.", { def: [], mono: 1, add: "Add a host", placeholder: "pasclaw.lan" }),
+        SET_F("cli.attach", "select", "Terminal attach", "Whether `pasclaw agent` and `pasclaw tui` use a running gateway instead of their own loop.", { def: "off", opts: [["off", "Off: run their own loop"], ["auto", "Auto: when a gateway is running"], ["on", "On: always"]] }),
+      ] },
+    ] },
+  { id: "channels", title: "Channels",
+    intro: "Where the agent can post, and who may message it through chat apps.",
+    groups: [
+      { title: "Outbound channels", fields: [
+        SET_F("channels", "cards", "Channels", "Named destinations for `send_message`. The model sees only the names; targets often carry a token, so they are write-only.", { cards: "channels", def: [] }),
+      ] },
+      { title: "Inbound", fields: [
+        SET_F("allow_senders", "list", "Allowed senders", "Who may message the agent through chat channels, such as `slack:U123` or `telegram:*`. Empty: anyone.", { def: [], mono: 1, add: "Add a sender", placeholder: "telegram:*" }),
+      ] },
+    ] },
+  { id: "scheduling", title: "Scheduling",
+    intro: "Jobs that run on their own: cron entries, the heartbeat and the nightly maintenance pass.",
+    groups: [
+      { title: "Cron jobs", fields: [
+        SET_F("crons", "cards", "Jobs", "Each runs a skill on a cron schedule. The scheduler picks up changes without a restart.", { live: 2, cards: "crons", def: [] }),
+      ] },
+      { title: "Heartbeat", fields: [
+        SET_F("heartbeat.enabled", "bool", "Heartbeat", "Wake the agent every interval to work through its heartbeat file.", { def: false }),
+        SET_F("heartbeat.interval_mins", "num", "Every", "", { def: 30, min: 1, unit: "min" }),
+        SET_F("heartbeat.content_path", "path", "Heartbeat file", "Blank uses workspace/heartbeat.md. Relative paths are under the PasClaw home.", { def: "" }),
+        SET_F("heartbeat.channel", "channel", "Post the reply to", "Blank only logs it.", { def: "", none: "Nowhere (log only)" }),
+      ] },
+      { title: "Maintenance pass", desc: "Run by `pasclaw maintain`, or by a cron job whose skill is `@maintain`.", fields: [
+        SET_F("maintenance.keep_superseded_days", "num", "Keep superseded facts", "Older ones are deleted. 0 keeps them forever.", { def: 30, min: 0, unit: "days" }),
+        SET_F("maintenance.unused_skill_days", "num", "Unused skill window", "Skills no session used in this window are listed as unused, never removed.", { def: 30, min: 0, unit: "days" }),
+        SET_F("maintenance.review", "bool", "Daily review", "Ask the background model for a short critique of the day. One model call.", { def: false }),
+        SET_F("maintenance.backup", "bool", "Back up afterwards", "Run `pasclaw backup` at the end of each pass.", { def: false }),
+      ] },
+    ] },
+  { id: "diagnostics", title: "Diagnostics",
+    intro: "Usage counters and OpenTelemetry tracing.",
+    groups: [
+      { title: "Usage", fields: [
+        SET_F("stats_collection_enabled", "bool", "Usage counters", "Save per-session token and tool counts for the Stats tab.", { def: true }),
+      ] },
+      { title: "OpenTelemetry", desc: "`OTEL_EXPORTER_OTLP_ENDPOINT` in the environment turns tracing on by itself, and wins over these.", fields: [
+        SET_F("diagnostics.otel.enabled", "bool", "Tracing", "Send spans for turns, model requests, tool calls and HTTP requests.", { def: false }),
+        SET_F("diagnostics.otel.endpoint", "url", "Collector endpoint", "OTLP over HTTP; `/v1/traces` is added.", { def: "http://localhost:4318" }),
+        SET_F("diagnostics.otel.protocol", "select", "Protocol", "Only OTLP over HTTP with JSON is supported.", { def: "http/json", opts: [["http/json", "http/json"]] }),
+        SET_F("diagnostics.otel.serviceName", "text", "Service name", "", { def: "pasclaw", mono: 1 }),
+        SET_F("diagnostics.otel.sampleRate", "num", "Sample rate", "Share of turns traced: 1 traces all, 0.1 about one in ten.", { def: 1, min: 0, max: 1, step: 0.05, float: 1 }),
+        SET_F("diagnostics.otel.traces", "bool", "Traces", "", { def: true }),
+        SET_F("diagnostics.otel.metrics", "bool", "Metrics", "Not exported yet: PasClaw sends traces only.", { def: false }),
+        SET_F("diagnostics.otel.logs", "bool", "Logs", "Not exported yet: PasClaw sends traces only.", { def: false }),
+        SET_F("diagnostics.otel.headers", "headers", "Headers", "Sent on every export, usually the collector's key, so values are write-only.", { def: {} }),
+      ] },
+    ] },
+  { id: "backup", title: "Backup & transfer",
+    intro: "Move a workspace between machines, and where `pasclaw backup` keeps its archives.",
+    groups: [
+      { title: "Workspace transfer", fields: [
+        SET_F("$export", "action", "Export workspace", "Download workspace/ (memory, skills, KB, sessions) as a zip that `pasclaw build --workspace-in` accepts. config.json and its keys are not in it.", { action: "export" }),
+        SET_F("$import", "action", "Import workspace", "Unpack a workspace.zip over workspace/: files in the zip replace yours, the rest are kept. Restart to pick up new skills.", { action: "import" }),
+      ] },
+      { title: "Backups", fields: [
+        SET_F("backup.dir", "path", "Backup directory", "Where `pasclaw backup` writes. Blank: backups/ in the PasClaw home.", { def: "" }),
+        SET_F("backup.keep_daily", "num", "Daily archives kept", "The newest archive of each of the last N days.", { def: 7, min: 0, unit: "days" }),
+        SET_F("backup.keep_weekly", "num", "Weekly archives kept", "The newest archive of each of the last N weeks.", { def: 4, min: 0, unit: "weeks" }),
+        SET_F("backup.keep_monthly", "num", "Monthly archives kept", "The newest archive of each of the last N months.", { def: 6, min: 0, unit: "months" }),
+        SET_F("backup.include_secrets", "bool", "Include keys", "Put the real config.json in the archive, so a restore brings your keys back. The archive is then a credential.", { def: true }),
+      ] },
+    ] },
+  { id: "advanced", title: "Advanced",
+    intro: "Rarely changed settings, and blocks that are edited as JSON.",
+    groups: [
+      { title: "Profile", fields: [
+        SET_F("profile", "text", "Profile", "The profile this config selects; see `pasclaw profile`. Blank selects none.", { def: "", mono: 1 }),
+      ] },
+      { title: "Stream reliability", fields: [
+        SET_F("stream_reliability.empty_retry_attempts", "num", "Empty-reply retries", "Retries when a provider answers with nothing at all.", { def: 2, min: 0 }),
+        SET_F("stream_reliability.empty_retry_backoff_ms", "num", "Retry backoff", "First wait, doubled per attempt.", { def: 750, min: 0, unit: "ms" }),
+        SET_F("stream_reliability.stream_idle_timeout_ms", "num", "Stream idle timeout", "A stream silent this long is given up on.", { def: 150000, min: 0, unit: "ms" }),
+        SET_F("stream_reliability.tool_call_repair_enabled", "bool", "Repair tool calls", "Add stub results for tool calls left unanswered, so strict APIs accept the history.", { def: true }),
+      ] },
+      { title: "Edited as JSON", fields: [
+        SET_F("auto_router.weights", "json", "Router weights", "The auto-router's scoring weights and threshold. Absent: the built-in defaults.", { live: 1 }),
+        SET_F("decision_models", "json", "Decision models", "Backends and the decision points that use them.", {}),
+        SET_F("database", "json", "Databases", "Connections for the `db_*` tools.", {}),
+      ] },
+    ] },
+];
+
+/* The list-of-objects keys, edited as cards. `key` is what the server matches
+   a masked secret by when the list is saved (RestoreMaskedConfigSecrets), so
+   renaming an entry whose secret is left as is would lose the secret: the
+   card says so instead of letting it happen. */
+const SET_CARDS = {
+  providers: { noun: "provider", key: "name", sub: it => it.kind || "",
+    newItem: () => ({ name: "", kind: "openai", api_base: "", api_key: "", model: "" }),
+    fields: [
+      ["name", "text", "Name", "What the default provider, fallbacks and the router call it.", { required: 1, mono: 1 }],
+      ["kind", "kind", "Kind", "The API it speaks."],
+      ["model", "model", "Model", "Blank uses the provider's default."],
+      ["api_base", "url", "Base URL", "Blank uses the provider's default."],
+      ["api_key", "secret", "API key", ""],
+    ] },
+  mcp_servers: { noun: "server", key: "name", sub: it => it.cmd || "",
+    newItem: () => ({ name: "", cmd: "", args: "", env: "", enabled: true }),
+    fields: [
+      ["name", "text", "Name", "Its tools are called `<name>__<tool>`.", { required: 1, mono: 1 }],
+      ["enabled", "bool", "Enabled", "", { def: true }],
+      ["cmd", "text", "Command or URL", "A program to run, or the server's https URL.", { mono: 1, required: 1, wide: 1 }],
+      ["args", "text", "Arguments", "One string, split like a shell would.", { mono: 1, wide: 1 }],
+      ["env", "secret", "Environment", "`KEY=value` pairs separated by `;`.", { wide: 1 }],
+      ["codemode", "tri", "Tool exposure", "", { opts: [["", "Follow the default"], ["true", "Code Mode"], ["false", "Classic tools"]] }],
+    ] },
+  channels: { noun: "channel", key: "name", sub: it => it.kind || "",
+    newItem: () => ({ name: "", kind: "discord", target: "" }),
+    fields: [
+      ["name", "text", "Name", "The name the model posts to.", { required: 1, mono: 1 }],
+      ["kind", "select", "Kind", "", { opts: SET_CHANNEL_KINDS }],
+      ["target", "secret", "Target", "Webhook URL, LINE user id or WhatsApp number.", { wide: 1 }],
+    ] },
+  crons: { noun: "job", key: "id", sub: it => [it.spec, it.skill].filter(Boolean).join("  "),
+    newItem: () => ({ id: "", spec: "", skill: "", args: "", enabled: true }),
+    fields: [
+      ["id", "text", "Id", "", { required: 1, mono: 1 }],
+      ["enabled", "bool", "Enabled", "", { def: true }],
+      ["spec", "text", "Schedule", "Cron expression, such as `0 9 * * 1-5`.", { required: 1, mono: 1 }],
+      ["skill", "text", "Skill", "The installed skill to run.", { mono: 1 }],
+      ["args", "text", "Arguments", "", { mono: 1, wide: 1 }],
+      ["workspace", "text", "Workspace", "Blank: the workspace active when it fires.", { mono: 1, def: "" }],
+      ["channel_kind", "select", "Post output to", "", { def: "", opts: [["", "Nowhere"]].concat(SET_CHANNEL_KINDS) }],
+      ["channel_target", "secret", "Target", "Webhook URL, LINE user id or WhatsApp number.", { def: "", wide: 1 }],
+    ] },
+  subagents: { noun: "subagent", key: "name", sub: it => it.model || "",
+    newItem: () => ({ name: "", description: "", system_prompt: "" }),
+    fields: [
+      ["name", "text", "Name", "What `spawn` calls it.", { required: 1, mono: 1 }],
+      ["model", "model", "Model", "Blank uses the parent's model.", { def: "" }],
+      ["description", "text", "Description", "One line the agent picks it by.", { wide: 1 }],
+      ["system_prompt", "textarea", "System prompt", "", { wide: 1 }],
+      ["tools", "list", "Tools", "Tool names it may call. Empty: none.", { def: [], mono: 1, add: "Add a tool" }],
+      ["max_iterations", "num", "Iteration cap", "0 means the default (4).", { def: 0, min: 0 }],
+    ] },
+  skills: { noun: "skill", key: "name", sub: it => it.source || "",
+    newItem: () => ({ name: "", source: "", enabled: true }),
+    fields: [
+      ["name", "text", "Name", "", { required: 1, mono: 1 }],
+      ["enabled", "bool", "Enabled", "", { def: true }],
+      ["source", "text", "Source", "builtin, a path or a URL.", { mono: 1, wide: 1 }],
+    ] },
+};
+
+function settingsInit() {
+  const form = $("#config-form"), edit = $("#config-edit"), main = $("#set-main");
+  const statusEl = $("#config-status"), saveBtn = $("#config-save"), discardBtn = $("#config-discard");
+  const rawBtn = $("#config-raw-toggle"), reloadBtn = $("#config-reload"), q = $("#set-q");
+  const nav = $("#set-nav"), secSel = $("#set-sec-select"), banners = $("#set-banners"), rawBox = $("#set-raw");
+  const SEC_KEY = "pasclaw.settings.section";
+  const st = {
+    base: {}, draft: {}, origin: new WeakMap(), fresh: new WeakSet(), rows: [], controls: [], dyn: [],
+    sec: "models", q: "", raw: false, busy: false, flash: null, loaded: false,
+    pending: new Map(), models: [], catalog: [], uid: 0, rawErr: "",
+  };
+  try { st.sec = localStorage.getItem(SEC_KEY) || st.sec; } catch {}
+
+  /* ---- plain-data helpers (paths are arrays of keys) ---- */
+  const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
+  const clone = v => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const getP = (o, p) => { let n = o; for (const k of p) { if (n == null || typeof n !== "object") return undefined; n = n[k]; } return n; };
+  const putP = (o, p, v) => { let n = o; for (let i = 0; i < p.length - 1; i++) { if (!isObj(n[p[i]])) n[p[i]] = {}; n = n[p[i]]; } n[p[p.length - 1]] = v; };
+  /* Delete a key, then any parent left empty that the baseline did not have,
+     so changing a value and changing it back leaves no trace in the file. */
+  function delP(o, p) {
+    const trail = []; let n = o;
+    for (let i = 0; i < p.length - 1; i++) { if (!isObj(n[p[i]])) return; trail.push([n, p[i], i]); n = n[p[i]]; }
+    delete n[p[p.length - 1]];
+    for (let j = trail.length - 1; j >= 0; j--) {
+      const [par, k, i] = trail[j];
+      if (isObj(par[k]) && !Object.keys(par[k]).length && getP(st.base, p.slice(0, i + 1)) === undefined) delete par[k];
+      else break;
+    }
+  }
+  const uid = () => "set-" + (++st.uid);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  /* Descriptions mark code with backticks; build text nodes, never HTML. */
+  function rich(node, text) {
+    String(text || "").split("`").forEach((part, i) => node.appendChild(i % 2 ? el("code", null, part) : document.createTextNode(part)));
+    return node;
+  }
+  const ic = name => { const t = document.createElement("template"); t.innerHTML = icon(name); return t.content.firstChild; };
+  const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+
+  /* Object lists keep a note of which baseline entry each draft entry came
+     from, so a removed card counts as one change, not a shift of all after it. */
+  function indexOrigins() {
+    st.origin = new WeakMap();
+    (function walk(d, b) {
+      if (Array.isArray(d) && Array.isArray(b)) {
+        d.forEach((it, i) => { if (isObj(it) && isObj(b[i])) { st.origin.set(it, i); walk(it, b[i]); } });
+      } else if (isObj(d) && isObj(b)) {
+        for (const k of Object.keys(d)) walk(d[k], b[k]);
+      }
+    })(st.draft, st.base);
+  }
+  /* Changed settings between two configs: one per scalar or string list, one
+     per added or removed card, and the changed fields inside a kept card. */
+  function diffCount(a, b) {
+    if (a === undefined && b === undefined) return 0;
+    if ((isObj(a) || a === undefined) && (isObj(b) || b === undefined)) {
+      let n = 0;
+      for (const k of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) n += diffCount(a && a[k], b && b[k]);
+      return n;
+    }
+    if (Array.isArray(a) && Array.isArray(b) && (a.some(isObj) || b.some(isObj))) {
+      let n = 0; const used = new Set();
+      b.forEach((it, i) => {
+        let oi = isObj(it) ? st.origin.get(it) : undefined;
+        /* Unmarked (parsed from the JSON view): pair by position. A card made
+           with Add is always new. */
+        if (oi === undefined && !(isObj(it) && st.fresh.has(it)) && i < a.length && !used.has(i)) oi = i;
+        if (oi === undefined || used.has(oi) || a[oi] === undefined) { n++; return; }
+        used.add(oi); n += diffCount(a[oi], it);
+      });
+      return n + a.filter((_, i) => !used.has(i)).length;
+    }
+    return same(a, b) ? 0 : 1;
+  }
+  const dirtyCount = () => {
+    if (!st.loaded) return 0;
+    if (st.raw) { const r = parseRaw(); return r.obj ? diffCount(st.base, r.obj) : Math.max(1, st.rawDirty || 1); }
+    return diffCount(st.base, st.draft);
+  };
+
+  /* ---- bindings: how a control reads and writes its value ---- */
+  function pathBinding(f) {
+    const p = f.path.split(".");
+    return {
+      get: () => { const v = getP(st.draft, p); return v === undefined ? f.def : v; },
+      base: () => { const v = getP(st.base, p); return v === undefined ? f.def : v; },
+      set: v => {
+        if (v === undefined || (getP(st.base, p) === undefined && f.def !== undefined && same(v, f.def))) delP(st.draft, p);
+        else putP(st.draft, p, clone(v));
+        changed();
+      },
+      isNew: () => false,
+    };
+  }
+  function itemBinding(item, k, def, orig, tmpl) {
+    const had = orig ? (k in orig) : (k in tmpl);
+    return {
+      get: () => item[k] === undefined ? def : item[k],
+      base: () => orig ? (orig[k] === undefined ? def : orig[k]) : undefined,
+      set: v => { if (v === undefined || (!had && same(v, def))) delete item[k]; else item[k] = v; changed(); },
+      isNew: () => !orig,
+    };
+  }
+
+  /* ---- validation ---- */
+  const isMarker = s => /^\$\{[A-Z_][A-Z0-9_]*\}$/.test(String(s).trim());
+  function checkValue(spec, v) {
+    const s = v == null ? "" : String(v);
+    if (spec.required && !s.trim()) return "This can't be empty.";
+    if ((spec.type === "url" || spec.url) && s.trim() && !isMarker(s)) {
+      let u = null; try { u = new URL(s.trim()); } catch {}
+      if (!u || !/^https?:$/.test(u.protocol)) return "Enter a full URL, such as https://example.com.";
+      if (spec.url === "https" && u.protocol !== "https:") return "This has to be an https URL.";
+    }
+    return "";
+  }
+  function numError(spec, s) {
+    if (s === "") return "Enter a number.";
+    const n = Number(s);
+    if (!isFinite(n)) return "Enter a number.";
+    if (!spec.float && !Number.isInteger(n)) return "Use a whole number.";
+    const range = spec.min != null && spec.max != null ? `Use a number from ${spec.min} to ${spec.max}.` : null;
+    if (spec.min != null && n < spec.min) return range || `Use ${spec.min} or more.`;
+    if (spec.max != null && n > spec.max) return range || `Use ${spec.max} or less.`;
+    return "";
+  }
+  /* A control's check runs only once it differs from the file (or sits in a
+     new card): an odd value already saved is not this page's to refuse. */
+  function register(ctl) { st.controls.push(ctl); return ctl; }
+  function runChecks() {
+    for (const c of st.controls) {
+      const msg = c.check ? c.check() : "";
+      c.msg = msg;
+      if (c.errEl) { c.errEl.textContent = ""; if (msg) { c.errEl.appendChild(ic("alert")); c.errEl.appendChild(el("span", null, msg)); } }
+      if (c.input) c.input.setAttribute("aria-invalid", msg ? "true" : "false");
+      if (c.box) c.box.classList.toggle("invalid", !!msg);
+    }
+    const bad = st.controls.filter(c => c.msg && c.errEl);
+    for (const r of st.rows) r.row.classList.toggle("invalid", bad.some(c => r.row.contains(c.errEl)));
+    document.querySelectorAll("#config-form .set-item").forEach(card =>
+      card.classList.toggle("invalid", !!card.querySelector(".set-f.invalid")));
+  }
+  const invalid = () => st.controls.filter(c => c.msg);
+
+  /* ---- controls ---- */
+  function input(id, cls, value, spec) {
+    const i = el("input", cls);
+    i.id = id; i.type = "text"; i.value = value == null ? "" : String(value);
+    i.spellcheck = false; i.autocomplete = "off";
+    if (spec && spec.placeholder) i.placeholder = spec.placeholder;
+    return i;
+  }
+  function fillSelect(sel, opts, cur, none) {
+    const seen = new Set(); sel.textContent = "";
+    const add = (v, label) => { v = String(v); if (seen.has(v)) return; seen.add(v); sel.appendChild(new Option(label, v)); };
+    if (none != null) add("", none);
+    for (const o of opts) Array.isArray(o) ? add(o[0], o[1]) : add(o, o);
+    const c = cur == null ? "" : String(cur);
+    if (!seen.has(c)) add(c, c === "" ? "(none)" : c + " (current)");
+    sel.value = c;
+  }
+  const names = arr => (Array.isArray(arr) ? arr : []).map(x => x && x.name).filter(n => typeof n === "string" && n.trim());
+  function dynOpts(type) {
+    if (type === "provider") return names(st.draft.providers);
+    if (type === "channel") return names(st.draft.channels);
+    if (type === "kind") return st.catalog.map(c => [c.kind, c.display_name ? c.display_name + "  ·  " + c.kind : c.kind]);
+    return [];
+  }
+  function refreshDyn() {
+    for (const d of st.dyn)
+      if (document.activeElement !== d.sel) fillSelect(d.sel, dynOpts(d.type), d.get(), typeof d.none === "function" ? d.none() : d.none);
+  }
+
+  /* Build the control for one value. Returns { node, input, check, ... }. */
+  function control(spec, b, id, labelText) {
+    const t = spec.type;
+    const ctl = { spec, b };
+    if (t === "bool") {
+      const wrap = el("span", "switch");
+      const i = el("input"); i.type = "checkbox"; i.id = id; i.setAttribute("role", "switch");
+      i.checked = b.get() === true;
+      i.addEventListener("change", () => b.set(i.checked));
+      wrap.append(i, el("span"));
+      return Object.assign(ctl, { node: wrap, input: i });
+    }
+    if (t === "num") {
+      const i = input(id, "num", b.get(), spec);
+      i.type = "number"; i.inputMode = spec.float ? "decimal" : "numeric";
+      if (spec.min != null) i.min = spec.min; if (spec.max != null) i.max = spec.max;
+      i.step = spec.step || (spec.float ? "any" : 1);
+      ctl.parse = "";
+      i.addEventListener("input", () => {
+        const s = i.value.trim();
+        ctl.parse = numError(spec, s);
+        if (!ctl.parse) b.set(Number(s)); else changed();
+      });
+      ctl.check = () => ctl.parse;
+      const node = spec.unit ? el("span", "set-ctl") : i;
+      if (spec.unit) node.append(i, el("span", "set-unit", spec.unit));
+      return Object.assign(ctl, { node, input: i });
+    }
+    if (t === "select" || t === "provider" || t === "channel" || t === "kind" || t === "tri") {
+      const s = el("select"); s.id = id;
+      const get = t === "tri" ? () => { const v = b.get(); return v === undefined ? "" : String(v); } : () => b.get();
+      if (t === "select" || t === "tri") fillSelect(s, spec.opts || [], get(), null);
+      else {
+        fillSelect(s, dynOpts(t), get(), spec.none != null ? spec.none : null);
+        st.dyn.push({ sel: s, type: t, get, none: spec.none != null ? spec.none : null, owner: st.curOwner });
+      }
+      s.addEventListener("change", () => b.set(t === "tri" ? (s.value === "" ? undefined : s.value === "true") : s.value));
+      ctl.check = () => (b.isNew() || !same(b.get(), b.base())) ? checkValue(spec, b.get()) : "";
+      return Object.assign(ctl, { node: s, input: s });
+    }
+    if (t === "secret") return secretControl(spec, b, id, labelText, ctl);
+    if (t === "list") return listControl(spec, b, id, labelText, ctl);
+    if (t === "textarea") {
+      const a = el("textarea"); a.id = id; a.rows = 4; a.value = b.get() == null ? "" : String(b.get());
+      a.addEventListener("input", () => b.set(a.value));
+      ctl.check = () => (b.isNew() || !same(b.get(), b.base())) ? checkValue(spec, b.get()) : "";
+      return Object.assign(ctl, { node: a, input: a });
+    }
+    if (t === "json") {
+      const v = b.get(), box = el("div", "set-ctl");
+      if (v === undefined) box.appendChild(el("span", "set-empty", "Not set."));
+      else box.appendChild(el("pre", "set-json", Array.isArray(v) && !v.length ? "[]" : JSON.stringify(v, null, 2)));
+      const btn = el("button", "icon-btn"); btn.type = "button"; btn.id = id;
+      btn.append(ic("code"), document.createTextNode("Edit as JSON"));
+      btn.addEventListener("click", () => enterRaw(spec.path));
+      box.appendChild(btn);
+      return Object.assign(ctl, { node: box, input: btn });
+    }
+    /* text, path, model, url */
+    const i = input(id, (spec.mono || t === "path" || t === "model" || t === "url") ? "set-mono" : "", b.get(), spec);
+    if (t === "model") { i.setAttribute("list", "set-models"); if (!i.placeholder) i.placeholder = spec.required ? "" : "Default"; }
+    if (t === "url") { i.type = "url"; i.inputMode = "url"; if (!i.placeholder) i.placeholder = spec.def || "https://"; }
+    i.addEventListener("input", () => b.set(i.value));
+    ctl.check = () => (b.isNew() || !same(b.get(), b.base())) ? checkValue(spec, b.get()) : "";
+    return Object.assign(ctl, { node: i, input: i });
+  }
+
+  /* A secret is never put in the page: the field starts empty and says
+     whether a value is saved. Left empty, the mask goes back and the server
+     keeps the saved value; typed, the new value goes; Clear sends "". */
+  function secretControl(spec, b, id, labelText, ctl) {
+    const baseVal = b.base(), isSet = baseVal != null && baseVal !== "";
+    const cur = b.get();
+    let typed = (cur != null && cur !== "" && cur !== SET_MASK && cur !== baseVal) ? String(cur) : "";
+    let cleared = isSet && cur === "";
+    const box = el("div", "set-secret-box"), row = el("div", "set-secret"), state = el("div", "set-secret-state");
+    const i = el("input"); i.type = "password"; i.id = id; i.value = typed;
+    i.autocomplete = "new-password"; i.spellcheck = false;
+    i.placeholder = isSet ? "Saved. Leave empty to keep it" : "Not set";
+    row.appendChild(i);
+    let clearBtn = null;
+    if (isSet) {
+      clearBtn = el("button", "icon-btn", "Clear"); clearBtn.type = "button";
+      clearBtn.setAttribute("aria-label", "Clear the saved " + labelText.toLowerCase());
+      clearBtn.addEventListener("click", () => { cleared = true; typed = ""; i.value = ""; b.set(""); paint(); });
+      row.appendChild(clearBtn);
+    }
+    function paint() {
+      state.textContent = ""; state.hidden = false;
+      const chip = (cls, text, ico) => { const c = el("span", "set-chip " + cls); if (ico) c.appendChild(ic(ico)); c.appendChild(document.createTextNode(text)); state.appendChild(c); };
+      if (typed) { chip("warn", "New value"); state.appendChild(el("span", null, isSet ? "Replaces the saved one when you save." : "Saved when you save.")); }
+      else if (cleared) {
+        chip("err", "Will be removed");
+        const u = el("button", "set-link", "Undo"); u.type = "button";
+        u.addEventListener("click", () => { cleared = false; b.set(baseVal); paint(); i.focus(); });
+        state.appendChild(u);
+      } else if (isSet) { chip("ok", "Set", "check"); state.appendChild(el("span", null, "Never shown. Type a new value to replace it.")); }
+      else state.hidden = true;   /* the empty field's "Not set" says it */
+      if (clearBtn) clearBtn.hidden = cleared;
+    }
+    i.addEventListener("input", () => {
+      typed = i.value; if (typed) cleared = false;
+      b.set(typed !== "" ? typed : (cleared ? "" : (baseVal === undefined ? "" : baseVal)));
+      paint();
+    });
+    paint();
+    state.id = id + "-state"; i.setAttribute("aria-describedby", state.id);
+    box.append(row, state);
+    return Object.assign(ctl, { node: box, input: i, secret: true });
+  }
+
+  /* A list of strings: a row per entry, x removes, Enter or Add adds. */
+  function listControl(spec, b, id, labelText, ctl) {
+    const box = el("div", "set-list"); box.id = id; box.setAttribute("role", "group");
+    let rows = (Array.isArray(b.get()) ? b.get() : []).map(v => typeof v === "string" ? v : JSON.stringify(v));
+    const commit = () => b.set(spec.keepEmpty ? rows.slice() : rows.filter(s => s.trim() !== ""));
+    function render(focusAt) {
+      box.textContent = "";
+      if (!rows.length) box.appendChild(el("span", "set-empty", "None."));
+      rows.forEach((v, i) => {
+        const r = el("div", "set-list-row");
+        const inp = input(id + "-" + i, spec.mono ? "set-mono" : "", v, spec);
+        inp.setAttribute("aria-label", labelText + ", entry " + (i + 1));
+        inp.addEventListener("input", () => { rows[i] = inp.value; commit(); });
+        inp.addEventListener("keydown", e => {
+          if (e.key === "Enter") { e.preventDefault(); rows.splice(i + 1, 0, ""); render(i + 1); }
+        });
+        const x = el("button", "set-x"); x.type = "button"; x.appendChild(ic("x"));
+        x.setAttribute("aria-label", "Remove " + (v ? "“" + v + "”" : "entry " + (i + 1)) + " from " + labelText);
+        x.addEventListener("click", () => {
+          rows.splice(i, 1); commit(); render(Math.min(i, rows.length - 1));
+          if (!rows.length) box.querySelector(".set-add").focus();
+        });
+        r.append(inp, x); box.appendChild(r);
+      });
+      const addBtn = el("button", "icon-btn set-add"); addBtn.type = "button";
+      addBtn.append(ic("plus"), document.createTextNode(spec.add || "Add"));
+      addBtn.addEventListener("click", () => { rows.push(""); render(rows.length - 1); });
+      box.appendChild(addBtn);
+      if (focusAt != null && focusAt >= 0) { const f = box.querySelectorAll("input")[focusAt]; if (f) f.focus(); }
+    }
+    render();
+    return Object.assign(ctl, { node: box, input: box });
+  }
+
+  /* fallbacks + fallback_models: one row per step, provider and model. */
+  function fallbackControl(f, id, ctl) {
+    const box = el("div", "set-list"); box.id = id; box.setAttribute("role", "group");
+    const fb = () => Array.isArray(st.draft.fallbacks) ? st.draft.fallbacks : [];
+    const fm = () => Array.isArray(st.draft.fallback_models) ? st.draft.fallback_models : [];
+    let rows = fb().map((p, i) => ({ p: String(p), m: String(fm()[i] || "") }));
+    function commit() {
+      const ps = rows.map(r => r.p), ms = rows.map(r => r.m);
+      if (!ps.length && st.base.fallbacks === undefined) delP(st.draft, ["fallbacks"]); else st.draft.fallbacks = ps;
+      if (ms.some(Boolean) || st.base.fallback_models !== undefined) st.draft.fallback_models = ms; else delP(st.draft, ["fallback_models"]);
+      changed();
+    }
+    function render(focusAt) {
+      box.textContent = "";
+      st.dyn = st.dyn.filter(d => d.owner !== box);
+      if (!rows.length) box.appendChild(el("span", "set-empty", "No fallbacks: an error from the default provider is shown as it is."));
+      rows.forEach((r, i) => {
+        const line = el("div", "set-list-row");
+        const s = el("select"); s.id = id + "-p" + i; s.setAttribute("aria-label", "Fallback " + (i + 1) + " provider");
+        const none = () => r.p ? null : "Choose a provider";
+        fillSelect(s, names(st.draft.providers), r.p, none());
+        st.dyn.push({ sel: s, type: "provider", get: () => r.p, none, owner: box });
+        s.addEventListener("change", () => { r.p = s.value; commit(); });
+        const m = input(id + "-m" + i, "set-mono", r.m, { placeholder: "Provider's default model" });
+        m.setAttribute("list", "set-models"); m.setAttribute("aria-label", "Fallback " + (i + 1) + " model");
+        m.addEventListener("input", () => { r.m = m.value; commit(); });
+        const x = el("button", "set-x"); x.type = "button"; x.appendChild(ic("x"));
+        x.setAttribute("aria-label", "Remove fallback " + (i + 1));
+        x.addEventListener("click", () => { rows.splice(i, 1); commit(); render(); });
+        line.append(s, m, x); box.appendChild(line);
+      });
+      const add = el("button", "icon-btn set-add"); add.type = "button";
+      add.append(ic("plus"), document.createTextNode("Add a fallback"));
+      add.addEventListener("click", () => { rows.push({ p: "", m: "" }); commit(); render(rows.length - 1); });
+      box.appendChild(add);
+      if (focusAt != null) { const sel = box.querySelectorAll("select")[focusAt]; if (sel) sel.focus(); }
+    }
+    ctl.check = () => rows.some(r => !r.p) ? "Choose a provider for every fallback." : "";
+    render();
+    return Object.assign(ctl, { node: box, input: box });
+  }
+
+  /* diagnostics.otel.headers: name and write-only value per header. */
+  function headersControl(f, b, id, ctl) {
+    const box = el("div", "set-list"); box.id = id; box.setAttribute("role", "group");
+    const baseH = isObj(b.base()) ? b.base() : {};
+    let rows = Object.entries(isObj(b.get()) ? b.get() : {}).map(([k, v]) => ({
+      orig: k in baseH ? k : null, name: k, typed: (k in baseH && v === baseH[k]) ? "" : String(v) }));
+    function commit() {
+      const out = {};
+      for (const r of rows) {
+        if (!r.name.trim()) continue;
+        out[r.name] = r.typed !== "" ? r.typed : (r.orig === r.name ? baseH[r.orig] : "");
+      }
+      b.set(out);
+    }
+    function render(focusAt) {
+      box.textContent = "";
+      if (!rows.length) box.appendChild(el("span", "set-empty", "None."));
+      rows.forEach((r, i) => {
+        const line = el("div", "set-list-row");
+        const n = input(id + "-n" + i, "set-mono", r.name, { placeholder: "Authorization" });
+        n.setAttribute("aria-label", "Header " + (i + 1) + " name");
+        const v = el("input"); v.type = "password"; v.id = id + "-v" + i; v.value = r.typed; v.autocomplete = "new-password";
+        v.className = "set-mono"; v.setAttribute("aria-label", "Header " + (i + 1) + " value");
+        v.placeholder = (r.orig !== null && baseH[r.orig]) ? "Saved. Leave empty to keep it" : "Value";
+        n.addEventListener("input", () => { r.name = n.value; commit(); });
+        v.addEventListener("input", () => { r.typed = v.value; commit(); });
+        const x = el("button", "set-x"); x.type = "button"; x.appendChild(ic("x"));
+        x.setAttribute("aria-label", "Remove header " + (r.name || i + 1));
+        x.addEventListener("click", () => { rows.splice(i, 1); commit(); render(); });
+        line.append(n, v, x); box.appendChild(line);
+      });
+      const add = el("button", "icon-btn set-add"); add.type = "button";
+      add.append(ic("plus"), document.createTextNode("Add a header"));
+      add.addEventListener("click", () => { rows.push({ orig: null, name: "", typed: "" }); render(rows.length - 1); });
+      box.appendChild(add);
+      if (focusAt != null) { const ins = box.querySelectorAll("input"); if (ins[focusAt * 2]) ins[focusAt * 2].focus(); }
+    }
+    ctl.check = () => {
+      const r = rows.find(r => r.orig !== null && r.name !== r.orig && r.typed === "" && baseH[r.orig] === SET_MASK);
+      return r ? `Enter the value of “${r.name || r.orig}” again: a renamed header does not keep its saved value.` : "";
+    };
+    render();
+    return Object.assign(ctl, { node: box, input: box });
+  }
+
+  /* ---- cards ---- */
+  function cardsControl(f, id, ctl) {
+    const spec = SET_CARDS[f.cards], p = f.path.split(".");
+    const box = el("div", "set-cards"); box.id = id; box.setAttribute("role", "group");
+    const arr = () => { const a = getP(st.draft, p); return Array.isArray(a) ? a : []; };
+    function render(focusItem) {
+      box.textContent = "";
+      /* Drop this list's old controls; the cards are rebuilt below. */
+      st.controls = st.controls.filter(c => c.owner !== box);
+      st.dyn = st.dyn.filter(d => d.owner !== box);
+      if (!arr().length) box.appendChild(el("span", "set-empty", "None yet."));
+      st.curOwner = box;
+      arr().forEach(item => box.appendChild(card(item, item === focusItem)));
+      st.curOwner = null;
+      const add = el("button", "icon-btn set-add"); add.type = "button";
+      add.append(ic("plus"), document.createTextNode("Add a " + spec.noun));
+      add.addEventListener("click", () => {
+        if (!Array.isArray(getP(st.draft, p))) putP(st.draft, p, []);
+        const it = spec.newItem(); getP(st.draft, p).push(it); st.fresh.add(it);
+        changed(); render(it);
+      });
+      box.appendChild(add);
+      runChecks();
+    }
+    function card(item, focus) {
+      const oi = st.origin.get(item), baseArr = getP(st.base, p), orig = oi !== undefined && Array.isArray(baseArr) ? baseArr[oi] : null;
+      const tmpl = spec.newItem();
+      const c = el("div", "set-item" + (orig ? "" : " new"));
+      const head = el("div", "set-item-head"), title = el("span", "set-item-title"), sub = el("span", "set-item-sub");
+      const rm = el("button", "icon-btn"); rm.type = "button";
+      const paintHead = () => {
+        title.textContent = String(item[spec.key] || "").trim() || "New " + spec.noun;
+        sub.textContent = spec.sub(item);
+        rm.setAttribute("aria-label", "Remove " + spec.noun + " " + title.textContent);
+      };
+      rm.append(ic("trash"), el("span", "lbl", "Remove"));
+      rm.addEventListener("click", () => {
+        const a = arr(), i = a.indexOf(item);
+        if (i >= 0) a.splice(i, 1);
+        if (!a.length && getP(st.base, p) === undefined) delP(st.draft, p);
+        changed(); render();
+        const next = box.querySelector(".set-item .icon-btn") || box.querySelector(".set-add"); if (next) next.focus();
+      });
+      head.append(title, sub, rm);
+      const body = el("div", "set-item-body");
+      const known = new Set(spec.fields.map(x => x[0]));
+      const fieldSpecs = spec.fields.map(([k, type, label, hint, x]) => Object.assign({ k, type, label, desc: hint, path: f.path + "[]." + k }, x || {}));
+      /* Keys this page does not know stay on the card, generically. */
+      for (const k of Object.keys(item)) if (!known.has(k)) fieldSpecs.push(Object.assign(genericSpec(item[k]), { k, label: k, desc: "", path: f.path + "[]." + k, extra: 1 }));
+      let firstInput = null;
+      for (const fs of fieldSpecs) {
+        const fid = uid();
+        const b = itemBinding(item, fs.k, fs.def !== undefined ? fs.def : (fs.type === "bool" ? false : fs.type === "list" ? [] : ""), orig, tmpl);
+        const wrapped = Object.assign({}, b, { set: v => { b.set(v); paintHead(); } });
+        const fc = register(control(fs, wrapped, fid, fs.label));
+        fc.owner = box;
+        const fbox = el("div", "set-f" + (fs.wide || fs.type === "textarea" || fs.type === "list" || fs.type === "json" ? " wide" : ""));
+        fc.box = fbox;
+        if (fs.type === "bool") {
+          const line = el("div", "set-f-inline"); const lab = el("label", null, fs.label); lab.htmlFor = fid;
+          line.append(fc.node, lab); fbox.appendChild(line);
+        } else {
+          const lab = el(fs.type === "list" ? "span" : "label", "set-f-label", fs.label);
+          if (fs.type === "list") { lab.id = fid + "-l"; fc.node.setAttribute("aria-labelledby", lab.id); } else lab.htmlFor = fid;
+          fbox.append(lab, fc.node);
+        }
+        if (fs.desc) {
+          const h = rich(el("span", "set-hint"), fs.desc); h.id = fid + "-d"; fbox.appendChild(h);
+          if (fc.input && fc.input.setAttribute)
+            fc.input.setAttribute("aria-describedby", fc.secret ? h.id + " " + fc.input.getAttribute("aria-describedby") : h.id);
+        }
+        const err = el("div", "set-err"); err.setAttribute("aria-live", "polite"); fbox.appendChild(err); fc.errEl = err;
+        if (fs.k === spec.key) {
+          const own = fc.check;
+          fc.check = () => own() || keyError(spec, item, orig, arr());
+        }
+        if (!firstInput && fc.input && fc.input.focus) firstInput = fc.input;
+        body.appendChild(fbox);
+      }
+      paintHead();
+      c.append(head, body);
+      c._item = item;
+      if (focus && firstInput) setTimeout(() => firstInput.focus(), 0);
+      return c;
+    }
+    ctl.renderCards = render;
+    render();
+    return Object.assign(ctl, { node: box, input: box });
+  }
+  /* The server matches a masked secret by this key, so a new or renamed
+     entry needs a unique one, and a rename must bring its secret along. */
+  function keyError(spec, item, orig, arr) {
+    const key = String(item[spec.key] || "").trim();
+    const renamed = orig && orig[spec.key] !== item[spec.key];
+    if (orig && !renamed) return "";
+    if (!key) return spec.key === "id" ? "Give the " + spec.noun + " an id." : "Give the " + spec.noun + " a name.";
+    if (arr.some(o => o !== item && String(o[spec.key] || "").trim() === key)) return `Another ${spec.noun} is already called “${key}”.`;
+    if (renamed) {
+      const kept = spec.fields.find(fd => fd[1] === "secret" && item[fd[0]] === SET_MASK);
+      if (kept) return `The saved ${kept[2].toLowerCase()} belongs to “${orig[spec.key]}”. Enter it again to rename, or keep the old ${spec.key === "id" ? "id" : "name"}.`;
+    }
+    return "";
+  }
+  function genericSpec(v) {
+    if (typeof v === "boolean") return { type: "bool" };
+    if (typeof v === "number") return { type: "num", float: !Number.isInteger(v) };
+    if (typeof v === "string") return { type: v === SET_MASK ? "secret" : "text" };
+    if (Array.isArray(v) && v.every(x => typeof x === "string")) return { type: "list", keepEmpty: 1 };
+    return { type: "json" };
+  }
+
+  /* ---- rows and sections ---- */
+  const allFields = () => SET_SECTIONS.flatMap(s => s.groups.flatMap(g => g.fields));
+  function restartOf(f) { return !f.live && f.type !== "action"; }
+  function buildRow(f, sec) {
+    const row = el("div", "set-row"), id = uid();
+    row.dataset.path = f.path;
+    const b = pathBinding(f);
+    let ctl;
+    if (f.type === "cards") ctl = cardsControl(f, id, { spec: f, b });
+    else if (f.type === "fallbacks") ctl = fallbackControl(f, id, { spec: f, b });
+    else if (f.type === "headers") ctl = headersControl(f, b, id, { spec: f, b });
+    else if (f.type === "action") ctl = actionControl(f, id);
+    else ctl = control(f, b, id, f.label);
+    register(ctl);
+    const text = el("div", "set-text"), head = el("div", "set-head");
+    const labelled = !["cards", "list", "fallbacks", "headers", "json", "action"].includes(f.type);
+    const lab = el(labelled ? "label" : "span", "set-label", f.label);
+    if (labelled) lab.htmlFor = id; else { lab.id = id + "-l"; if (ctl.input && ctl.input.setAttribute && f.type !== "json" && f.type !== "action") ctl.input.setAttribute("aria-labelledby", lab.id); }
+    head.appendChild(lab);
+    if (restartOf(f) && sec.mixed) { const c = el("span", "set-chip"); c.append(ic("power"), document.createTextNode("Restart")); c.title = "Applies after PasClaw restarts"; head.appendChild(c); }
+    if (f.path[0] !== "$") head.appendChild(el("code", "set-key", f.path));
+    text.appendChild(head);
+    if (f.desc) { const d = rich(el("p", "set-desc"), f.desc); d.id = id + "-d"; text.appendChild(d);
+      if (ctl.input && ctl.input.setAttribute)
+        ctl.input.setAttribute("aria-describedby", ctl.secret ? d.id + " " + ctl.input.getAttribute("aria-describedby") : d.id); }
+    const err = el("div", "set-err"); err.setAttribute("aria-live", "polite");
+    ctl.errEl = err;
+    const after = el("div", "set-after");
+    if (f.type === "bool") { row.classList.add("bool"); text.append(err, after); row.append(ctl.node, text); }
+    else row.append(text, ctl.node, err, after);
+    const r = { row, f, ctls: [ctl], sec: sec.id, after, paths: (f.paths || [f.path]).map(x => x.split(".")),
+      hay: (f.label + " " + f.path + " " + (f.desc || "") + " " + sec.title).toLowerCase() };
+    if (f.type === "cards") r.hayFn = () => names(getP(st.draft, f.path.split("."))).join(" ").toLowerCase() + " " + (getP(st.draft, f.path.split(".")) || []).map(it => it && (it.id || "")).join(" ");
+    st.rows.push(r);
+    return row;
+  }
+  /* Workspace export and import live with the backups, apart from Save. */
+  function actionControl(f, id) {
+    const box = el("div", "set-actions");
+    const btn = el("button", "icon-btn"); btn.type = "button"; btn.id = f.action === "export" ? "ws-export" : "ws-import";
+    btn.append(ic(f.action === "export" ? "download" : "upload"), document.createTextNode(f.action === "export" ? "Download workspace.zip" : "Choose a zip…"));
+    const note = el("span", "settings-status"); note.setAttribute("role", "status");
+    btn.addEventListener("click", () => f.action === "export" ? exportWorkspace(btn, note) : importPick(btn, note));
+    box.append(btn, note);
+    return { node: box, input: btn };
+  }
+  function fieldDirty(r) {
+    if (r.f.type === "action") return false;
+    return r.paths.some(p => {
+      const f = r.f, d = f.paths ? undefined : f.def;
+      const a = getP(st.base, p), b = getP(st.draft, p);
+      return !same(a === undefined ? d : a, b === undefined ? d : b);
+    });
+  }
+
+  function unknownPaths() {
+    const known = new Set(), fields = allFields();
+    for (const f of fields) (f.paths || [f.path]).forEach(p => known.add(p));
+    const container = ps => fields.some(f => (f.paths || [f.path]).some(p => p.startsWith(ps + ".")));
+    const out = [];
+    (function walk(o, pre) {
+      for (const k of Object.keys(o)) {
+        const p = pre.concat(k), ps = p.join(".");
+        if (known.has(ps)) continue;
+        if (isObj(o[k]) && container(ps)) { walk(o[k], p); continue; }
+        if (isObj(o[k]) && Object.keys(o[k]).length) { walk(o[k], p); continue; }
+        out.push(p);
+      }
+    })(st.draft, []);
+    return out;
+  }
+
+  function renderForm() {
+    form.textContent = ""; st.rows = []; st.controls = []; st.dyn = [];
+    const secs = SET_SECTIONS.slice();
+    const unknown = unknownPaths();
+    if (unknown.length) {
+      const groups = new Map();
+      for (const p of unknown) {
+        const g = p.length > 1 ? p.slice(0, -1).join(".") : "";
+        if (!groups.has(g)) groups.set(g, []);
+        const v = getP(st.draft, p);
+        groups.get(g).push(Object.assign(genericSpec(v), { path: p.join("."), label: p[p.length - 1].replace(/_/g, " ").replace(/^./, c => c.toUpperCase()), desc: "" }));
+      }
+      secs.push({ id: "other", title: "Other", intro: "Keys in config.json this page has no description for, perhaps added by a newer PasClaw. They are kept as they are unless you change them here.",
+        groups: [...groups].map(([g, fields]) => ({ title: g ? g : "Top level", code: !!g, fields })) });
+    }
+    st.secList = secs;
+    if (!secs.some(s => s.id === st.sec)) st.sec = "models";
+    for (const sec of secs) {
+      const fields = sec.groups.flatMap(g => g.fields).filter(f => f.type !== "action");
+      sec.mixed = fields.some(restartOf) && fields.some(f => !restartOf(f));
+      const s = el("section", "set-sec"); s.dataset.sec = sec.id;
+      const head = el("header", "set-sec-head"), h = el("h2", null, sec.title);
+      h.id = "set-h-" + sec.id; h.tabIndex = -1; s.setAttribute("aria-labelledby", h.id);
+      head.appendChild(h);
+      if (sec.intro) head.appendChild(rich(el("p"), sec.intro));
+      if (!sec.mixed && fields.length && fields.every(restartOf)) {
+        const n = el("div", "set-note"); n.append(ic("power"), document.createTextNode("Changes here apply after PasClaw restarts."));
+        head.appendChild(n);
+      }
+      s.appendChild(head);
+      for (const g of sec.groups) {
+        const gb = el("div", "set-group"), title = el("h3", "set-group-title");
+        if (g.code) title.appendChild(el("code", null, g.title)); else title.textContent = g.title;
+        /* A group of one setting with the same name needs no heading of its own. */
+        if (!(g.fields.length === 1 && g.fields[0].label === g.title)) gb.appendChild(title);
+        if (g.desc) gb.appendChild(rich(el("p", "set-group-desc"), g.desc));
+        const panel = el("div", "set-panel");
+        for (const f of g.fields) panel.appendChild(buildRow(f, sec));
+        gb.appendChild(panel); s.appendChild(gb);
+      }
+      form.appendChild(s);
+    }
+    const none = el("div", "set-nomatch"); none.id = "set-nomatch"; none.hidden = true; form.appendChild(none);
+    buildNav();
+    changed(true);
+  }
+
+  function buildNav() {
+    nav.textContent = ""; secSel.textContent = "";
+    for (const sec of st.secList) {
+      const b = el("button"); b.type = "button"; b.dataset.sec = sec.id;
+      b.append(el("span", "t", sec.title));
+      b.addEventListener("click", () => go(sec.id, true));
+      nav.appendChild(b);
+      secSel.appendChild(new Option(sec.title, sec.id));
+    }
+  }
+  function go(id, fromNav) {
+    st.sec = id;
+    try { localStorage.setItem(SEC_KEY, id); } catch {}
+    if (st.q) { st.q = ""; q.value = ""; }
+    applyView();
+    main.scrollTop = 0;
+    if (!fromNav) { const h = $("#set-h-" + id); if (h) h.focus(); }
+  }
+
+  /* Show one section, or with a search, every matching row in every section. */
+  function applyView() {
+    const words = st.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const counts = {}, dirtySecs = new Set();
+    for (const r of st.rows) {
+      const hay = r.hay + (r.hayFn ? " " + r.hayFn() : "");
+      r.hit = !words.length || words.every(w => hay.includes(w));
+      if (r.hit) counts[r.sec] = (counts[r.sec] || 0) + 1;
+      if (r.row.classList.contains("dirty")) dirtySecs.add(r.sec);
+    }
+    let shown = 0;
+    form.querySelectorAll(".set-sec").forEach(s => {
+      const id = s.dataset.sec;
+      if (words.length) {
+        s.querySelectorAll(".set-group").forEach(g => {
+          let any = false;
+          g.querySelectorAll(":scope>.set-panel>.set-row").forEach(row => {
+            const r = st.rows.find(x => x.row === row); row.hidden = !(r && r.hit); if (!row.hidden) any = true;
+          });
+          g.hidden = !any;
+        });
+        s.hidden = !counts[id];
+      } else {
+        s.querySelectorAll(".set-group,.set-row").forEach(x => { x.hidden = false; });
+        s.hidden = id !== st.sec;
+      }
+      if (!s.hidden) shown++;
+    });
+    const none = $("#set-nomatch");
+    if (none) { none.hidden = shown > 0; none.textContent = shown ? "" : "No settings match “" + st.q.trim() + "”."; }
+    nav.querySelectorAll("button").forEach(b => {
+      const id = b.dataset.sec;
+      b.setAttribute("aria-current", !words.length && id === st.sec ? "true" : "false");
+      b.classList.toggle("miss", !!words.length && !counts[id]);
+      b.querySelectorAll(".n,.dot").forEach(x => x.remove());
+      if (words.length) b.appendChild(el("span", "n", String(counts[id] || 0)));
+      else if (dirtySecs.has(id)) { const d = el("span", "dot"); d.title = "Unsaved changes"; b.appendChild(d); }
+    });
+    secSel.value = st.sec;
+  }
+
+  /* ---- after every edit ---- */
+  function changed(rendering) {
+    if (!rendering) st.flash = null;
+    for (const r of st.rows) {
+      const d = fieldDirty(r);
+      r.row.classList.toggle("dirty", d);
+      r.after.textContent = d && restartOf(r.f) && !r.f.path.startsWith("$") ? "Takes effect after PasClaw restarts." : "";
+    }
+    document.querySelectorAll("#config-form .set-item").forEach(c => {
+      const it = c._item, oi = st.origin.get(it);
+      if (oi === undefined) return;
+      const card = st.rows.find(r => r.row.contains(c));
+      const baseArr = card ? getP(st.base, card.f.path.split(".")) : null;
+      c.classList.toggle("dirty", !!baseArr && !same(baseArr[oi], it));
+    });
+    runChecks();
+    refreshDyn();
+    applyView();
+    paintBar();
+  }
+
+  function paintBar() {
+    const n = dirtyCount(), bad = st.raw ? (st.rawErr ? 1 : 0) : invalid().length;
+    let cls = "", text;
+    if (st.busy) { cls = "busy"; text = st.busyText || "Saving…"; }
+    else if (st.flash && !n) { cls = st.flash.cls; text = st.flash.text; }
+    else if (n) {
+      cls = bad ? "err" : "dirty";
+      text = plural(n, "unsaved change") + (bad ? " · " + (st.raw ? "the JSON is not valid" : plural(bad, "field") + " to fix") : "");
+      if (st.flash && st.flash.cls === "err") { cls = "err"; text = st.flash.text; }
+    } else if (st.loaded) text = "No unsaved changes";
+    else if (st.loadErr) { cls = "err"; text = "config.json could not be loaded"; }
+    else text = "Loading…";
+    statusEl.className = "set-status" + (cls ? " " + cls : "");
+    statusEl.textContent = ""; statusEl.appendChild(el("span", null, text));
+    saveBtn.disabled = st.busy || !n;
+    discardBtn.disabled = st.busy || !n;
+    saveBtn.textContent = st.busy ? "Saving…" : "Save";
+  }
+  function flash(cls, text) { st.flash = { cls, text }; paintBar(); }
+
+  function paintBanners() {
+    banners.textContent = "";
+    if (st.loadErr) {
+      const b = el("div", "set-banner err"); b.setAttribute("role", "alert");
+      b.append(ic("alert"), el("div", null, "Couldn't load config.json: " + st.loadErr));
+      banners.appendChild(b);
+    }
+    if (st.pending.size) {
+      const b = el("div", "set-banner"), t = el("div");
+      t.append(el("b", null, "Restart PasClaw to apply: "), document.createTextNode([...st.pending.keys()].join(", ") + "."));
+      t.appendChild(el("div", "set-desc", "They are saved in config.json; the running gateway still uses the old values."));
+      b.append(ic("power"), t); banners.appendChild(b);
+    }
+  }
+
+  /* ---- load / save / discard ---- */
+  async function loadAux() {
+    const get = async (u, pick) => { try { const r = await gwFetch(u); return r.ok ? pick(await r.json()) : []; } catch { return []; } };
+    const [models, catalog] = await Promise.all([
+      st.models.length ? st.models : get("/v1/models", j => (j.data || j.models || []).map(x => typeof x === "string" ? x : (x.id || x.name)).filter(Boolean)),
+      st.catalog.length ? st.catalog : get("/v1/providers/catalog", j => (j.data || []).filter(c => c && c.kind)),
+    ]);
+    st.models = models; st.catalog = catalog;
+    const dl = $("#set-models"); dl.textContent = "";
+    for (const m of models) dl.appendChild(new Option(m));
+  }
+  async function load() {
+    st.loaded = false; st.busy = false; st.busyText = ""; paintBar();
+    try {
+      const [r] = await Promise.all([gwFetch("/v1/config?source=file"), loadAux()]);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const cfg = await r.json();
+      if (!isObj(cfg)) throw new Error("the server did not send a JSON object");
+      st.base = cfg; st.draft = clone(cfg); indexOrigins();
+      st.loadErr = ""; st.loaded = true;
+      if (st.raw) leaveRaw(false);
+      renderForm();
+    } catch (e) {
+      st.loadErr = String(e && e.message || e);
+      if (!st.loaded) form.innerHTML = "";
+    }
+    paintBanners(); paintBar();
+  }
+  /* What changed, by label: what the provider swap applies on save (live: 1),
+     what is picked up without it (live: 2, the cron scheduler watches the
+     file), and what waits for a restart -- which includes every key the
+     table does not know. */
+  function describe(a, b) {
+    const live = [], sched = [], restart = [];
+    const seen = new Set();
+    for (const f of allFields()) {
+      if (f.type === "action") continue;
+      const ps = f.paths || [f.path];
+      ps.forEach(p => seen.add(p));
+      if (ps.some(p => !same(getP(a, p.split(".")) === undefined ? f.def : getP(a, p.split(".")),
+                             getP(b, p.split(".")) === undefined ? f.def : getP(b, p.split("."))))) (restartOf(f) ? restart : f.live === 2 ? sched : live).push(f.label);
+    }
+    (function walk(x, y, pre) {
+      for (const k of new Set([...Object.keys(x || {}), ...Object.keys(y || {})])) {
+        const p = pre.concat(k), ps = p.join(".");
+        if (seen.has(ps)) continue;
+        if ([...seen].some(s => s.startsWith(ps + ".")) && (isObj(x && x[k]) || isObj(y && y[k]))) { walk(x && x[k], y && y[k], p); continue; }
+        if (!same(x && x[k], y && y[k])) restart.push(ps);
+      }
+    })(a, b, []);
+    return { live, sched, restart };
+  }
+  async function save() {
+    /* Ctrl+S reaches here with the button disabled; nothing to send then. */
+    if (st.busy || !st.loaded || !dirtyCount()) return;
+    let payload;
+    if (st.raw) {
+      const r = parseRaw();
+      if (r.err) { flash("err", "Fix the JSON before saving."); edit.focus(); return; }
+      payload = r.obj;
+    } else {
+      runChecks();
+      const bad = invalid();
+      if (bad.length) { flash("err", "Fix " + plural(bad.length, "field") + " before saving."); reveal(bad[0]); return; }
+      payload = clone(st.draft);
+    }
+    const what = describe(st.base, payload);
+    st.busy = true; st.busyText = "Saving…"; st.flash = null; paintBar();
+    let ok = false, msg = "", applied = false;
+    try {
+      const r = await gwFetch("/v1/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.saved) { ok = true; applied = !!j.applied; }
+      else msg = j.error || ("HTTP " + r.status);
+    } catch (e) { msg = String(e && e.message || e); }
+    st.busy = false;
+    if (!ok) { flash("err", "Couldn't save: " + msg); return; }
+    for (const l of what.restart) st.pending.set(l, true);
+    if (what.live.length && !applied) for (const l of what.live) st.pending.set(l, true);
+    const wasRaw = st.raw;
+    await load();
+    if (wasRaw) enterRaw();
+    const now = what.sched.length + (applied ? what.live.length : 0);
+    let text = "Saved.";
+    if (now) text += " " + plural(now, "change") + " applied now.";
+    if (what.live.length && !applied) text += " The gateway could not switch providers live; restart to apply.";
+    if (what.restart.length) text += " " + plural(what.restart.length, "change") + " after a restart.";
+    flash(what.live.length && !applied ? "err" : "ok", text);
+  }
+  function discard() {
+    if (!st.loaded) return;
+    st.draft = clone(st.base); indexOrigins();
+    if (st.raw) leaveRaw(false);
+    renderForm();
+    flash("", "Changes discarded");
+  }
+  function reveal(ctl) {
+    const r = st.rows.find(x => x.ctls.includes(ctl) || (ctl.box && x.row.contains(ctl.box)));
+    if (r && (st.q || r.sec !== st.sec)) go(r.sec, true);
+    const target = ctl.input && ctl.input.focus ? ctl.input : null;
+    const node = ctl.box || (r && r.row);
+    if (node) node.scrollIntoView({ block: "center" });
+    if (target) target.focus();
+  }
+
+  /* ---- Advanced: the whole file as JSON ---- */
+  function parseRaw() {
+    let o;
+    try { o = JSON.parse(edit.value); }
+    catch (e) {
+      let m = String(e.message || e);
+      const pos = /position (\d+)/.exec(m);
+      if (pos && !/line \d+/.test(m)) {
+        const before = edit.value.slice(0, Number(pos[1])).split("\n");
+        m += " (line " + before.length + ", column " + (before[before.length - 1].length + 1) + ")";
+      }
+      return { err: m };
+    }
+    if (!isObj(o)) return { err: "The top level has to be a JSON object: { … }." };
+    return { obj: o };
+  }
+  function rawCheck() {
+    const r = parseRaw(), s = $("#set-raw-state");
+    st.rawErr = r.err || "";
+    s.textContent = "";
+    s.className = "set-raw-state" + (r.err ? " err" : "");
+    s.append(ic(r.err ? "alert" : "check"), el("span", null, r.err ? "Not valid JSON: " + r.err : "Valid JSON."));
+    if (r.err) st.rawDirty = Math.max(1, st.rawDirty || 0); else st.rawDirty = diffCount(st.base, r.obj);
+    paintBar();
+  }
+  function enterRaw(focusPath) {
+    if (!st.loaded) return;
+    st.raw = true;
+    edit.value = JSON.stringify(st.draft, null, 2);
+    form.hidden = true; rawBox.hidden = false;
+    rawBtn.classList.add("on"); rawBtn.setAttribute("aria-pressed", "true");
+    q.disabled = true; nav.querySelectorAll("button").forEach(b => { b.disabled = true; }); secSel.disabled = true;
+    rawCheck();
+    main.scrollTop = 0;
+    if (focusPath) {
+      const key = '"' + focusPath.split(".").pop() + '"', at = edit.value.indexOf(key + ":");
+      edit.focus();
+      if (at >= 0) { edit.setSelectionRange(at, at + key.length); const line = edit.value.slice(0, at).split("\n").length; edit.scrollTop = Math.max(0, (line - 3) * 19); }
+    } else $("#set-raw-title").focus();
+  }
+  /* Back to the form. With apply, the JSON becomes the draft -- refused
+     while it does not parse, so nothing typed there is silently dropped. */
+  function leaveRaw(apply) {
+    if (apply) {
+      const r = parseRaw();
+      if (r.err) { rawCheck(); edit.focus(); flash("err", "Fix the JSON, or Discard, to go back to the form."); return false; }
+      st.draft = r.obj; indexOrigins();
+    }
+    st.raw = false; st.rawErr = "";
+    form.hidden = false; rawBox.hidden = true;
+    rawBtn.classList.remove("on"); rawBtn.setAttribute("aria-pressed", "false");
+    q.disabled = false; secSel.disabled = false;
+    if (apply) renderForm();
+    else nav.querySelectorAll("button").forEach(b => { b.disabled = false; });
+    return true;
+  }
+
+  /* ---- workspace transfer ---- */
+  async function exportWorkspace(btn, note) {
+    btn.disabled = true; note.className = "settings-status"; note.textContent = "Packing the workspace…";
+    try {
+      const r = await gwFetch("/v1/workspace/export");
+      if (!r.ok) {
+        let m = "HTTP " + r.status; try { const j = await r.json(); if (j.error) m = j.error; } catch {}
+        note.className = "settings-status err"; note.textContent = "Export failed: " + m; return;
+      }
+      const blob = await r.blob(), url = URL.createObjectURL(blob), a = document.createElement("a");
+      a.href = url; a.download = "workspace.zip"; document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      note.className = "settings-status ok"; note.textContent = "Downloaded workspace.zip (" + Math.round(blob.size / 1024) + " KB).";
+    } catch (e) { note.className = "settings-status err"; note.textContent = "Export failed: " + e; }
+    finally { btn.disabled = false; }
+  }
+  let importTarget = null;
+  function importPick(btn, note) { importTarget = { btn, note }; $("#ws-import-file").click(); }
+  /* POST the raw zip; the server checks every entry's path before it
+     extracts, and merges (the zip's files replace, others stay). */
+  async function importWorkspace(file) {
+    if (!file || !importTarget) return;
+    const { btn, note } = importTarget;
+    if (!confirm("Unpack “" + file.name + "” over workspace/?\n\nFiles in the zip replace yours; the rest are kept. " +
+                 "Restart the gateway afterwards to pick up new skills.")) { $("#ws-import-file").value = ""; return; }
+    btn.disabled = true; note.className = "settings-status"; note.textContent = "Uploading " + file.name + "…";
+    try {
+      const r = await gwFetch("/v1/workspace/import", { method: "POST", headers: { "Content-Type": "application/zip" }, body: file });
+      let j = {}; try { j = await r.json(); } catch {}
+      if (r.ok && j.imported) { note.className = "settings-status ok"; note.textContent = j.note || "Workspace imported."; }
+      else { note.className = "settings-status err"; note.textContent = "Import failed: " + (j.error || ("HTTP " + r.status)); }
+    } catch (e) { note.className = "settings-status err"; note.textContent = "Import failed: " + e; }
+    finally { btn.disabled = false; $("#ws-import-file").value = ""; }
+  }
+
+  /* ---- wiring (once) ---- */
+  saveBtn.addEventListener("click", save);
+  discardBtn.addEventListener("click", discard);
+  reloadBtn.addEventListener("click", () => {
+    const n = dirtyCount();
+    if (n && !confirm("Reload config.json from the server? This throws away " + plural(n, "unsaved change") + ".")) return;
+    st.flash = null; load();
+  });
+  rawBtn.addEventListener("click", () => { if (st.raw) { if (leaveRaw(true)) $("#set-h-" + st.sec) && $("#set-h-" + st.sec).focus(); } else enterRaw(); });
+  let rawTimer = 0;
+  edit.addEventListener("input", () => { clearTimeout(rawTimer); st.flash = null; rawTimer = setTimeout(rawCheck, 150); });
+  q.addEventListener("input", () => { st.q = q.value; applyView(); });
+  q.addEventListener("keydown", e => { if (e.key === "Escape" && q.value) { e.preventDefault(); q.value = ""; st.q = ""; applyView(); } });
+  secSel.addEventListener("change", () => go(secSel.value));
+  $("#ws-import-file").addEventListener("change", e => importWorkspace(e.target.files[0]));
+  $("#tab-settings").addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+  });
+  tabHooks.settings = {
+    leave() {
+      const n = dirtyCount();
+      return !n || confirm("Settings has " + plural(n, "unsaved change") + ".\n\nLeave the tab anyway? " +
+                           "Your edits stay here until you save, discard or reload the page.");
+    },
+    /* Back on the tab with nothing pending: pick up what changed elsewhere
+       (the onboarding dialog, the Memory tab, the CLI). */
+    show() { if (!dirtyCount() && !st.busy && !st.raw) load(); },
+  };
+  window.addEventListener("beforeunload", e => { if (dirtyCount()) { e.preventDefault(); e.returnValue = ""; } });
+  load();
+}
+
 /* ===== Loaders for the read-only tabs (lazy-bound on first show) ===== */
 const tabLoaders = {
   chat() { /* always loaded */ },
@@ -4307,241 +5848,8 @@ const tabLoaders = {
     $("#logs-clear").addEventListener("click", () => { view.textContent = ""; });
   },
 
-  /* Settings: a form generated from GET /v1/config -- every scalar leaf
-     (string / number / bool) becomes a labelled input keyed by its path
-     in the config tree. Saving deep-merges the edited leaves back into the
-     ORIGINAL object and PUTs the whole thing, so arrays and any field the
-     form didn't render are preserved untouched. A Raw JSON toggle exposes
-     the underlying object for structural edits (adding/removing list
-     entries) the flat form can't express. */
-  async settings() {
-    const form = $("#config-form"), edit = $("#config-edit"), status = $("#config-status");
-    const save = $("#config-save"), reload = $("#config-reload"), rawBtn = $("#config-raw-toggle");
-    let current = {};          // last-loaded config object
-    let rawMode = false;
-
-    function setStatus(msg, cls) {
-      status.textContent = msg || "";
-      status.className = "settings-status" + (cls ? " " + cls : "");
-    }
-    const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
-
-    // Render an input row for one scalar leaf at `path` (array of keys).
-    // /v1/models is fetched once per Settings render to fill the model dropdown.
-    let _modelIds = null;
-    async function modelIds() {
-      if (_modelIds) return _modelIds;
-      try {
-        const j = await (await gwFetch("/v1/models")).json();
-        _modelIds = (j.data || j.models || [])
-          .map(x => typeof x === "string" ? x : (x.id || x.name)).filter(Boolean);
-      } catch { _modelIds = []; }
-      return _modelIds;
-    }
-    // A <select> leaf -- collectForm reads it via [data-path]/.value like an input.
-    function selectRow(label, value, path, options) {
-      const row = document.createElement("label"); row.className = "cfg-row";
-      const cap = document.createElement("span"); cap.className = "cfg-label"; cap.textContent = label;
-      row.appendChild(cap);
-      const sel = document.createElement("select"); sel.className = "cfg-input";
-      const cur = (value == null) ? "" : String(value);
-      const seen = new Set();
-      const addOpt = v => { if (v == null || seen.has(v)) return; seen.add(v);
-        const o = document.createElement("option"); o.value = v; o.textContent = v || "(default)"; sel.appendChild(o); };
-      addOpt(cur); (options || []).forEach(addOpt); sel.value = cur;
-      sel.dataset.path = JSON.stringify(path); sel.dataset.vtype = "string";
-      row.appendChild(sel);
-      return { row, sel };
-    }
-
-    function leafRow(label, value, path) {
-      // Top-level default_provider / default_model render as dropdowns instead
-      // of free-form text. (Saved config applies on gateway restart.)
-      const key = path[path.length - 1];
-      if (path.length === 1 && key === "default_provider") {
-        const names = ((current && current.providers) || []).map(p => p && p.name).filter(Boolean);
-        return selectRow(label, value, path, names).row;
-      }
-      if (path.length === 1 && key === "default_model") {
-        const r = selectRow(label, value, path, []);
-        modelIds().then(ids => {
-          const keep = r.sel.value;
-          ids.forEach(id => { if (![...r.sel.options].some(o => o.value === id)) {
-            const o = document.createElement("option"); o.value = id; o.textContent = id; r.sel.appendChild(o); } });
-          r.sel.value = keep;
-        });
-        return r.row;
-      }
-      const row = document.createElement("label");
-      row.className = "cfg-row";
-      const cap = document.createElement("span"); cap.className = "cfg-label"; cap.textContent = label;
-      row.appendChild(cap);
-      let inp;
-      if (typeof value === "boolean") {
-        inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = value;
-        inp.className = "cfg-check";
-      } else {
-        inp = document.createElement("input");
-        inp.type = (typeof value === "number") ? "number" : "text";
-        inp.value = (value === null || value === undefined) ? "" : String(value);
-        inp.className = "cfg-input";
-        if (value === "•••") inp.placeholder = "•••  (unchanged)";
-      }
-      inp.dataset.path = JSON.stringify(path);
-      inp.dataset.vtype = (value === null) ? "null" : typeof value;
-      row.appendChild(inp);
-      return row;
-    }
-
-    // Walk the config tree, emitting sections for nested objects/arrays.
-    function build(container, obj, path, depth) {
-      const keys = Object.keys(obj);
-      for (const k of keys) {
-        const v = obj[k], childPath = path.concat([k]);
-        if (isObj(v)) {
-          container.appendChild(sectionHead(k, depth));
-          build(container, v, childPath, depth + 1);
-        } else if (Array.isArray(v)) {
-          container.appendChild(sectionHead(k, depth));
-          v.forEach((item, i) => {
-            const ip = childPath.concat([i]);
-            if (isObj(item)) {
-              container.appendChild(sectionHead(k + "[" + i + "]", depth + 1));
-              build(container, item, ip, depth + 2);
-            } else {
-              container.appendChild(leafRow(k + "[" + i + "]", item, ip));
-            }
-          });
-        } else {
-          container.appendChild(leafRow(k, v, childPath));
-        }
-      }
-    }
-    function sectionHead(text, depth) {
-      const h = document.createElement("div");
-      h.className = "cfg-section" + (depth ? " sub" : "");
-      h.style.marginLeft = (depth * 0.6) + "rem";
-      h.textContent = text;
-      return h;
-    }
-
-    function renderForm() {
-      form.innerHTML = "";
-      if (!Object.keys(current).length) { form.innerHTML = `<div class="empty-pane">empty config</div>`; return; }
-      build(form, current, [], 0);
-    }
-
-    // Deep-clone current, then write each input's value at its path.
-    function collectForm() {
-      const out = JSON.parse(JSON.stringify(current));
-      for (const inp of form.querySelectorAll("[data-path]")) {
-        const path = JSON.parse(inp.dataset.path), t = inp.dataset.vtype;
-        let val;
-        if (inp.type === "checkbox") val = inp.checked;
-        else if (t === "number") val = inp.value.trim() === "" ? 0 : Number(inp.value);
-        else val = inp.value;
-        let node = out;
-        for (let i = 0; i < path.length - 1; i++) node = node[path[i]];
-        node[path[path.length - 1]] = val;
-      }
-      return out;
-    }
-
-    async function load() {
-      setStatus("loading…");
-      try {
-        current = await (await gwFetch("/v1/config")).json();
-        edit.value = JSON.stringify(current, null, 2);
-        renderForm();
-        setStatus("");
-      } catch (e) { form.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; setStatus("load failed", "err"); }
-    }
-    function setRawMode(on) {
-      rawMode = on;
-      edit.style.display = on ? "" : "none";
-      form.style.display = on ? "none" : "";
-      rawBtn.classList.toggle("on", on);
-      // Keep the raw view in sync with form edits when switching INTO raw.
-      if (on) { try { edit.value = JSON.stringify(collectForm(), null, 2); } catch {} }
-    }
-    async function doSave() {
-      let payload;
-      if (rawMode) {
-        try { payload = JSON.parse(edit.value); }
-        catch (e) { setStatus("not valid JSON: " + e.message, "err"); return; }
-      } else {
-        payload = collectForm();
-      }
-      save.disabled = true; setStatus("saving…");
-      try {
-        const r = await gwFetch("/v1/config", {
-          method: "PUT", headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload) });
-        const j = await r.json().catch(() => ({}));
-        if (r.ok && j.saved) { setStatus(j.note || "saved", "ok"); current = payload; if (!rawMode) renderForm(); }
-        else setStatus("save failed: " + (j.error || ("http " + r.status)), "err");
-      } catch (e) { setStatus("save failed: " + e, "err"); }
-      finally { save.disabled = false; }
-    }
-
-    /* Wire once; subsequent tab visits just reload the current config. */
-    // Download workspace/ as a zip. gwFetch carries the bearer token, so we
-    // fetch -> blob -> synthetic <a download> rather than a plain link.
-    async function exportWorkspace() {
-      const btn = $("#ws-export");
-      btn.disabled = true; setStatus("packing workspace…");
-      try {
-        const r = await gwFetch("/v1/workspace/export");
-        if (!r.ok) {
-          let msg = "http " + r.status;
-          try { const j = await r.json(); if (j.error) msg = j.error; } catch {}
-          setStatus("export failed: " + msg, "err"); return;
-        }
-        const blob = await r.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url; a.download = "workspace.zip";
-        document.body.appendChild(a); a.click(); a.remove();
-        URL.revokeObjectURL(url);
-        setStatus("downloaded workspace.zip (" + Math.round(blob.size / 1024) + " KB)", "ok");
-      } catch (e) { setStatus("export failed: " + e, "err"); }
-      finally { btn.disabled = false; }
-    }
-
-    // Upload a workspace.zip and overlay it onto workspace/. POST the raw
-    // bytes (application/zip) — the server zip-slip-validates every entry
-    // before extracting, and merges (zip files overwrite, others kept).
-    async function importWorkspace(file) {
-      if (!file) return;
-      const btn = $("#ws-import");
-      if (!confirm("Overlay \"" + file.name + "\" onto workspace/?\n\n" +
-                   "Files in the zip overwrite existing ones; other files are kept. " +
-                   "Restart serve/gateway afterwards to pick up new skills.")) return;
-      btn.disabled = true; setStatus("uploading & extracting " + file.name + "…");
-      try {
-        const r = await gwFetch("/v1/workspace/import", {
-          method: "POST",
-          headers: { "Content-Type": "application/zip" },
-          body: file,
-        });
-        let j = {}; try { j = await r.json(); } catch {}
-        if (r.ok && j.imported) setStatus(j.note || "workspace imported", "ok");
-        else setStatus("import failed: " + (j.error || ("http " + r.status)), "err");
-      } catch (e) { setStatus("import failed: " + e, "err"); }
-      finally { btn.disabled = false; $("#ws-import-file").value = ""; }
-    }
-
-    if (!form.dataset.wired) {
-      form.dataset.wired = "1";
-      save.addEventListener("click", doSave);
-      reload.addEventListener("click", load);
-      rawBtn.addEventListener("click", () => setRawMode(!rawMode));
-      $("#ws-export").addEventListener("click", exportWorkspace);
-      $("#ws-import").addEventListener("click", () => $("#ws-import-file").click());
-      $("#ws-import-file").addEventListener("change", (e) => importWorkspace(e.target.files[0]));
-    }
-    await load();
-  },
+  /* Settings: see settingsInit() above the loaders. */
+  settings() { settingsInit(); },
 
   /* Stats: aggregates per-session counters across $PASCLAW_HOME/workspace/
      sessions/. Gateway endpoint caches the result for 5s server-side; we
@@ -4906,13 +6214,21 @@ function bgRow(body, role, html) {
   return r.querySelector(".bub");
 }
 
+/* FNV-1a over a string: a cheap fingerprint of CONTENT. Lengths are not
+   enough to tell whether a job's detail changed: past 64 KB a running shell
+   job's output is a fixed-size tail, and a transcript at its message cap
+   drops one from the front as it adds one, so the view froze. */
+function strHash(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36);
+}
+
 function renderBgDetail(j) {
   const pane = $("#bg-detail");
   const msgs = j.messages || [];
-  const last = msgs.length ? msgs[msgs.length - 1] : null;
-  const sig = [j.handle, j.state, j.stopping, msgs.length, last ? (last.content || "").length : 0,
-               (last && last.tool_calls) ? last.tool_calls.length : 0, (j.output || "").length,
-               j.continued_by || "", bgChatTitle(j.session)].join("|");
+  const sig = [j.handle, j.state, j.stopping, msgs.length, strHash(JSON.stringify(msgs)),
+               strHash(j.output || ""), j.continued_by || "", bgChatTitle(j.session)].join("|");
   if (sig === bg.detailSig) {
     const el = $("#bg-elapsed");
     if (el) el.textContent = (j.finished_at ? "took " : "running for ") + fmtDur(j.elapsed_sec);

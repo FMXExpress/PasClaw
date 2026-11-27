@@ -590,6 +590,38 @@ begin
         'oauth: absent iss passes when the server does not advertise it');
   Check(not ValidateAuthorizationResponse(Cb, 's2', 'https://as.example', False, Code, Err),
         'oauth: state mismatch is rejected');
+  { Forgetting a stored registration on invalid_client / unauthorized_client
+    takes a response that passed the issuer and state checks: a forged
+    request to the loopback callback must not wipe it. }
+  Cb.Code := '';
+  Cb.Error := 'invalid_client';
+  Cb.HasIss := True;
+  Cb.Iss := 'https://as.example';
+  Cb.State := 's1';
+  Check(ShouldForgetClient(Cb, 's1', 'https://as.example', True, True),
+        'oauth: an authentic invalid_client forgets the reused registration');
+  Cb.Error := 'unauthorized_client';
+  Check(ShouldForgetClient(Cb, 's1', 'https://as.example', True, True),
+        'oauth: an authentic unauthorized_client forgets it too');
+  Check(not ShouldForgetClient(Cb, 's1', 'https://as.example', True, False),
+        'oauth: a fresh registration has nothing to forget');
+  Cb.State := 'forged';
+  Check(not ShouldForgetClient(Cb, 's1', 'https://as.example', True, True),
+        'oauth: invalid_client with the wrong state keeps the registration');
+  Cb.State := 's1';
+  Cb.Iss := 'https://evil.example';
+  Check(not ShouldForgetClient(Cb, 's1', 'https://as.example', True, True),
+        'oauth: invalid_client from another issuer keeps the registration');
+  Cb.HasIss := False;
+  Cb.Iss := '';
+  Check(not ShouldForgetClient(Cb, 's1', 'https://as.example', True, True),
+        'oauth: invalid_client without the advertised iss keeps the registration');
+  Cb.HasIss := True;
+  Cb.Iss := 'https://as.example';
+  Cb.Error := 'access_denied';
+  Check(not ShouldForgetClient(Cb, 's1', 'https://as.example', True, True),
+        'oauth: other errors keep the registration');
+  Cb.Error := '';
   Check(Has(ClientRegistrationBody('http://127.0.0.1:5/cb'), '"application_type":"native"') or
         Has(ClientRegistrationBody('http://127.0.0.1:5/cb'), '"application_type" : "native"'),
         'oauth: DCR declares a native application');
