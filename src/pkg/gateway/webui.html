@@ -1126,18 +1126,82 @@
     .cr-side{grid-column:2;flex-direction:row;align-items:baseline;gap:.35rem;text-align:left}
   }
 
-  /* ===== Checkpoints tab ===== */
-  #cp-pane{display:flex;flex-direction:column;min-height:0;flex:1;padding:0}
-  .cp-bar{display:flex;align-items:center;gap:.4rem;padding:.6rem 1.25rem;
-    border-bottom:1px solid var(--border);background:var(--surface)}
-  .cp-status{font-size:12px;color:var(--text-3);margin-left:.4rem}
-  .cp-list{padding:1rem 1.25rem;overflow:auto;flex:1}
-  .cp-turn{border:1px solid var(--border);border-radius:8px;margin-bottom:.6rem;background:var(--surface)}
-  .cp-turn-head{display:flex;justify-content:space-between;align-items:center;gap:.6rem;
-    padding:.5rem .75rem;font-size:13px;color:var(--text);border-bottom:1px solid var(--border)}
-  .cp-files{padding:.45rem .75rem;display:flex;flex-direction:column;gap:.15rem}
-  .cp-file{font-family:var(--mono);font-size:12px;color:var(--text-2);
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* ===== Checkpoints tab =====
+     Laid out like Cron: a heading with a line on what a checkpoint is and
+     how Undo, Redo and Restore relate, the chat it is for and the backend,
+     then a row per turn that changed files, newest first: a dot, the turn
+     and its file count, each file marked Added or Changed (five, then Show
+     all), and on the right when it was taken and Restore. A note above the
+     list says what the last action restored. Below 760px the time and
+     Restore go under the files. */
+  #cp-pane{padding:1.5rem 2rem 3rem}
+  .ckp-wrap{max-width:58rem;margin:0 auto;display:flex;flex-direction:column;gap:1.5rem;min-width:0}
+  .ckp-head{display:flex;align-items:flex-start;gap:1rem;min-width:0}
+  .ckp-head>div:first-child{flex:1;min-width:0}
+  .ckp-head h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .ckp-lead{margin:.3rem 0 0;max-width:44rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .ckp-lead a{white-space:nowrap}
+  .ckp-meta{margin:.6rem 0 0;min-width:0;font-size:12.5px;line-height:1.7;color:var(--text-3)}
+  .ckp-meta .ckp-tag{margin-left:.3rem}
+  .ckp-meta:empty{display:none}
+  .ckp-meta b{font-weight:500;color:var(--text-2);overflow-wrap:anywhere}
+  .ckp-acts{display:flex;flex-wrap:wrap;gap:.4rem;flex:none}
+  .ckp-tag{display:inline-flex;align-items:center;padding:0 .45rem;border-radius:999px;font-size:11px;font-weight:500;
+    line-height:1.65;white-space:nowrap;background:var(--surface-3);color:var(--text-2)}
+  .ckp-tag.add{background:var(--ok-soft);color:var(--ok)}
+  .ckp-tag.now{background:var(--accent-soft);color:var(--accent)}
+  .ckp-tag.warn{background:var(--warn-soft);color:var(--warn)}
+  .ckp-note{display:flex;align-items:flex-start;gap:.6rem;padding:.7rem .95rem;border:1px solid var(--border);
+    border-radius:var(--radius-lg);background:var(--surface);font-size:13px;line-height:1.5;color:var(--text);min-width:0}
+  .ckp-note[hidden]{display:none}
+  .ckp-note>svg.ic{flex:none;margin-top:.18rem;color:var(--ok)}
+  .ckp-note.err{border-color:var(--danger-line);background:var(--danger-soft);color:var(--danger)}
+  .ckp-note.err>svg.ic{color:var(--danger)}
+  .ckp-note>span{flex:1;min-width:0;overflow-wrap:anywhere}
+  .ckp-note code{font:12px/1.5 var(--mono);color:var(--text-2)}
+  .ckp-note .ckp-x{flex:none;margin:-.2rem -.35rem -.2rem 0;border-color:transparent;padding:.2rem .3rem}
+  .ckp-sec{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+  .ckp-sec-head{display:flex;align-items:baseline;gap:.5rem;min-width:0}
+  .ckp-sec-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text)}
+  .ckp-sec-head .n{font-size:12.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .ckp-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .ckp-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:.35rem .8rem;padding:.85rem 1rem}
+  .ckp-row+.ckp-row{border-top:1px solid var(--border)}
+  .ckp-dot{display:inline-block;width:8px;height:8px;margin-top:.4rem;border-radius:50%;background:var(--text-3)}
+  .ckp-row.latest>.ckp-dot{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .ckp-main{display:flex;flex-direction:column;gap:.5rem;min-width:0}
+  .ckp-l1{display:flex;align-items:center;flex-wrap:wrap;gap:.3rem .5rem;min-width:0}
+  .ckp-turn{font-size:13.5px;font-weight:600;color:var(--text)}
+  .ckp-count{font-size:12.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .ckp-files{display:flex;flex-direction:column;gap:.3rem;margin:0;padding:0;list-style:none;min-width:0}
+  .ckp-file{display:flex;align-items:baseline;gap:.5rem;min-width:0}
+  .ckp-file .ckp-tag{flex:none;min-width:3.9rem;justify-content:center}
+  .ckp-path{min-width:0;font:12.5px/1.5 var(--mono);color:var(--text);overflow-wrap:anywhere}
+  .ckp-path .d{color:var(--text-3)}
+  .ckp-files.clip>.ckp-file:nth-child(n+6){display:none}
+  .ckp-more{align-self:flex-start;background:none;border:0;border-radius:2px;padding:0;font-size:12px;color:var(--accent);cursor:pointer}
+  .ckp-more:hover{background:none;text-decoration:underline}
+  .ckp-side{display:flex;flex-direction:column;align-items:flex-end;gap:.45rem;font-size:12.5px;color:var(--text-3);
+    white-space:nowrap;text-align:right}
+  .ckp-side time{font-variant-numeric:tabular-nums;color:var(--text);cursor:default}
+  .ckp-empty{display:flex;gap:.9rem;align-items:flex-start;padding:1.2rem 1.25rem}
+  .ckp-empty-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .ckp-empty-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .ckp-empty b{display:block;margin-bottom:.2rem;font-size:13.5px;font-weight:600;color:var(--text)}
+  .ckp-empty p{margin:0;max-width:40rem;font-size:13px;line-height:1.55;color:var(--text-2)}
+  .ckp-empty code{background:var(--surface-2);border-radius:4px;padding:.03rem .3rem;font-size:.92em}
+  .ckp-msg{display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;padding:1rem 1.25rem;font-size:13px;color:var(--text-3)}
+  .ckp-msg.err{color:var(--danger)}
+  .ckp-foot{margin:0;font-size:12px;line-height:1.5;color:var(--text-3);overflow-wrap:anywhere}
+  .ckp-foot[hidden]{display:none}
+  .ckp-foot code{font:11.5px/1.5 var(--mono);color:var(--text-2)}
+  @media (max-width:760px){
+    #cp-pane{padding:1rem 1rem 2rem}
+    .ckp-head{flex-direction:column;gap:.75rem}
+    .ckp-row{grid-template-columns:auto minmax(0,1fr)}
+    .ckp-side{grid-column:2;flex-direction:row;align-items:center;justify-content:space-between;gap:.5rem;text-align:left}
+  }
 
   /* ===== Skills tab ===== */
   .skill-card{position:relative;padding:.75rem .9rem;border:1px solid var(--border);border-radius:8px;
@@ -1778,6 +1842,7 @@
   <symbol id="i-files-folder" viewBox="0 0 16 16"><path d="M2 4.25c0-.7.55-1.25 1.25-1.25h2.9l1.5 1.75h5.1c.7 0 1.25.55 1.25 1.25v6.25c0 .7-.55 1.25-1.25 1.25h-9.5C2.55 13.5 2 12.95 2 12.25z"/></symbol>
   <symbol id="i-files-up" viewBox="0 0 16 16"><path d="M8 13V3.5M4.25 7.25 8 3.5l3.75 3.75"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 16 16"><path d="M4.75 12.5h6.75a2.75 2.75 0 0 0 .3-5.48 4 4 0 0 0-7.7 1.1A2.2 2.2 0 0 0 4.75 12.5Z"/></symbol>
+  <symbol id="i-ckp-history" viewBox="0 0 16 16"><path d="M2.9 9.25A5.25 5.25 0 1 0 4.1 4.4"/><path d="M3.75 2.25v2.5h2.5"/><path d="M8 5.25V8l1.9 1.25"/></symbol>
   <symbol id="i-cron-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="M8 4.75V8l2.25 1.5"/></symbol>
   <symbol id="i-vlt-box" viewBox="0 0 16 16"><path d="M2.5 5.25 8 2.5l5.5 2.75v5.5L8 13.5l-5.5-2.75z"/><path d="M2.5 5.25 8 8l5.5-2.75M8 8v5.5"/></symbol>
   <symbol id="i-vlt-link" viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5"/><path d="M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/></symbol>
@@ -2241,14 +2306,33 @@
   </div>
 
   <div id="tab-checkpoints" class="tab">
+    <!-- Checkpoints: the open chat's file snapshots, as GET /v1/checkpoints
+         reports them (X-PasClaw-Session scopes it; no chat open means the
+         workspace's own timeline). One row per turn that changed files,
+         newest first. Undo, Redo and Restore go through
+         POST /v1/checkpoints/undo|redo?n=N. -->
     <div class="pane" id="cp-pane">
-      <div class="cp-bar">
-        <button class="icon-btn" id="cp-undo" title="Undo the last turn's file edits"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg>Undo</button>
-        <button class="icon-btn" id="cp-redo" title="Redo (zpaq backend only)"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg>Redo</button>
-        <button class="icon-btn" id="cp-refresh" aria-label="Refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
-        <span id="cp-status" class="cp-status"></span>
+      <div class="ckp-wrap">
+        <header class="ckp-head">
+          <div>
+            <h2>Checkpoints</h2>
+            <p class="ckp-lead">Before the agent edits a file, PasClaw keeps a copy. Each chat turn that changed files is a checkpoint, newest first. Undo rewinds the last turn, Redo puts it back, and Restore rewinds to before any turn. The chat header has the same Undo and Redo.
+              <a href="https://github.com/FMXExpress/PasClaw/blob/main/docs/checkpoints.md" target="_blank" rel="noopener">How it works</a></p>
+            <p class="ckp-meta" id="cp-status"></p>
+          </div>
+          <div class="ckp-acts">
+            <button type="button" class="icon-btn" id="cp-undo" title="Rewind the last turn's file edits"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span>Undo</span></button>
+            <button type="button" class="icon-btn" id="cp-redo" title="Put back the last undone turn" disabled><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg><span>Redo</span></button>
+            <button type="button" class="icon-btn" id="cp-refresh" aria-label="Refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+          </div>
+        </header>
+        <div class="ckp-note" id="ckp-note" role="status" hidden></div>
+        <section class="ckp-sec" aria-labelledby="ckp-h">
+          <div class="ckp-sec-head"><h3 id="ckp-h">Timeline</h3><span class="n" id="ckp-n"></span></div>
+          <div class="ckp-list" id="cp-list" aria-live="polite"><div class="ckp-msg">Loading checkpoints…</div></div>
+          <p class="ckp-foot" id="ckp-foot" hidden></p>
+        </section>
       </div>
-      <div class="cp-list" id="cp-list"><div class="empty-pane">Loading…</div></div>
     </div>
   </div>
 
@@ -3839,19 +3923,29 @@ function sysNote(html) {
   log.scrollTop = log.scrollHeight;
 }
 
-/* ===== Checkpoints (workspace undo/redo) ===== */
+/* ===== Checkpoints (workspace undo/redo) =====
+   GET /v1/checkpoints is the open chat's timeline (gwFetch sends the chat's
+   id; with no chat open it is the workspace's own): enabled, backend,
+   current_turn, can_redo, count and turns[{turn, ts, files[{path,
+   created}]}]. There is no diff or message per turn, so a row is the turn,
+   when it was taken and the files it changed. POST
+   /v1/checkpoints/undo|redo?n=N answers {ok, restored, files[{path}]} or
+   {ok:false, error}. Paths are drawn as text, never as markup. */
 async function cpAction(kind, n) {
   try {
     const r = await gwFetch("/v1/checkpoints/" + kind + "?n=" + (n || 1), { method: "POST" });
     return await r.json().catch(() => ({ ok: false, error: "http " + r.status }));
   } catch (e) { return { ok: false, error: String(e) }; }
 }
+function ckpSetButtons(st) {
+  const can = !!(st && st.can_redo), n = (st && st.enabled && st.count) || 0;
+  [["#chat-redo", can], ["#cp-redo", can], ["#chat-undo", n > 0], ["#cp-undo", n > 0]]
+    .forEach(([id, ok]) => { const b = $(id); if (b) b.disabled = !ok; });
+}
 async function refreshCpButtons() {
   try {
     const st = await (await gwFetch("/v1/checkpoints")).json();
-    const can = !!st.can_redo, n = st.count || 0;
-    [["#chat-redo", can], ["#cp-redo", can]].forEach(([id, ok]) => { const b = $(id); if (b) b.disabled = !ok; });
-    [["#chat-undo", n > 0]].forEach(([id, ok]) => { const b = $(id); if (b) b.disabled = !ok; });
+    ckpSetButtons(st);
     return st;
   } catch { return null; }
 }
@@ -3864,55 +3958,266 @@ async function cpQuick(kind) {
   if (!$("#tab-checkpoints").classList.contains("active")) return;
   renderCheckpoints();
 }
+
+let ckpSeq = 0, ckpState = null, ckpBusy = false;
+function ckpEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+const ckpPlural = (n, one, many) => n + " " + (n === 1 ? one : (many || one + "s"));
+/* The route's ts is the gateway's local wall clock with no zone, which a
+   browser reads as its own local time: right when both are one machine. */
+function ckpAgo(d) {
+  const s = Math.round((Date.now() - d.getTime()) / 1000);
+  if (s < -60) return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + " min ago";
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + " h ago";
+  return Math.floor(h / 24) + " days ago";
+}
+/* The folder every listed file is under (normally the workspace), so a row
+   can show src/app/main.pas instead of the whole absolute path. */
+const ckpNorm = p => String(p || "").replace(/\\/g, "/");
+function ckpRoot(turns) {
+  let pre = null;
+  turns.forEach(t => (t.files || []).forEach(f => {
+    const d = ckpNorm(f.path).split("/").slice(0, -1);
+    if (pre === null) { pre = d; return; }
+    let i = 0;
+    while (i < pre.length && i < d.length && pre[i] === d[i]) i++;
+    pre = pre.slice(0, i);
+  }));
+  return pre && pre.join("/").length > 1 ? pre.join("/") : "";
+}
+const ckpRel = (p, root) => { const n = ckpNorm(p); return root && n.startsWith(root + "/") ? n.slice(root.length + 1) : n; };
+
+function ckpOpenSettings() {
+  try { localStorage.setItem("pasclaw.settings.section", "agent"); } catch {}
+  showTab("settings");
+  const b = document.querySelector('#set-nav button[data-sec="agent"]');
+  if (b && $("#tab-settings").classList.contains("active")) b.click();
+}
+
+/* What the last Undo, Redo or Restore did, above the list. */
+function ckpNote(j, label, verb) {
+  const note = $("#ckp-note");
+  note.classList.toggle("err", !j.ok);
+  const msg = ckpEl("span");
+  if (j.ok) {
+    const root = ckpRoot(ckpState ? ckpState.turns || [] : []);
+    const names = (j.files || []).map(f => ckpRel(f.path, root));
+    msg.append(label + ". ");
+    if (!names.length) msg.append("No files needed restoring.");
+    else {
+      msg.append("Restored " + ckpPlural(names.length, "file") + ": ");
+      names.slice(0, 6).forEach((p, i) => { if (i) msg.append(", "); msg.appendChild(ckpEl("code", null, p)); });
+      if (names.length > 6) msg.append(" and " + (names.length - 6) + " more");
+      msg.append(".");
+    }
+  } else msg.textContent = "Couldn't " + verb + ": " + (j.error || "the gateway said no") + ".";
+  const x = ckpEl("button", "icon-btn ckp-x");
+  x.type = "button"; x.title = "Dismiss"; x.setAttribute("aria-label", "Dismiss");
+  x.innerHTML = icon("x");
+  note.innerHTML = icon(j.ok ? "check" : "alert");
+  note.append(msg, x);
+  note.hidden = false;
+}
+
+async function ckpRun(kind, n, label, verb) {
+  if (ckpBusy) return;
+  ckpBusy = true;
+  $$("#tab-checkpoints .ckp-acts button, #cp-list .cp-revert").forEach(b => b.disabled = true);
+  const j = await cpAction(kind, n);
+  ckpBusy = false;
+  ckpNote(j, label, verb);
+  await renderCheckpoints();
+}
+
 async function renderCheckpoints() {
-  const list = $("#cp-list"), status = $("#cp-status");
+  const list = $("#cp-list");
   if (!list) return;
+  const seq = ++ckpSeq, rf = $("#cp-refresh");
+  rf.disabled = true;
+  if (!list.querySelector(".ckp-row")) {
+    list.removeAttribute("role");
+    list.replaceChildren(ckpEl("div", "ckp-msg", "Loading checkpoints…"));
+  }
   let st;
-  try { st = await (await gwFetch("/v1/checkpoints")).json(); }
-  catch (e) { list.innerHTML = '<div class="empty-pane">' + escapeHtml(String(e)) + '</div>'; return; }
-  $("#cp-redo").disabled = !st.can_redo;
-  $("#chat-redo").disabled = !st.can_redo;
-  status.textContent = st.enabled
-    ? ("backend " + st.backend + " · current turn " + st.current_turn + " · " + (st.count || 0) + " checkpointed"
-       + (st.backend === "legacy" ? " · redo unavailable on this backend" : ""))
-    : "checkpoints disabled — set checkpoints_enabled in Settings, then restart";
-  if (!st.turns || !st.turns.length) {
-    list.innerHTML = '<div class="empty-pane">No checkpoints yet — they record automatically when the agent edits files.</div>';
+  try {
+    const r = await gwFetch("/v1/checkpoints");
+    st = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(st.error || ("HTTP " + r.status));
+  } catch (e) {
+    if (seq !== ckpSeq) return;
+    rf.disabled = false;
+    ckpState = null;
+    ckpSetButtons(null);
+    $("#ckp-n").textContent = "";
+    $("#ckp-foot").hidden = true;
+    list.removeAttribute("role");
+    const m = ckpEl("div", "ckp-msg err");
+    m.append(ckpEl("span", null, "Couldn't load the checkpoints: " + (e && e.message || e)));
+    const retry = ckpEl("button", "icon-btn", "Try again");
+    retry.type = "button"; retry.dataset.ckpRetry = "";
+    m.appendChild(retry);
+    list.replaceChildren(m);
     return;
   }
-  list.innerHTML = "";
-  st.turns.slice().sort((a, b) => b.turn - a.turn).forEach(t => {
-    const card = document.createElement("div");
-    card.className = "cp-turn";
-    const files = (t.files || []).map(f =>
-      '<div class="cp-file">' + (f.created ? "+ " : "~ ") + escapeHtml(f.path) + "</div>").join("");
-    card.innerHTML =
-      '<div class="cp-turn-head"><span>Turn ' + t.turn + (t.ts ? " · " + escapeHtml(t.ts) : "") +
-      " · " + (t.files || []).length + ' file(s)</span>' +
-      '<button class="icon-btn cp-revert" data-turn="' + t.turn + '">Revert to before this turn</button></div>' +
-      '<div class="cp-files">' + files + "</div>";
-    list.appendChild(card);
-  });
-  list.querySelectorAll(".cp-revert").forEach(b => b.addEventListener("click", async () => {
-    const turn = parseInt(b.dataset.turn, 10);
-    // UndoTurns(n) counts back from current_turn, which can be > newest after a
-    // turn that edited nothing -- so use current_turn, not newest.
-    const n = st.current_turn - turn + 1;
-    if (n < 1) return;
-    if (!confirm("Revert the workspace to before turn " + turn + "?\n(undo " + n + " turn" + (n > 1 ? "s" : "") + ")")) return;
-    const j = await cpAction("undo", n);
-    status.textContent = j.ok ? ("reverted " + (j.restored || 0) + " file(s)") : ("error: " + (j.error || "failed"));
-    renderCheckpoints();
-  }));
+  if (seq !== ckpSeq) return;
+  rf.disabled = false;
+  ckpState = st;
+  ckpRender(st);
 }
+
+function ckpRender(st) {
+  const list = $("#cp-list"), meta = $("#cp-status"), foot = $("#ckp-foot");
+  const turns = (st.enabled && Array.isArray(st.turns) ? st.turns : []).slice().sort((a, b) => b.turn - a.turn);
+  const legacy = st.backend === "legacy";
+  ckpSetButtons(st);
+  $("#cp-redo").title = legacy ? "Redo needs the zpaq backend" : "Put back the last undone turn";
+
+  /* Whose timeline this is, and the backend. */
+  meta.replaceChildren();
+  let title = "";
+  try { if (activeSessionId) title = bgChatTitle(activeSessionId) || "this chat"; } catch {}
+  if (title) { meta.append("For "); meta.appendChild(ckpEl("b", null, title)); }
+  else meta.append("No chat open: the workspace's own timeline");
+  if (st.enabled) {
+    meta.append(" · ");
+    meta.appendChild(ckpEl("span", null, legacy ? "legacy backend, no redo" : (st.backend || "") + " backend"));
+    if (st.can_redo) meta.appendChild(ckpEl("span", "ckp-tag now", "Redo available"));
+  }
+
+  $("#ckp-n").textContent = turns.length ? ckpPlural(turns.length, "turn") : "";
+  if (!st.enabled || !turns.length) {
+    foot.hidden = true;
+    list.removeAttribute("role");
+    const d = ckpEl("div", "ckp-empty");
+    d.innerHTML = '<span class="ckp-empty-ic">' + icon("ckp-history") + "</span>";
+    const body = ckpEl("div");
+    if (!st.enabled) {
+      body.appendChild(ckpEl("b", null, "Checkpoints are off"));
+      const p = ckpEl("p");
+      p.innerHTML = 'PasClaw is not keeping copies of the files the agent edits, so there is nothing to undo. Turn on '
+        + '<b>Edit checkpoints</b> in <a href="#settings" data-ckp-settings>Settings › Agent</a>, then restart the gateway.';
+      body.appendChild(p);
+    } else {
+      body.appendChild(ckpEl("b", null, "No checkpoints yet"));
+      body.appendChild(ckpEl("p", null, "When the agent edits a file, PasClaw saves a copy first and the turn appears here, "
+        + "so you can rewind it. " + (title ? "Nothing has been edited in this chat yet."
+          : "No chat is open, so this is the workspace's own timeline, and nothing has been edited in it yet.")));
+    }
+    d.appendChild(body);
+    list.replaceChildren(d);
+    return;
+  }
+
+  const root = ckpRoot(turns);
+  foot.replaceChildren("Times are the gateway machine's local time; hover one for the exact time. ");
+  if (root) { foot.append("Paths are under "); foot.appendChild(ckpEl("code", null, root)); foot.append(". "); }
+  foot.append("Undo and Restore leave files the agent created in place.");
+  foot.hidden = false;
+  list.setAttribute("role", "list");
+  list.replaceChildren(...turns.map((t, i) => ckpRow(t, i === 0, st, root)));
+}
+
+function ckpRow(t, latest, st, root) {
+  const files = Array.isArray(t.files) ? t.files : [];
+  const row = ckpEl("div", "ckp-row" + (latest ? " latest" : ""));
+  row.setAttribute("role", "listitem");
+  row.dataset.turn = String(t.turn);
+  const dot = ckpEl("span", "ckp-dot");
+  dot.setAttribute("aria-hidden", "true");
+
+  const main = ckpEl("div", "ckp-main"), l1 = ckpEl("div", "ckp-l1");
+  l1.appendChild(ckpEl("span", "ckp-turn", "Turn " + t.turn));
+  if (latest) l1.appendChild(ckpEl("span", "ckp-tag now", "Latest"));
+  l1.appendChild(ckpEl("span", "ckp-count", ckpPlural(files.length, "file")));
+  main.appendChild(l1);
+
+  const ul = ckpEl("ul", "ckp-files" + (files.length > 5 ? " clip" : ""));
+  files.forEach(f => {
+    const li = ckpEl("li", "ckp-file");
+    li.title = String(f.path || "");
+    /* The legacy backend does not record whether a file was new. */
+    const kind = st.backend === "legacy" ? "Edited" : f.created ? "Added" : "Changed";
+    li.appendChild(ckpEl("span", "ckp-tag ckp-kind" + (kind === "Added" ? " add" : ""), kind));
+    const rel = ckpRel(f.path, root), cut = rel.lastIndexOf("/") + 1;
+    const p = ckpEl("span", "ckp-path");
+    if (cut) p.appendChild(ckpEl("span", "d", rel.slice(0, cut)));
+    p.append(rel.slice(cut));
+    li.appendChild(p);
+    ul.appendChild(li);
+  });
+  main.appendChild(ul);
+  if (files.length > 5) {
+    const more = ckpEl("button", "ckp-more", "Show all " + files.length + " files");
+    more.type = "button";
+    more.setAttribute("aria-expanded", "false");
+    main.appendChild(more);
+  }
+
+  const side = ckpEl("div", "ckp-side");
+  const d = new Date(t.ts || "");
+  const time = ckpEl("time", null, isNaN(d) ? (t.ts || "") : ckpAgo(d));
+  time.setAttribute("datetime", t.ts || "");
+  if (!isNaN(d)) time.title = d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
+  side.appendChild(time);
+  /* UndoTurns(n) counts back from current_turn, which can be past the
+     newest row after a turn that edited nothing: use it, not the rows. */
+  const n = (st.current_turn || 0) - t.turn + 1;
+  const b = ckpEl("button", "icon-btn cp-revert");
+  b.type = "button"; b.dataset.turn = String(t.turn);
+  b.title = "Rewind the workspace to before turn " + t.turn;
+  b.innerHTML = icon("undo");
+  b.appendChild(ckpEl("span", null, "Restore"));
+  b.disabled = n < 1;
+  side.appendChild(b);
+
+  row.append(dot, main, side);
+  return row;
+}
+
 (function initCheckpointButtons() {
   const u = $("#chat-undo"), r = $("#chat-redo");
   if (u) u.addEventListener("click", () => cpQuick("undo"));
   if (r) r.addEventListener("click", () => cpQuick("redo"));
-  const tu = $("#cp-undo"), tr = $("#cp-redo"), tf = $("#cp-refresh");
-  if (tu) tu.addEventListener("click", () => cpQuick("undo"));
-  if (tr) tr.addEventListener("click", () => cpQuick("redo"));
-  if (tf) tf.addEventListener("click", renderCheckpoints);
+  const tab = $("#tab-checkpoints");
+  $("#cp-refresh").addEventListener("click", () => renderCheckpoints());
+  $("#cp-undo").addEventListener("click", () => {
+    if (ckpState && ckpState.backend === "legacy"
+        && !confirm("Undo the last turn's file edits?\n\nThis backend has no redo, so they can't be put back.")) return;
+    ckpRun("undo", 1, "Undid the last turn", "undo");
+  });
+  $("#cp-redo").addEventListener("click", () => ckpRun("redo", 1, "Redid the last undone turn", "redo"));
+  tab.addEventListener("click", e => {
+    if (e.target.closest("[data-ckp-settings]")) { e.preventDefault(); ckpOpenSettings(); return; }
+    if (e.target.closest("[data-ckp-retry]")) { renderCheckpoints(); return; }
+    if (e.target.closest(".ckp-x")) { $("#ckp-note").hidden = true; return; }
+    const more = e.target.closest(".ckp-more");
+    if (more) {
+      const ul = more.previousElementSibling, open = ul.classList.contains("clip");
+      ul.classList.toggle("clip", !open);
+      more.textContent = open ? "Show fewer" : "Show all " + ul.children.length + " files";
+      more.setAttribute("aria-expanded", String(open));
+      return;
+    }
+    const rb = e.target.closest(".cp-revert");
+    if (!rb || !ckpState) return;
+    const st = ckpState, turn = parseInt(rb.dataset.turn, 10), n = st.current_turn - turn + 1;
+    if (n < 1) return;
+    const span = n === 1 ? "turn " + turn : n + " turns (" + turn + " to " + st.current_turn + ")";
+    if (!confirm("Restore the workspace to before turn " + turn + "?\n\n"
+                 + "This rewinds " + span + ": the files they changed go back to how they were before turn " + turn
+                 + ". Files the agent created stay. "
+                 + (st.backend === "legacy" ? "This backend has no redo." : "Redo can put the edits back."))) return;
+    ckpRun("undo", n, "Restored the workspace to before turn " + turn, "restore");
+  });
+  tabHooks.checkpoints = { show: () => renderCheckpoints() };
   refreshCpButtons();
 })();
 
