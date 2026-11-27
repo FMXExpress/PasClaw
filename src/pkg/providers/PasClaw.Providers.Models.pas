@@ -107,6 +107,19 @@ function DiscoverModels(const Spec: TProviderSpec;
                         const APIBase, APIKey: string;
                         TimeoutSec: Integer = 10): TModelDiscoveryResult;
 
+(* The provider's cached list (Source 'cache'); with none, or with Refresh,
+   a live fetch, saved to the cache when it lists any models. One live
+   fetch per provider at a time: a caller that finds a fetch of the same
+   provider in flight waits for it and takes the list it saved, so two
+   requests at once -- the web UI's chat roster and a Settings picker on
+   the same page load -- cost the provider one call, not two. A Refresh
+   always fetches (after any fetch in flight). A failed fetch is returned
+   as it is; the caller decides whether an older cache beats it. *)
+function CachedOrDiscoverModels(const Provider: string;
+                                const Spec: TProviderSpec;
+                                const APIBase, APIKey: string;
+                                Refresh: Boolean = False): TModelDiscoveryResult;
+
 (* Resolve an operator-facing Provider Name (from Cfg.Providers[]) into
    (catalog Spec, effective APIBase, APIKey) for /v1/models discovery.
    Mirrors the path NewProviderFromConfig walks -- normalises Kind
@@ -128,7 +141,7 @@ function HumanAge(UnixSeconds: Int64): string;
 implementation
 
 uses
-  DateUtils,
+  DateUtils, SyncObjs,
   PasClaw.Utils,
   PasClaw.Logger,
   PasClaw.JSON,
@@ -262,6 +275,46 @@ begin
   except
     on E: Exception do
       LogDebug('model cache: write failed for %s -- %s', [Path, E.Message]);
+  end;
+end;
+
+var
+  GFetchLocksGuard: TCriticalSection = nil;
+  GFetchLocks: TStringList = nil;     { lower-cased provider name -> TCriticalSection }
+
+function FetchLockFor(const Provider: string): TCriticalSection;
+var
+  i: Integer;
+begin
+  GFetchLocksGuard.Enter;
+  try
+    i := GFetchLocks.IndexOf(LowerCase(Provider));
+    if i < 0 then
+      i := GFetchLocks.AddObject(LowerCase(Provider), TCriticalSection.Create);
+    Result := TCriticalSection(GFetchLocks.Objects[i]);
+  finally
+    GFetchLocksGuard.Leave;
+  end;
+end;
+
+function CachedOrDiscoverModels(const Provider: string;
+                                const Spec: TProviderSpec;
+                                const APIBase, APIKey: string;
+                                Refresh: Boolean): TModelDiscoveryResult;
+var
+  Lock: TCriticalSection;
+begin
+  if (not Refresh) and LoadCachedModels(Provider, Result) then Exit;
+  Lock := FetchLockFor(Provider);
+  Lock.Enter;
+  try
+    { Another caller may have fetched and saved it while this one waited. }
+    if (not Refresh) and LoadCachedModels(Provider, Result) then Exit;
+    Result := DiscoverModels(Spec, APIBase, APIKey);
+    if Result.Ok and (Length(Result.Models) > 0) then
+      SaveCachedModels(Provider, Result);
+  finally
+    Lock.Leave;
   end;
 end;
 
@@ -716,5 +769,24 @@ begin
   Key := Cfg.Providers[Idx].APIKey;
   Result := True;
 end;
+
+procedure FreeFetchLocks;
+var
+  i: Integer;
+begin
+  for i := 0 to GFetchLocks.Count - 1 do
+    GFetchLocks.Objects[i].Free;
+  FreeAndNil(GFetchLocks);
+  FreeAndNil(GFetchLocksGuard);
+end;
+
+initialization
+  GFetchLocksGuard := TCriticalSection.Create;
+  GFetchLocks := TStringList.Create;
+  GFetchLocks.Sorted := True;
+  GFetchLocks.Duplicates := dupIgnore;
+
+finalization
+  FreeFetchLocks;
 
 end.

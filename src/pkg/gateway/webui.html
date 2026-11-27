@@ -776,7 +776,7 @@
   /* String lists: one input per entry, removed with x, added at the end. */
   .set-list{display:flex;flex-direction:column;gap:.35rem;width:100%;max-width:34rem}
   .set-list-row{display:flex;align-items:center;gap:.3rem}
-  .set-list-row>input,.set-list-row>select{flex:1;min-width:0}
+  .set-list-row>input,.set-list-row>select,.set-list-row>.set-combo{flex:1;min-width:0}
   .set-list-row>select{flex:0 1 11rem}
   .set-x{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;padding:0;
     background:transparent;border:1px solid transparent;color:var(--text-3)}
@@ -808,6 +808,35 @@
   .set-item-head .icon-btn:hover{color:var(--danger);background:var(--danger-soft)}
   .set-item-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(15rem,100%),1fr));gap:.8rem 1rem;padding:.8rem}
   .set-f{display:flex;flex-direction:column;gap:.3rem;min-width:0}
+  /* Model picker: a text field that takes any model id, with the
+     provider's models in a list under it. */
+  .set-combo{position:relative;display:flex;min-width:0}
+  .set-combo>input{flex:1;min-width:0;padding-right:2rem}
+  .set-combo>input::placeholder{font-family:var(--sans)}
+  .set-combo-btn{position:absolute;right:1px;top:1px;bottom:1px;width:1.9rem;display:flex;align-items:center;
+    justify-content:center;border:0;border-radius:0 var(--radius) var(--radius) 0;background:transparent;
+    color:var(--text-3);cursor:pointer;padding:0}
+  .set-combo-btn:hover,.set-combo-btn[aria-expanded="true"]{color:var(--text)}
+  .set-combo-pop{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:40;display:flex;flex-direction:column;
+    max-height:20rem;background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;
+    box-shadow:var(--shadow-pop);overflow:hidden}
+  .set-combo-pop[hidden]{display:none}
+  .set-combo-list{overflow:auto;padding:.25rem;min-height:0}
+  .set-combo-list:empty{display:none}
+  .set-combo-opt{display:flex;align-items:baseline;gap:.75rem;padding:.4rem .55rem;border-radius:6px;cursor:pointer;min-width:0}
+  .set-combo-opt>.id{font:12.5px/1.4 var(--mono);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .set-combo-opt>.nm{margin-left:auto;font-size:12px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;flex:0 1 auto;min-width:0}
+  .set-combo-opt.active{background:var(--surface-3)}
+  .set-combo-opt[aria-selected="true"]>.id{color:var(--accent);font-weight:600}
+  .set-combo-foot{display:flex;align-items:center;gap:.5rem;padding:.45rem .6rem;border-top:1px solid var(--border);
+    font-size:12px;line-height:1.4;color:var(--text-3);background:var(--surface-2)}
+  .set-combo-list:empty+.set-combo-foot{border-top:0}
+  .set-combo-foot>.msg{min-width:0;overflow-wrap:anywhere}
+  .set-combo-foot>.msg.err{color:var(--danger)}
+  .set-combo-foot>button{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:.3rem;padding:.15rem .45rem;
+    font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text-2);cursor:pointer}
+  .set-combo-foot>button:hover{color:var(--text)}
   .set-f.wide{grid-column:1/-1}
   .set-f>label,.set-f>.set-f-label{font-size:12px;font-weight:500;color:var(--text-2)}
   .set-f>input:not([type=checkbox]),.set-f>select,.set-f>textarea{width:100%}
@@ -1043,6 +1072,7 @@
   <symbol id="i-key" viewBox="0 0 16 16"><circle cx="5.25" cy="10.75" r="2.75"/><path d="M7.2 8.8 13 3M10.75 5.25l1.75 1.75"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.55"/><path d="M13 2.75v2.5h-2.5"/></symbol>
   <symbol id="i-x" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 16 16"><path d="m4.5 6.25 3.5 3.5 3.5-3.5"/></symbol>
   <symbol id="i-play" viewBox="0 0 16 16"><path d="M5.25 3.5v9l7-4.5z"/></symbol>
   <symbol id="i-file" viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></symbol>
   <symbol id="i-back" viewBox="0 0 16 16"><path d="M9.75 3.5 5.25 8l4.5 4.5"/></symbol>
@@ -1587,7 +1617,6 @@
       <button type="button" class="primary" id="config-save" disabled>Save</button>
     </div>
     <input type="file" id="ws-import-file" accept=".zip,application/zip" hidden>
-    <datalist id="set-models"></datalist>
   </div>
 </main>
 
@@ -3969,11 +3998,11 @@ const SET_SECTIONS = [
       { title: "Auto-router", fields: [
         SET_F("auto_router.enabled", "bool", "Route easy turns", "Send short, simple turns to a cheaper tier. Does nothing until an easy provider is set.", { live: 1, def: true }),
         SET_F("auto_router.easy_provider", "provider", "Easy provider", "Provider for the turns the router calls easy.", { live: 1, def: "", none: "None" }),
-        SET_F("auto_router.easy_model", "model", "Easy model", "Model on that provider. Blank uses its default.", { live: 1, def: "" }),
+        SET_F("auto_router.easy_model", "model", "Easy model", "Model on that provider. Blank uses its default.", { live: 1, def: "", prov: "auto_router.easy_provider" }),
         SET_F("auto_router.easy_max_tokens", "num", "Easy turn limit", "Messages longer than this are never routed easy.", { live: 1, def: 500, min: 0, unit: "tokens" }),
       ] },
       { title: "Advisor", fields: [
-        SET_F("advisor.model", "model", "Advisor model", "A second model the agent may consult mid-task through the `advisor` tool. Blank turns the advisor off.", { def: "" }),
+        SET_F("advisor.model", "model", "Advisor model", "A second model the agent may consult mid-task through the `advisor` tool. Blank turns the advisor off.", { def: "", prov: "advisor.provider|default_provider" }),
         SET_F("advisor.provider", "provider", "Advisor provider", "Provider the advisor runs on.", { def: "", none: "Default provider" }),
         SET_F("advisor.max_calls_per_turn", "num", "Calls per turn", "Consultations allowed in one user turn. 0 or less means the default (3).", { def: 3, unit: "calls" }),
         SET_F("advisor.max_context_chars", "num", "Transcript sent", "Characters of transcript sent per call; the most recent part is kept.", { def: 60000, min: 0, unit: "chars" }),
@@ -4287,7 +4316,7 @@ function settingsInit() {
   const st = {
     base: {}, draft: {}, origin: new WeakMap(), fresh: new WeakSet(), rows: [], controls: [], dyn: [],
     sec: "models", q: "", raw: false, busy: false, flash: null, loaded: false,
-    pending: new Map(), models: [], catalog: [], uid: 0, rawErr: "",
+    pending: new Map(), modelLists: new Map(), catalog: [], uid: 0, rawErr: "",
   };
   try { st.sec = localStorage.getItem(SEC_KEY) || st.sec; } catch {}
 
@@ -4453,8 +4482,164 @@ function settingsInit() {
       if (document.activeElement !== d.sel) fillSelect(d.sel, dynOpts(d.type), d.get(), typeof d.none === "function" ? d.none() : d.none);
   }
 
-  /* Build the control for one value. Returns { node, input, check, ... }. */
-  function control(spec, b, id, labelText) {
+  /* ---- model pickers ----
+     A model field takes any model id typed into it, and offers the models
+     of the provider it belongs to in a list under it: the caret (or a
+     click, or the down arrow) opens the whole list, typing filters it,
+     Enter picks the highlighted one, Esc closes. What is typed is kept as
+     typed -- a list can be short of what a provider accepts, and some
+     providers cannot list at all. The lists come from
+     GET /v1/providers/<name>/models (the provider's own list, cached by the
+     gateway) and are kept per provider while the page is open. This used to
+     be one datalist for every field: it showed nothing until something was
+     typed, and only ever the default provider's models. */
+
+  /* Whose models a top-level model field lists: spec.prov names the
+     provider field to read ("a|b": a, else b); the default provider when
+     it names none. */
+  function provFor(spec) {
+    for (const path of String(spec.prov || "default_provider").split("|")) {
+      const v = getP(st.draft, path.split("."));
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    return "";
+  }
+  function loadModels(prov, refresh) {
+    if (!prov) return Promise.resolve(null);
+    const have = st.modelLists.get(prov);
+    if (have && !refresh && (have.state === "ok" || have.state === "loading")) return have.wait || Promise.resolve(have);
+    /* A failed or missing list is asked for again on the next open: the
+       provider may have been saved, or come back, since. */
+    const entry = have || { models: [] };
+    entry.state = "loading";
+    st.modelLists.set(prov, entry);
+    entry.wait = (async () => {
+      try {
+        const r = await gwFetch("/v1/providers/" + encodeURIComponent(prov) + "/models" + (refresh ? "?refresh=1" : ""));
+        if (r.status === 404) { entry.state = "missing"; entry.models = []; return entry; }
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+        entry.models = (Array.isArray(j.models) ? j.models : []).filter(m => m && m.id)
+          .map(m => ({ id: String(m.id), name: m.name ? String(m.name) : "" }));
+        entry.source = j.source || ""; entry.fetched = j.fetched_at || 0; entry.error = j.error || "";
+        entry.state = entry.models.length || j.source !== "none" ? "ok" : "error";
+      } catch (e) {
+        entry.state = "error"; entry.error = e.message || String(e);
+      }
+      entry.wait = null;
+      return entry;
+    })();
+    return entry.wait;
+  }
+  function modelPicker(id, value, placeholder, onInput, provOf, noProvText) {
+    const wrap = el("div", "set-combo");
+    const i = input(id, "set-mono", value, { placeholder });
+    i.setAttribute("role", "combobox"); i.setAttribute("aria-autocomplete", "list");
+    i.setAttribute("aria-expanded", "false");
+    const pop = el("div", "set-combo-pop"); pop.hidden = true;
+    const list = el("div", "set-combo-list"); list.id = id + "-list"; list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", "Models");
+    i.setAttribute("aria-controls", list.id);
+    const foot = el("div", "set-combo-foot");
+    pop.append(list, foot);
+    const btn = el("button", "set-combo-btn"); btn.type = "button"; btn.tabIndex = -1;
+    btn.setAttribute("aria-label", "Show the provider's models"); btn.setAttribute("aria-expanded", "false");
+    btn.appendChild(ic("chevron"));
+    wrap.append(i, btn, pop);
+    let open = false, filtering = false, opts = [], active = -1, prov = "", entry = null;
+
+    function setActive(k, center) {
+      if (opts[active]) opts[active].classList.remove("active");
+      active = k;
+      if (opts[k]) {
+        opts[k].classList.add("active"); i.setAttribute("aria-activedescendant", opts[k].id);
+        opts[k].scrollIntoView({ block: center ? "center" : "nearest" });
+      } else i.removeAttribute("aria-activedescendant");
+    }
+    function say(text, err) { const m = el("span", "msg" + (err ? " err" : ""), text); foot.appendChild(m); }
+    function paint() {
+      list.textContent = ""; foot.textContent = ""; opts = []; active = -1;
+      i.removeAttribute("aria-activedescendant");
+      const cur = i.value.trim(), q = filtering ? cur.toLowerCase() : "";
+      const all = entry && entry.models ? entry.models : [];
+      const shown = q ? all.filter(m => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)) : all;
+      shown.forEach((m, n) => {
+        const o = el("div", "set-combo-opt"); o.id = id + "-o" + n; o.setAttribute("role", "option");
+        o.setAttribute("aria-selected", m.id === cur ? "true" : "false"); o.dataset.id = m.id;
+        o.appendChild(el("span", "id", m.id));
+        if (m.name && m.name !== m.id) o.appendChild(el("span", "nm", m.name));
+        o.addEventListener("click", () => pick(m.id));
+        list.appendChild(o); opts.push(o);
+      });
+      if (!prov) say(noProvText || "Choose a provider to list its models. Any model id can still be typed.");
+      else if (!entry || entry.state === "loading") say("Listing " + prov + "’s models…");
+      else if (entry.state === "missing") say("Save “" + prov + "” first to list its models. Any model id can still be typed.");
+      else if (entry.state === "error" && !all.length) say("Could not list " + prov + "’s models: " + (entry.error || "no answer") + ". Type a model id.", true);
+      else if (!all.length) say(entry.source === "relay" ? "No relay worker is connected." : prov + " listed no models. Type a model id.");
+      else if (q && !shown.length) say("No listed model matches. “" + cur + "” is used as typed.");
+      else {
+        let t = (q ? shown.length + " of " : "") + all.length + (all.length === 1 ? " model" : " models");
+        if (entry.source === "relay") t += " from connected relay workers";
+        else if (entry.fetched) t += " · listed " + bgAgo(entry.fetched);
+        say(t);
+        if (entry.error) say("Refresh failed: " + entry.error, true);
+      }
+      if (prov && entry && entry.state !== "loading" && entry.state !== "missing") {
+        const r = el("button"); r.type = "button"; r.tabIndex = -1; r.append(ic("refresh"), document.createTextNode("Refresh"));
+        r.setAttribute("aria-label", "Ask " + prov + " for its models again");
+        r.addEventListener("click", () => { show(true); });
+        foot.appendChild(r);
+      }
+      if (!filtering) { const k = shown.findIndex(m => m.id === cur); if (k >= 0) setActive(k, true); }
+    }
+    async function show(refresh) {
+      prov = (provOf() || "").trim();
+      entry = prov ? st.modelLists.get(prov) || null : null;
+      open = true; pop.hidden = false;
+      i.setAttribute("aria-expanded", "true"); btn.setAttribute("aria-expanded", "true");
+      const want = prov;
+      if (prov && (refresh || !entry || (entry.state !== "ok"))) {
+        const p = loadModels(prov, refresh);
+        entry = st.modelLists.get(prov); paint();
+        const got = await p;
+        if (open && want === prov) { entry = got; paint(); }
+      } else paint();
+    }
+    function close() {
+      if (!open) return;
+      open = false; filtering = false; pop.hidden = true;
+      i.setAttribute("aria-expanded", "false"); btn.setAttribute("aria-expanded", "false");
+      i.removeAttribute("aria-activedescendant"); active = -1;
+    }
+    function pick(v) { i.value = v; onInput(v); close(); }
+
+    i.addEventListener("input", () => { onInput(i.value); filtering = true; if (open) paint(); else show(false); });
+    i.addEventListener("keydown", e => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (!open) { filtering = false; show(false); return; }
+        if (!opts.length) return;
+        const d = e.key === "ArrowDown" ? 1 : -1;
+        setActive(active < 0 ? (d > 0 ? 0 : opts.length - 1) : (active + d + opts.length) % opts.length);
+      } else if (e.key === "Enter" && open) {
+        e.preventDefault();
+        if (opts[active]) pick(opts[active].dataset.id); else close();
+      } else if (e.key === "Escape" && open) {
+        e.preventDefault(); e.stopPropagation(); close();
+      } else if (e.key === "Tab") close();
+    });
+    i.addEventListener("click", () => { if (!open) { filtering = false; show(false); } });
+    i.addEventListener("blur", close);
+    /* Keep the focus in the field while the list is used with the mouse. */
+    pop.addEventListener("mousedown", e => e.preventDefault());
+    btn.addEventListener("mousedown", e => e.preventDefault());
+    btn.addEventListener("click", () => { if (open) close(); else { i.focus(); filtering = false; show(false); } });
+    return { node: wrap, input: i };
+  }
+
+  /* Build the control for one value. Returns { node, input, check, ... }.
+     ctx.provOf, for a model field on a card or row: whose models it lists. */
+  function control(spec, b, id, labelText, ctx) {
     const t = spec.type;
     const ctl = { spec, b };
     if (t === "bool") {
@@ -4511,9 +4696,14 @@ function settingsInit() {
       box.appendChild(btn);
       return Object.assign(ctl, { node: box, input: btn });
     }
-    /* text, path, model, url */
-    const i = input(id, (spec.mono || t === "path" || t === "model" || t === "url") ? "set-mono" : "", b.get(), spec);
-    if (t === "model") { i.setAttribute("list", "set-models"); if (!i.placeholder) i.placeholder = spec.required ? "" : "Default"; }
+    if (t === "model") {
+      const mp = modelPicker(id, b.get(), spec.placeholder || (spec.required ? "" : "Default"), v => b.set(v),
+                             ctx && ctx.provOf ? ctx.provOf : () => provFor(spec), ctx && ctx.noProv);
+      ctl.check = () => (b.isNew() || !same(b.get(), b.base())) ? checkValue(spec, b.get()) : "";
+      return Object.assign(ctl, { node: mp.node, input: mp.input });
+    }
+    /* text, path, url */
+    const i = input(id, (spec.mono || t === "path" || t === "url") ? "set-mono" : "", b.get(), spec);
     if (t === "url") { i.type = "url"; i.inputMode = "url"; if (!i.placeholder) i.placeholder = spec.def || "https://"; }
     i.addEventListener("input", () => b.set(i.value));
     ctl.check = () => (b.isNew() || !same(b.get(), b.base())) ? checkValue(spec, b.get()) : "";
@@ -4621,9 +4811,9 @@ function settingsInit() {
         fillSelect(s, names(st.draft.providers), r.p, none());
         st.dyn.push({ sel: s, type: "provider", get: () => r.p, none, owner: box });
         s.addEventListener("change", () => { r.p = s.value; commit(); });
-        const m = input(id + "-m" + i, "set-mono", r.m, { placeholder: "Provider's default model" });
-        m.setAttribute("list", "set-models"); m.setAttribute("aria-label", "Fallback " + (i + 1) + " model");
-        m.addEventListener("input", () => { r.m = m.value; commit(); });
+        const mp = modelPicker(id + "-m" + i, r.m, "Provider's default model", v => { r.m = v; commit(); }, () => r.p);
+        mp.input.setAttribute("aria-label", "Fallback " + (i + 1) + " model");
+        const m = mp.node;
         const x = el("button", "set-x"); x.type = "button"; x.appendChild(ic("x"));
         x.setAttribute("aria-label", "Remove fallback " + (i + 1));
         x.addEventListener("click", () => { rows.splice(i, 1); commit(); render(); });
@@ -4739,7 +4929,11 @@ function settingsInit() {
         const fid = uid();
         const b = itemBinding(item, fs.k, fs.def !== undefined ? fs.def : (fs.type === "bool" ? false : fs.type === "list" ? [] : ""), orig, tmpl);
         const wrapped = Object.assign({}, b, { set: v => { b.set(v); paintHead(); } });
-        const fc = register(control(fs, wrapped, fid, fs.label));
+        const fc = register(control(fs, wrapped, fid, fs.label, fs.type !== "model" ? undefined
+          : f.cards === "providers"
+            ? { provOf: () => String(item.name || "").trim(),
+                noProv: "Name this provider and save it to list its models. Any model id can still be typed." }
+            : { provOf: () => provFor({}) }));
         fc.owner = box;
         const fbox = el("div", "set-f" + (fs.wide || fs.type === "textarea" || fs.type === "list" || fs.type === "json" ? " wide" : ""));
         fc.box = fbox;
@@ -5034,13 +5228,8 @@ function settingsInit() {
   /* ---- load / save / discard ---- */
   async function loadAux() {
     const get = async (u, pick) => { try { const r = await gwFetch(u); return r.ok ? pick(await r.json()) : []; } catch { return []; } };
-    const [models, catalog] = await Promise.all([
-      st.models.length ? st.models : get("/v1/models", j => (j.data || j.models || []).map(x => typeof x === "string" ? x : (x.id || x.name)).filter(Boolean)),
-      st.catalog.length ? st.catalog : get("/v1/providers/catalog", j => (j.data || []).filter(c => c && c.kind)),
-    ]);
-    st.models = models; st.catalog = catalog;
-    const dl = $("#set-models"); dl.textContent = "";
-    for (const m of models) dl.appendChild(new Option(m));
+    st.catalog = st.catalog.length ? st.catalog
+      : await get("/v1/providers/catalog", j => (j.data || []).filter(c => c && c.kind));
   }
   async function load() {
     st.loaded = false; st.busy = false; st.busyText = ""; paintBar();

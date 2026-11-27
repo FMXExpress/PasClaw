@@ -132,6 +132,10 @@ type
     FCommand:    string;
     FWorkDir:    string;
     FTimeoutMs:  Integer;
+    { The local backend runs it, so cancel kills it -- decided when the
+      job is made, not when its thread reaches the spawn: a cancel in
+      between was reported advisory and the command started anyway. }
+    FLocalShell: Boolean;
     FProc:       TObject;
     FExitCode:   Integer;
     FChildReg:   TToolRegistry;      { owned }
@@ -344,7 +348,8 @@ procedure RegisterSubagentTools(Cfg: TConfig; Provider: ILLMProvider;
    output tail (a shell job).
    CancelBackgroundJob: spawn_cancel's path. bcoAdvisory means the job was
    marked and will stop by itself (a subagent at its next step, a shell
-   job under the docker backend), bcoKilled that a local process was.
+   job under the docker backend), bcoKilled that a local shell job's
+   command was stopped -- its process killed, or never started.
    ContinueBackgroundJob: a follow-up message to a finished subagent. A
    new job continues that subagent's conversation with Text, in the same
    chat, workspace and agent; the two are linked (ContinuedFrom /
@@ -360,6 +365,15 @@ function ContinueBackgroundJob(const Handle, Text: string;
 function FormatBackgroundJobsText: string;
 { The same in one line, for the positioned TUI's footer flash. }
 function BackgroundJobsSummary: string;
+
+{ How many jobs had their resources freed while their thread could still
+  run. Always 0; a test seam for subagent_bg_tests. }
+function BackgroundJobsFreedWhileRunning: Integer;
+
+{ A test seam for subagent_bg_tests: while Gate is set, a shell job's
+  thread waits on it (up to 10 s) before it checks for a cancel and
+  spawns, so a test can cancel in that gap. nil (the default) clears it. }
+procedure SetShellSpawnGateForTests(Gate: TEvent);
 
 (* Apply the transcript bounds (the BgTranscript constants). Cut messages keep
    their role and structure; dropped ones go from the front, after the
@@ -696,9 +710,11 @@ begin
   FireBackgroundDone(FDrainKey, FHandle, Summary);
 end;
 
+var
+  GShellSpawnGate: TEvent = nil;   { SetShellSpawnGateForTests }
+
 procedure TBgJob.RunShellJob;
 var
-  Backend: IShellBackend;
   P: TStdioProcess;
   Args: TStringList;
   Buf: array[0..4095] of Byte;
@@ -737,8 +753,7 @@ begin
   TimedOut := False;
   Code := -1;
   Out_ := '';
-  Backend := GetActiveShellBackend;
-  if (Backend <> nil) and (not SameText(Backend.Name, 'local')) then
+  if not FLocalShell then
   begin
     { A non-local backend (docker) owns the process; there is nothing to
       kill from here, so cancel stays advisory for this job. The timeout
@@ -761,14 +776,24 @@ begin
     Args := TStringList.Create;
     Acc := TMemoryStream.Create;
     try
-      {$IFDEF MSWINDOWS}
-      Args.Add('/C'); Args.Add(FCommand);
-      Spawned := P.Spawn('cmd.exe', Args, {MergeStderr=}True, FWorkDir, nil);
-      {$ELSE}
-      Args.Add('-c'); Args.Add(FCommand);
-      Spawned := P.Spawn('/bin/sh', Args, {MergeStderr=}True, FWorkDir, nil);
-      {$ENDIF}
-      if not Spawned then
+      { Cancelled before the spawn: the command never starts. }
+      if GShellSpawnGate <> nil then GShellSpawnGate.WaitFor(10000);
+      FStateLock.Enter;
+      try Cancelled := FState = bjCancelled; finally FStateLock.Leave; end;
+      Spawned := False;
+      if not Cancelled then
+      begin
+        {$IFDEF MSWINDOWS}
+        Args.Add('/C'); Args.Add(FCommand);
+        Spawned := P.Spawn('cmd.exe', Args, {MergeStderr=}True, FWorkDir, nil);
+        {$ELSE}
+        Args.Add('-c'); Args.Add(FCommand);
+        Spawned := P.Spawn('/bin/sh', Args, {MergeStderr=}True, FWorkDir, nil);
+        {$ENDIF}
+      end;
+      if Cancelled then
+        Out_ := 'cancelled before the command started'
+      else if not Spawned then
         Out_ := 'failed to spawn the shell'
       else
       begin
@@ -976,8 +1001,43 @@ begin
   NotifyDone;
 end;
 
+var
+  { Jobs whose lock, registry or config were freed while their thread could
+    still use them. Only ever 0 since Destroy waits; subagent_bg_tests pins
+    that. }
+  GFreedWhileRunning: Integer = 0;
+
+function BackgroundJobsFreedWhileRunning: Integer;
+begin
+  Result := GFreedWhileRunning;
+end;
+
+procedure SetShellSpawnGateForTests(Gate: TEvent);
+begin
+  GShellSpawnGate := Gate;
+end;
+
 destructor TBgJob.Destroy;
 begin
+  (* Wait for Execute to end before freeing what it uses. TThread.Destroy
+     waits as well, but only after this body has freed everything: the
+     coordinator frees a job whose state is no longer bjRunning, and its
+     thread can still be running -- a cancelled subagent finishing the
+     model call in flight, any job still in NotifyDone -- where it takes
+     FStateLock and uses FChildReg and FCfg. Freed first, that was a
+     use-after-free; test-subagent-bg once died of it with EThreadError (a
+     critical section destroyed or unlocked out from under its thread). A
+     job freeing itself (FreeOnTerminate) is past Execute here already, and
+     one never started (Suspended) has no thread to wait for. *)
+  if (not Finished) and (not Suspended) then
+  begin
+    Terminate;
+    WaitFor;
+  end;
+  { AtomicIncrement is dcc64's intrinsic (its InterlockedIncrement is in
+    Winapi.Windows), as in PasClaw.Workflow.Store. }
+  if (not Finished) and (not Suspended) then
+    {$IFDEF FPC}InterlockedIncrement(GFreedWhileRunning);{$ELSE}AtomicIncrement(GFreedWhileRunning);{$ENDIF}
   FChildReg.Free;
   FChildDisc.Free;   { non-primary disclosure bound to FChildReg }
   FCfg.Free;
@@ -1375,6 +1435,7 @@ var
   Cmd, Reason, ReqDir, WorkDir: string;
   TimeoutSec: Integer;
   Job: TBgJob;
+  Backend: IShellBackend;
 begin
   Result := '';
   ErrMsg := '';
@@ -1403,6 +1464,7 @@ begin
   end;
   if (WorkDir <> '') and (not DirectoryExists(WorkDir)) then WorkDir := '';
   TimeoutSec := ParseArgInt(ArgsJSON, 'timeout_sec', 0);
+  Backend := GetActiveShellBackend;
 
   FLock.Enter;
   try
@@ -1419,6 +1481,7 @@ begin
     Job.FAgentName := 'shell';
     Job.FCommand   := Cmd;
     Job.FWorkDir   := WorkDir;
+    Job.FLocalShell := (Backend = nil) or SameText(Backend.Name, 'local');
     if TimeoutSec > 0 then Job.FTimeoutMs := TimeoutSec * 1000
     else Job.FTimeoutMs := EffectiveShellTimeoutMs;
     Job.FState     := bjRunning;
@@ -1609,15 +1672,19 @@ begin
       if Job.FState = bjRunning then
       begin
         Job.FState := bjCancelled;
-        if (Job.FKind = bjkShell) and (Job.FProc <> nil) then
+        if (Job.FKind = bjkShell) and Job.FLocalShell then
         begin
           { A shell job on the local backend has a process to kill. The
             job's own thread does the killing: its run loop polls the
             state every few tens of milliseconds and calls Terminate on
             the process it owns. Not from here -- TProcess is not
             thread-safe, and a Terminate racing the owner's Running /
-            ReadAvailable is a double reap. }
-          Msg := 'job ' + Handle + ' killed';
+            ReadAvailable is a double reap. A job whose thread has not
+            spawned yet sees the state first and never starts. }
+          if Job.FProc <> nil then
+            Msg := 'job ' + Handle + ' killed'
+          else
+            Msg := 'job ' + Handle + ' cancelled before its command started';
           Result := bcoKilled;
         end
         else if Job.FKind = bjkShell then
@@ -1773,7 +1840,7 @@ begin
     Info.ExitCode   := -1;
     if (J.FKind = bjkShell) and (J.FFinishedAt <> 0) then Info.ExitCode := J.FExitCode;
     Info.Collected  := J.FCollected;
-    Info.Killable   := (J.FKind = bjkShell) and (J.FProc <> nil) and (J.FState = bjRunning);
+    Info.Killable   := (J.FKind = bjkShell) and J.FLocalShell and (J.FState = bjRunning);
     Info.Worktree   := J.FWorktree;
     Info.ContinuedFrom := J.FContinuedFrom;
     Info.ContinuedBy   := J.FContinuedBy;
