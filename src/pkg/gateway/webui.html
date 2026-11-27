@@ -282,7 +282,7 @@
      the right, the assistant's reply is prose on the page, an error is a
      labelled block. Per-message actions sit in the gap under the message
      so showing them moves nothing. */
-  #log{flex:1;overflow:auto;padding:1.25rem 1rem 1.75rem;display:flex;flex-direction:column;gap:1.5rem}
+  #log{flex:1;overflow:auto;padding:1.5rem 1rem 2rem;display:flex;flex-direction:column;gap:1.6rem}
   .row{display:flex;gap:.6rem;align-items:flex-start;width:100%;max-width:52rem;margin:0 auto;
     animation:rise .16s ease-out}
   @keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
@@ -324,7 +324,19 @@
   .tool-card .tc-glyph{flex:none;width:7px;height:7px;border-radius:50%;font-size:0;
     background:var(--accent)}
   .tool-card.err .tc-glyph{background:var(--danger)}
-  .tool-card .tc-call{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tool-card .tc-call{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* The tool's name reads first; its arguments stay quieter. */
+  .tool-card .tc-name{color:var(--text);font-weight:550}
+  .tool-card .tc-args{color:var(--text-3)}
+  .tool-card.err .tc-name{color:var(--danger)}
+  .tool-card .tc-state{flex:none;margin-left:auto;padding:0 .45rem;border-radius:999px;
+    font:600 10.5px/18px var(--sans);letter-spacing:.03em;text-transform:uppercase;
+    color:var(--danger);background:var(--danger-soft)}
+  .tool-card>summary:focus-visible{outline-offset:-2px}
+  /* A batch of calls is one stacked list, not a pile of separate boxes. */
+  .tool-card+.tool-card{margin-top:-1px;border-top-left-radius:0;border-top-right-radius:0}
+  .tool-card:has(+.tool-card){margin-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0}
+  .tool-card.err{position:relative}
   .tool-card .tc-body{padding:.5rem .75rem .55rem;border-top:1px solid var(--border);
     background:var(--code);font-family:var(--mono);font-size:12px;line-height:1.5;color:var(--text-2)}
   .tool-card .tc-body pre{margin:.15rem 0 .45rem;white-space:pre-wrap;word-break:break-word;
@@ -360,11 +372,57 @@
   .msg-actions button:hover{color:var(--text);background:var(--surface-2)}
   .msg-actions button.ok{color:var(--ok)}
 
+  /* ===== Chat transcript polish =====
+     The chat's own measure and type, scoped to #log so the Background
+     tab's transcript keeps its denser look. Rows and the composer share
+     one 48rem column; replies read at 15px. */
+  #log{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 18px),transparent);
+    mask-image:linear-gradient(to bottom,#000 calc(100% - 18px),transparent)}
+  #log .row{max-width:48rem}
+  #log .row.u>.bub,#log .row.a>.bub{font-size:15px;line-height:1.65}
+  #log .row.u>.bub{max-width:80%;padding:.55rem .95rem;border-radius:16px 16px 4px 16px}
+  html.lite #log .row.u>.bub{background:var(--surface);border-color:var(--border-strong)}
+  html.lite #log .md code.ic{background:var(--surface-3)}
+  #log .md h1,#log .md h2,#log .md h3{letter-spacing:-.01em}
+  /* Nothing said yet: what the page is for, and the keys that drive it.
+     Drawn in place of the empty transcript (#log:empty), never while a
+     chat's transcript is being fetched. */
+  .chat-empty{display:none;flex:1;min-height:0;overflow:auto;flex-direction:column;align-items:center;
+    justify-content:center;gap:.55rem;padding:2rem 1.25rem;text-align:center}
+  #log:empty:not([data-loading]){display:none}
+  #log:empty:not([data-loading])~.chat-empty{display:flex}
+  .chat-empty-mark{display:grid;place-items:center;width:44px;height:44px;margin-bottom:.35rem;
+    border-radius:12px;background:var(--accent-soft);color:var(--accent)}
+  .chat-empty-mark svg.ic{width:22px;height:22px;stroke-width:1.4}
+  .chat-empty-title{margin:0;font-size:20px;font-weight:650;letter-spacing:-.015em;color:var(--text)}
+  .chat-empty-sub{margin:0;max-width:30rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .chat-empty-keys{display:flex;flex-wrap:wrap;justify-content:center;gap:.35rem 1.1rem;
+    margin:.7rem 0 0;padding:0;list-style:none;font-size:12.5px;color:var(--text-3)}
+  .chat-empty-keys li{display:inline-flex;align-items:center;gap:.3rem}
+  .chat-empty kbd{display:inline-block;min-width:1.5rem;padding:.05rem .4rem;border-radius:5px;
+    font-size:11.5px;line-height:1.5;text-align:center;color:var(--text-2);background:var(--surface);
+    border:1px solid var(--border-strong);box-shadow:inset 0 -1px 0 var(--border-strong)}
+  /* Back to the newest message, shown once the reader has scrolled up. */
+  .chat-jump{position:absolute;left:50%;bottom:calc(100% + .75rem);z-index:5;transform:translateX(-50%);
+    display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .8rem .3rem .6rem;border-radius:999px;
+    font-size:12.5px;color:var(--text);background:var(--surface);border:1px solid var(--border-strong);
+    box-shadow:var(--shadow-pop)}
+  .chat-jump:hover{background:var(--surface-2)}
+  .chat-jump[hidden]{display:none}
+  /* Send is the filled action; Stop, while a reply runs, is a quiet button
+     with a square so the two are never mistaken. */
+  form.send #b{display:inline-flex;align-items:center;gap:.35rem;padding:.32rem .8rem .32rem .65rem}
+  form.send #b svg.ic{width:15px;height:15px}
+  form.send #b.chat-stop{background:var(--surface-3);color:var(--text);border-color:var(--border-strong)}
+  form.send #b.chat-stop:hover{background:var(--surface-2)}
+  form.send #b.chat-stop svg.ic{fill:currentColor;stroke:none}
+
   /* ===== Composer =====
      One bordered box holds the queue, attachments, the input and its bar. */
   form.send{position:relative;display:flex;flex-wrap:wrap;gap:.35rem;
-    width:calc(100% - 2rem);max-width:52rem;margin:0 auto 1rem;padding:.5rem .55rem .45rem;
-    border:1px solid var(--border-strong);border-radius:12px;background:var(--surface)}
+    width:calc(100% - 2rem);max-width:48rem;margin:0 auto 1rem;padding:.55rem .55rem .45rem;
+    border:1px solid var(--border-strong);border-radius:14px;background:var(--surface);
+    box-shadow:0 1px 2px rgba(0,0,0,.12)}
   form.send:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
   #attach-chips,.msg-queue{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
   #attach-chips:empty,.msg-queue:empty{display:none}
@@ -1286,6 +1344,19 @@
   .copy-btn.ok{color:var(--ok)}
   .code-wrap pre{margin:0;padding:.7rem .8rem;overflow:auto;font-size:12.5px;line-height:1.55}
   .code-wrap code{white-space:pre}
+  .chat-copy{display:inline-flex;align-items:center;gap:.3rem;text-transform:none}
+  .chat-copy svg.ic{width:14px;height:14px;vertical-align:0}
+  /* GFM tables: a bordered box that scrolls sideways when it is wider
+     than the reply. */
+  .md-table{margin:.75rem 0;max-width:100%;overflow-x:auto;border:1px solid var(--border);border-radius:8px;
+    background:var(--surface)}
+  .md table{border-collapse:collapse;min-width:100%;font-size:13.5px;line-height:1.5;
+    font-variant-numeric:tabular-nums}
+  .md th,.md td{padding:.42rem .8rem;text-align:left;vertical-align:top;border-bottom:1px solid var(--border)}
+  .md th+th,.md td+td{border-left:1px solid var(--border)}
+  .md th{font-weight:600;color:var(--text);background:var(--surface-2);white-space:nowrap}
+  .md tbody tr:last-child td{border-bottom:0}
+  .md tbody tr:hover{background:var(--surface-2)}
 
   /* ===== Narrow screens =====
      The tab strip moves to its own row and scrolls sideways; lists and the
@@ -1303,8 +1374,10 @@
     /* The chat list opens over the transcript instead of squeezing it. */
     #tab-chat{position:relative}
     aside.sessions{position:absolute;z-index:30;top:0;bottom:0;left:0;width:min(18rem,85vw);
-      flex-basis:auto !important;box-shadow:var(--shadow-pop)}
+      flex-basis:auto !important;box-shadow:var(--shadow-pop),0 0 0 100vmax rgba(8,10,14,.45)}
     .chat-splitter{display:none}
+    #log .row.u>.bub{max-width:88%}
+    .chat-empty-title{font-size:18px}
     .chat-toolbar{flex-wrap:wrap}
     .chat-toolbar .lbl{display:none}
     .col-list{flex-basis:9rem}
@@ -1383,6 +1456,9 @@
   <symbol id="i-server" viewBox="0 0 16 16"><rect x="2.5" y="2.75" width="11" height="4.5" rx="1.25"/><rect x="2.5" y="8.75" width="11" height="4.5" rx="1.25"/><path d="M5 5h.01M5 11h.01"/></symbol>
   <symbol id="i-browser" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M2 6.25h12M4.5 4.6h.01M6 4.6h.01"/></symbol>
   <symbol id="i-terminal" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="m4.75 6.5 2 1.75-2 1.75M8.5 10.25h2.75"/></symbol>
+  <symbol id="i-chat-send" viewBox="0 0 16 16"><path d="M8 13V3.25M4 7.25l4-4 4 4"/></symbol>
+  <symbol id="i-chat-down" viewBox="0 0 16 16"><path d="M8 3v9.75M4 8.75l4 4 4-4"/></symbol>
+  <symbol id="i-chat-bubble" viewBox="0 0 16 16"><path d="M3.5 2.75h9a1.75 1.75 0 0 1 1.75 1.75v5a1.75 1.75 0 0 1-1.75 1.75H8.25L5 13.5v-2.25H3.5A1.75 1.75 0 0 1 1.75 9.5v-5A1.75 1.75 0 0 1 3.5 2.75Z"/><path d="M5.25 6.25h5.5M5.25 8.5h3.5"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 16 16"><path d="M4.75 12.5h6.75a2.75 2.75 0 0 0 .3-5.48 4 4 0 0 0-7.7 1.1A2.2 2.2 0 0 0 4.75 12.5Z"/></symbol>
   <symbol id="i-cron-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="M8 4.75V8l2.25 1.5"/></symbol>
 </defs></svg>
@@ -1479,12 +1555,26 @@
         <div class="ctx-foot">Estimated at about 4 characters per token, the rule PasClaw's compaction uses; your provider's own count will differ somewhat. Counts what the next message would send, before your new text.</div>
       </div>
       <div id="log"></div>
+      <div class="chat-empty" id="chat-empty">
+        <span class="chat-empty-mark"><svg class="ic" aria-hidden="true"><use href="#i-chat-bubble"/></svg></span>
+        <h2 class="chat-empty-title">What are we working on?</h2>
+        <p class="chat-empty-sub">Ask a question, paste an error, or describe a change. PasClaw can read
+          and edit files in its workspace and run tools; each step shows up here as it happens.</p>
+        <ul class="chat-empty-keys">
+          <li><kbd>Enter</kbd> send</li>
+          <li><kbd>Shift</kbd><kbd>Enter</kbd> new line</li>
+          <li><kbd>/</kbd> commands</li>
+          <li><kbd>&uarr;</kbd> previous message</li>
+        </ul>
+      </div>
       <form class="send" id="f">
+        <button type="button" id="chat-jump" class="chat-jump" hidden><svg class="ic" aria-hidden="true"><use href="#i-chat-down"/></svg>Latest</button>
         <div id="slash-menu" class="slash-menu" hidden></div>
         <div id="msg-queue" class="msg-queue"></div>
         <div id="attach-chips"></div>
         <textarea id="m" rows="2"
-          placeholder="Ask PasClaw…  Enter to send, Shift+Enter for a new line, / for commands"></textarea>
+          aria-label="Message"
+          placeholder="Ask PasClaw…  / for commands"></textarea>
         <input id="attach-file" type="file" multiple style="display:none">
         <!-- Toolbar under the input: mode + attach on the left, model
              picker + Send on the right. mode-btn / model-sel were lifted
@@ -1497,7 +1587,7 @@
             aria-label="Attach files" title="Attach text file(s) — contents are folded into your message"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg></button>
           <span class="composer-spacer"></span>
           <select id="model-sel" title="Model used for new messages (empty = server default)"></select>
-          <button class="primary" id="b">Send</button>
+          <button class="primary" id="b"><svg class="ic" aria-hidden="true"><use href="#i-chat-send"/></svg><span class="lbl">Send</span></button>
         </div>
       </form>
     </div>
@@ -2473,6 +2563,7 @@ function newSession() {
   activeSessionId = null;
   activeTurns = [];
   clearLog();
+  delete log.dataset.loading;
   m.value = ""; autosizeMsg();
   loadParamsForActive();   // seed the new chat from the most-recent params
   syncStreaming();
@@ -2550,6 +2641,7 @@ function renderSessions() {
    send / edit / regenerate -- without re-fetching the server). */
 function renderActive() {
   clearLog();
+  delete log.dataset.loading;
   activeTurns.forEach((t, i) => renderTurn(t.role, t.text, i));
   const run = runForTurns(activeTurns);
   if (run) attachLiveBubble(run);
@@ -2576,6 +2668,7 @@ async function activateSession(id) {
   syncStreaming();
   renderSessions();
   clearLog();
+  log.dataset.loading = "1";   // not the empty-chat welcome while it loads
   let loaded = [];
   try {
     const j = await (await gwFetch("/v1/sessions/" + encodeURIComponent(id))).json();
@@ -2745,6 +2838,40 @@ function clearLog() {
   for (const r of runs) r.bub = null;
 }
 
+/* Scrolling. The transcript follows a streaming reply only while the
+   reader is at the bottom: one who scrolled up to read is left there,
+   with a "Latest" button to come back. */
+const chatJump = $("#chat-jump");
+function logNearBottom() { return log.scrollHeight - log.scrollTop - log.clientHeight < 80; }
+function syncJump() { if (chatJump) chatJump.hidden = !log.firstChild || logNearBottom(); }
+let logPinned = true;        // the reader is at the newest message
+log.addEventListener("scroll", () => { logPinned = logNearBottom(); syncJump(); }, { passive: true });
+/* A taller composer or a resized window shrinks the transcript: one that
+   was at the newest message stays there. */
+if (window.ResizeObserver) new ResizeObserver(() => {
+  if (logPinned) log.scrollTop = log.scrollHeight;
+  syncJump();
+}).observe(log);
+/* The transcript also changes height with no scroll: a redraw, a reply
+   streaming in, a tool card opened or closed. A row is scrolled to before
+   its bubble is filled, so a pinned transcript follows here too, or a
+   redrawn chat would end with its last reply below the fold. */
+new MutationObserver(() => {
+  if (logPinned && log.firstChild) log.scrollTop = log.scrollHeight;
+  syncJump();
+}).observe(log, { childList: true, subtree: true, attributes: true, attributeFilter: ["open"] });
+if (chatJump) chatJump.addEventListener("click", () => {
+  log.scrollTo({ top: log.scrollHeight, behavior: "smooth" });
+  m.focus();
+});
+/* On a narrow screen the open chat list covers the transcript: a tap
+   beside it puts it away. */
+document.querySelector(".chat-pane").addEventListener("pointerdown", e => {
+  if (!sidebarIsOverlay() || e.target.closest("#sidebar-toggle")) return;
+  const aside = document.querySelector("aside.sessions");
+  if (aside && !aside.classList.contains("collapsed")) closeSidebarIfOverlay();
+});
+
 /* Bare row used for the live-streaming assistant bubble (plain text, no
    actions). Finalised turns are (re)drawn by renderTurn after the stream
    completes so markdown + per-message actions land consistently. */
@@ -2755,6 +2882,7 @@ function makeRow(role) {
               + `<div class="bub"></div>`;
   log.appendChild(r);
   log.scrollTop = log.scrollHeight;
+  logPinned = true;
   return r;
 }
 
@@ -2908,7 +3036,8 @@ function editTurn(index) {
 function syncStreaming() {
   const was = streaming;
   streaming = !!runForTurns(activeTurns);
-  b.textContent = streaming ? "Stop" : "Send";
+  b.innerHTML = icon(streaming ? "stop" : "chat-send") + '<span class="lbl">' + (streaming ? "Stop" : "Send") + "</span>";
+  b.classList.toggle("chat-stop", streaming);
   b.disabled = false;
   /* A finished turn changed the conversation: recount the context. */
   if (was && !streaming && typeof ctxRefreshSoon === "function") ctxRefreshSoon();
@@ -2955,13 +3084,14 @@ function paintRun(run) {
   /* Cards are parsed from the ⏺ marker lines, which live in the text, so
      there's nothing to draw until some content has arrived. */
   if (!bub || !run.text) return;
+  const stick = logNearBottom();
   const openIdx = new Set();
   bub.querySelectorAll("details.tool-card").forEach((d, i) => { if (d.open) openIdx.add(i); });
   bub.classList.add("md");
   bub.innerHTML = renderAssistantHTML(run.text, pairToolDetails(run.tools));
   bub.querySelectorAll("details.tool-card").forEach((d, i) => { if (openIdx.has(i)) d.open = true; });
   wireCopyButtons(bub);
-  log.scrollTop = log.scrollHeight;
+  if (stick) log.scrollTop = log.scrollHeight;
 }
 function scheduleRunPaint(run) {
   if (run.raf || !run.bub) return;
@@ -3172,7 +3302,10 @@ async function streamAssistant() {
     }
     if (shown) {
       if (run.text || run.error) {
+        /* The redraw keeps a reader who scrolled up where they were. */
+        const keep = logNearBottom() ? -1 : log.scrollTop;
         renderActive();
+        if (keep >= 0) { log.scrollTop = keep; logPinned = false; }
       } else if (run.bub && run.bub.querySelector(".typing")) {
         /* Stream closed with no content and wasn't an error -- clear the dots. */
         run.bub.textContent = "(no response)";
@@ -4084,9 +4217,15 @@ function toolCard(call, results, detail) {
     isErr = body.indexOf(TV_ERR) >= 0;
     bodyHtml = "<pre>" + (body ? escapeHtml(body) : "(no result)") + "</pre>";
   }
+  /* "name(args)": the name and the arguments styled apart. */
+  const nm = /^([^\s(]+)(\(.*)?$/.exec(call);
+  const callHtml = nm ? '<span class="tc-name">' + escapeHtml(nm[1]) + "</span>"
+                        + (nm[2] ? '<span class="tc-args">' + escapeHtml(nm[2]) + "</span>" : "")
+                      : escapeHtml(call);
   return '<details class="tool-card' + (isErr ? " err" : "") + '"' + (toolsExpanded ? " open" : "") + '>'
        + '<summary><span class="tc-glyph">' + TV_CALL + "</span>"
-       + '<span class="tc-call">' + escapeHtml(call) + "</span></summary>"
+       + '<span class="tc-call">' + callHtml + "</span>"
+       + (isErr ? '<span class="tc-state">failed</span>' : "") + "</summary>"
        + '<div class="tc-body">' + bodyHtml + "</div>"
        + "</details>";
 }
@@ -4112,10 +4251,31 @@ function renderMarkdown(src) {
      paragraph -- the paragraph loop took no line, i never moved, and the
      tab froze pushing empty paragraphs. Same for a "```lang\r" fence. */
   const lines = String(src).replace(/\r\n?|\u2028|\u2029/g, "\n").split("\n");
+  /* A GFM table starts at a row with pipes followed by a delimiter row
+     (|---|:--:|). Cells go through inline() like any other text. */
+  const cells = row => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  const tableAt = k => k + 1 < lines.length && lines[k].indexOf("|") >= 0 && lines[k + 1].indexOf("|") >= 0 &&
+                       cells(lines[k + 1]).every(c => /^:?-+:?$/.test(c));
   const out = [];
   let i = 0;
   while (i < lines.length) {
     const ln = lines[i];
+    if (tableAt(i)) {
+      const head = cells(ln);
+      const align = cells(lines[i + 1]).map(c => /^:-+:$/.test(c) ? "center" : /-:$/.test(c) ? "right" : "");
+      const cell = (tag, text, k) => "<" + tag + (align[k] ? ' style="text-align:' + align[k] + '"' : "") + ">"
+                                   + inline(text || "") + "</" + tag + ">";
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].indexOf("|") >= 0) {
+        const r = cells(lines[i]);
+        rows.push("<tr>" + head.map((_, k) => cell("td", r[k], k)).join("") + "</tr>");
+        i++;
+      }
+      out.push('<div class="md-table"><table><thead><tr>' + head.map((h, k) => cell("th", h, k)).join("")
+             + "</tr></thead><tbody>" + rows.join("") + "</tbody></table></div>");
+      continue;
+    }
     const fence = ln.match(/^```(.*)$/);
     if (fence) {
       const lang = fence[1].trim();
@@ -4158,7 +4318,7 @@ function renderMarkdown(src) {
     const para = [lines[i++]];
     while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^```/.test(lines[i]) &&
            !/^#{1,6}\s/.test(lines[i]) && !/^\s*[-*+]\s+/.test(lines[i]) &&
-           !/^\s*\d+\.\s+/.test(lines[i]) && !/^>\s?/.test(lines[i])) {
+           !/^\s*\d+\.\s+/.test(lines[i]) && !/^>\s?/.test(lines[i]) && !tableAt(i)) {
       para.push(lines[i]); i++;
     }
     out.push("<p>" + inline(para.join("\n")).replace(/\n/g, "<br>") + "</p>");
@@ -4169,7 +4329,8 @@ function renderMarkdown(src) {
 function codeBlock(code, lang) {
   return '<div class="code-wrap"><div class="code-head">'
        + '<span class="code-lang">' + escapeHtml(lang || "code") + "</span>"
-       + '<button class="copy-btn" type="button">copy</button></div>'
+       + '<button class="copy-btn chat-copy" type="button" aria-label="Copy code">'
+       + '<svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg><span class="lbl">Copy</span></button></div>'
        + "<pre><code>" + escapeHtml(code) + "</code></pre></div>";
 }
 
@@ -4184,9 +4345,12 @@ function wireCopyButtons(scope) {
 function copyText(text, btn) {
   const flash = () => {
     if (!btn) return;
-    const prev = btn.textContent;
-    btn.textContent = "copied"; btn.classList.add("ok");
-    setTimeout(() => { btn.textContent = prev; btn.classList.remove("ok"); }, 1200);
+    /* A button with an icon keeps it: only its label changes. */
+    const lbl = btn.querySelector(".lbl") || btn;
+    if (btn._copyT) clearTimeout(btn._copyT);
+    else btn._copyPrev = lbl.textContent;
+    lbl.textContent = lbl === btn ? "copied" : "Copied"; btn.classList.add("ok");
+    btn._copyT = setTimeout(() => { lbl.textContent = btn._copyPrev; btn.classList.remove("ok"); btn._copyT = 0; }, 1200);
   };
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(flash).catch(() => fallbackCopy(text, flash));
