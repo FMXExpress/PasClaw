@@ -1212,22 +1212,155 @@
   .skill-card .desc{color:var(--text-2);font-size:13px;margin-top:.25rem}
   .skill-card .path{color:var(--text-3);font-family:var(--mono);font-size:11.5px;margin-top:.3rem;
     word-break:break-all}
-  .skill-card .remove{position:absolute;top:.6rem;right:.7rem;background:transparent;
-    color:var(--text-3);border:1px solid var(--border-strong);border-radius:var(--radius);
-    padding:.06rem .5rem;font-size:12px;text-transform:capitalize}
-  .skill-card .remove:hover{color:var(--danger);border-color:var(--danger-line);background:var(--danger-soft)}
-  .skill-pending-hdr{margin:1.1rem 0 .45rem;font-weight:600;color:var(--text-2);font-size:13px}
-  .skill-card.pending{border-color:var(--accent-line)}
-  .skill-card .skill-preview{margin-top:.45rem;max-height:11rem;overflow:auto;
-    background:var(--code);border:1px solid var(--border);border-radius:var(--radius);
-    padding:.5rem .6rem;font-family:var(--mono);font-size:12px;white-space:pre-wrap;
-    word-break:break-word;color:var(--text-2)}
-  .skill-card .skill-actions{margin-top:.55rem;display:flex;gap:.5rem}
-  .skill-card .pend-approve,.skill-card .pend-reject{font-size:12.5px;
-    border-radius:var(--radius);padding:.2rem .7rem;border:1px solid var(--border-strong);
-    background:transparent;color:var(--text-2)}
-  .skill-card .pend-approve:hover{color:var(--text);background:var(--surface-2)}
-  .skill-card .pend-reject:hover{color:var(--danger);border-color:var(--danger-line);background:var(--danger-soft)}
+  /* Skills tab, sk-: laid out like MCP and Cron. A heading with a line on
+     what a skill is, a status banner for the last action, the agent's
+     staged skills (each with its SKILL.md to read, Approve, and Reject
+     behind an in-row confirm), then a row per installed skill: a kind icon,
+     the name, kind and provenance as pills, the description (two lines,
+     then Show all), details behind a disclosure, and Remove behind an
+     in-row confirm. Catalog search and install-by-name close the page.
+     Below 760px the actions go under the text. (.skill-card above and
+     .skill-install-row below are the KB tab's.) */
+  #sk-pane{padding:1.5rem 2rem 3rem}
+  .sk-wrap{max-width:58rem;margin:0 auto;display:flex;flex-direction:column;gap:1.5rem;min-width:0}
+  .sk-head{display:flex;align-items:flex-start;gap:1rem;min-width:0}
+  .sk-head>div:first-child{flex:1;min-width:0}
+  .sk-head h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .sk-lead{margin:.3rem 0 0;max-width:44rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .sk-lead code,.sk-hint code,.sk-empty code,.sk-facts code{background:var(--surface-2);border-radius:4px;
+    padding:.03rem .3rem;font:.92em var(--mono)}
+  .sk-lead a{white-space:nowrap}
+  .sk-head-actions{display:flex;align-items:center;gap:.5rem;flex:none}
+  #sk-pane button.primary{display:inline-flex;align-items:center;gap:.35rem}
+  #sk-refresh.busy svg.ic{animation:skSpin .8s linear infinite}
+  @keyframes skSpin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){#sk-refresh.busy svg.ic{animation:none}}
+  .sk-status{display:flex;align-items:flex-start;gap:.5rem;padding:.6rem .85rem;border:1px solid var(--border);
+    border-radius:var(--radius-lg);background:var(--surface);font-size:13px;line-height:1.5;color:var(--text);
+    overflow-wrap:anywhere;min-width:0}
+  .sk-status[hidden]{display:none}
+  .sk-status svg.ic{flex:none;margin-top:2px;color:var(--text-3)}
+  .sk-status.ok{border-color:transparent;background:var(--ok-soft)}
+  .sk-status.ok svg.ic{color:var(--ok)}
+  .sk-status.err{border-color:var(--danger-line);background:var(--danger-soft)}
+  .sk-status.err svg.ic{color:var(--danger)}
+  .sk-status-text{flex:1;min-width:0}
+  .sk-status-x{flex:none;display:inline-flex;margin:-.1rem -.3rem 0 0;padding:.15rem;background:none;border:0;
+    border-radius:var(--radius);color:var(--text-3)}
+  .sk-status-x:hover{background:var(--surface-2);color:var(--text)}
+  .sk-status .sk-status-x svg.ic{margin:0;color:inherit}
+  .sk-sec{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+  .sk-sec[hidden]{display:none}
+  .sk-sec-head{display:flex;align-items:center;gap:.5rem;min-width:0;min-height:30px}
+  .sk-sec-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text)}
+  .sk-sec-head .n{font-size:12.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .sk-note{margin:-.35rem 0 0;font-size:12.5px;line-height:1.5;color:var(--text-3)}
+  .sk-filter{position:relative;display:block;margin-left:auto;width:min(17rem,100%)}
+  .sk-filter[hidden]{display:none}
+  .sk-filter svg.ic{position:absolute;left:.55rem;top:50%;margin-top:-8px;color:var(--text-3);pointer-events:none}
+  .sk-filter input{width:100%;padding:.3rem .55rem .3rem 1.95rem;font-size:12.5px}
+  .sk-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .sk-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:.4rem .8rem;padding:.85rem 1rem}
+  .sk-row+.sk-row{border-top:1px solid var(--border)}
+  .sk-row[hidden]{display:none}
+  .sk-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;
+    border-radius:7px;background:var(--surface-2);color:var(--text-2)}
+  .sk-ic svg.ic{width:15px;height:15px;vertical-align:0}
+  .sk-pend .sk-ic{background:var(--warn-soft);color:var(--warn)}
+  .sk-main{display:flex;flex-direction:column;gap:.35rem;min-width:0}
+  .sk-l1{display:flex;align-items:center;flex-wrap:wrap;gap:.3rem .5rem;min-width:0;min-height:28px}
+  .sk-name{min-width:0;font:600 13px/1.4 var(--mono);color:var(--text);overflow-wrap:anywhere}
+  .sk-tag{display:inline-flex;align-items:center;padding:0 .45rem;border-radius:999px;font-size:11px;font-weight:500;
+    line-height:1.65;white-space:nowrap;background:var(--surface-3);color:var(--text-2)}
+  .sk-tag.ok{background:var(--ok-soft);color:var(--ok)}
+  .sk-tag.accent{background:var(--accent-soft);color:var(--accent)}
+  .sk-tag.warn{background:var(--warn-soft);color:var(--warn)}
+  .sk-tag.bad{background:var(--danger-soft);color:var(--danger)}
+  .sk-tag.plain{background:transparent;color:var(--text-3);box-shadow:inset 0 0 0 1px var(--border-strong)}
+  .sk-desc-wrap{display:flex;flex-direction:column;align-items:flex-start;gap:.15rem;min-width:0}
+  .sk-desc{align-self:stretch;margin:0;font-size:13px;line-height:1.5;color:var(--text-2);overflow-wrap:anywhere;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
+  .sk-desc.open{display:block;-webkit-line-clamp:unset;line-clamp:none}
+  .sk-desc.none{color:var(--text-3);font-style:italic}
+  .sk-more{background:none;border:0;border-radius:2px;padding:0;font-size:12px;color:var(--accent);cursor:pointer}
+  .sk-more:hover{background:none;text-decoration:underline}
+  .sk-more[hidden]{display:none}
+  .sk-det{min-width:0}
+  .sk-det>summary{display:inline-flex;align-items:center;gap:.2rem;cursor:pointer;list-style:none;
+    font-size:12.5px;color:var(--accent);border-radius:2px}
+  .sk-det>summary::-webkit-details-marker{display:none}
+  .sk-det>summary::before{content:"";flex:none;width:.4rem;height:.4rem;margin:0 .25rem 0 .1rem;
+    border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+    transform:rotate(-45deg);opacity:.75;transition:transform .12s}
+  .sk-det[open]>summary::before{transform:rotate(45deg)}
+  .sk-facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:.3rem 1rem;margin:.45rem 0 0;padding:.55rem .75rem;
+    border:1px solid var(--border);border-radius:8px;background:var(--surface-2);font-size:12.5px;line-height:1.5}
+  .sk-facts dt{color:var(--text-3);white-space:nowrap}
+  .sk-facts dd{margin:0;min-width:0;color:var(--text);overflow-wrap:anywhere}
+  .sk-facts dd.mono{font:12px/1.5 var(--mono);word-break:break-all}
+  .sk-facts .sub{color:var(--text-3)}
+  .sk-pre{margin:.45rem 0 0;max-height:18rem;overflow:auto;padding:.6rem .75rem;border:1px solid var(--border);
+    border-radius:8px;background:var(--code);font:12px/1.55 var(--mono);color:var(--text);white-space:pre-wrap;
+    overflow-wrap:anywhere}
+  .sk-side{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;justify-content:flex-end}
+  .sk-side .icon-btn svg.ic{margin:0}
+  .sk-side button.primary{padding:.24rem .75rem;font-size:12.5px;border-width:1px}
+  .icon-btn.sk-remove{border-color:transparent;color:var(--text-3)}
+  .icon-btn.sk-danger:hover,.icon-btn.sk-danger[aria-expanded=true]{color:var(--danger);border-color:var(--danger-line);
+    background:var(--danger-soft)}
+  .sk-side button:disabled{opacity:.55;cursor:wait}
+  .sk-time{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .sk-confirm{grid-column:1/-1;display:flex;align-items:flex-start;flex-wrap:wrap;gap:.6rem .75rem;margin-top:.3rem;
+    padding:.7rem .9rem;border:1px solid var(--danger-line);border-radius:8px;background:var(--danger-soft)}
+  .sk-confirm[hidden]{display:none}
+  .sk-confirm>svg.ic{flex:none;margin-top:2px;color:var(--danger)}
+  .sk-confirm-text{flex:1 1 16rem;min-width:0;font-size:13px;line-height:1.5;color:var(--text-2);overflow-wrap:anywhere}
+  .sk-confirm-text b{display:block;font-weight:600;color:var(--text)}
+  .sk-confirm-actions{display:flex;gap:.45rem;align-self:center;margin-left:auto}
+  .sk-btn-danger{background:var(--danger);color:var(--bg);border:1px solid transparent;border-radius:var(--radius);
+    padding:.24rem .8rem;font-size:12.5px;font-weight:600;line-height:1.4;white-space:nowrap}
+  .sk-btn-danger:hover{background:var(--danger);filter:brightness(1.08)}
+  .sk-empty{display:flex;gap:.9rem;align-items:flex-start;padding:1.2rem 1.25rem}
+  .sk-empty-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .sk-empty-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .sk-empty b{display:block;margin-bottom:.2rem;font-size:13.5px;font-weight:600;color:var(--text)}
+  .sk-empty p{margin:0;max-width:40rem;font-size:13px;line-height:1.55;color:var(--text-2)}
+  .sk-empty a{cursor:pointer}
+  .sk-msg{display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;padding:1rem 1.25rem;font-size:13px;color:var(--text-3);
+    overflow-wrap:anywhere;min-width:0}
+  .sk-msg.err{color:var(--danger)}
+  .sk-msg[hidden]{display:none}
+  .sk-add{display:flex;flex-direction:column;gap:1rem;padding:1rem 1.1rem;background:var(--surface);
+    border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .sk-form{display:flex;flex-direction:column;gap:.35rem;min-width:0;margin:0}
+  .sk-form+.sk-form,.sk-catalog+.sk-form{padding-top:1rem;border-top:1px solid var(--border)}
+  .sk-form label{font-size:12.5px;font-weight:600;color:var(--text)}
+  .sk-form-row{display:flex;gap:.5rem;min-width:0}
+  .sk-form-row input{flex:1;min-width:0}
+  .sk-form-row button{flex:none}
+  .sk-hint{margin:0;font-size:12px;line-height:1.5;color:var(--text-3)}
+  .sk-catalog:empty{display:none}
+  .sk-catalog .sk-list{background:var(--surface-2)}
+  .sk-catalog .sk-msg{padding:.25rem 0}
+  @media (max-width:760px){
+    #sk-pane{padding:1rem 1rem 2rem}
+    .sk-wrap{gap:1.3rem}
+    .sk-head{flex-direction:column;gap:.7rem}
+    .sk-sec-head{flex-wrap:wrap}
+    .sk-filter{flex:1 1 100%;width:100%;margin-left:0}
+    .sk-row{grid-template-columns:auto minmax(0,1fr);padding:.8rem .85rem}
+    .sk-side{grid-column:2;justify-content:flex-start}
+    .sk-row.sk-inst{grid-template-columns:auto minmax(0,1fr) auto}
+    .sk-inst .sk-side{grid-column:auto}
+    .sk-inst .sk-remove{padding:.3rem}
+    .sk-inst .sk-remove .sk-btn-label{display:none}
+    .sk-facts{grid-template-columns:minmax(0,1fr);gap:.05rem}
+    .sk-facts dd+dt{margin-top:.35rem}
+    .sk-confirm-actions{margin-left:0}
+    .sk-add{padding:.9rem}
+    .sk-empty{flex-direction:column;gap:.7rem}
+  }
   .skill-install-row{display:flex;gap:.5rem;margin-bottom:.6rem;max-width:60rem}
   .skill-install-row input{flex:1;min-width:0}
 
@@ -1930,6 +2063,7 @@
   <symbol id="i-server" viewBox="0 0 16 16"><rect x="2.5" y="2.75" width="11" height="4.5" rx="1.25"/><rect x="2.5" y="8.75" width="11" height="4.5" rx="1.25"/><path d="M5 5h.01M5 11h.01"/></symbol>
   <symbol id="i-browser" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M2 6.25h12M4.5 4.6h.01M6 4.6h.01"/></symbol>
   <symbol id="i-terminal" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="m4.75 6.5 2 1.75-2 1.75M8.5 10.25h2.75"/></symbol>
+  <symbol id="i-sk-book" viewBox="0 0 16 16"><path d="M8 4.25C6.75 3.2 5 2.75 2.5 2.75v9.5c2.5 0 4.25.45 5.5 1.5 1.25-1.05 3-1.5 5.5-1.5v-9.5c-2.5 0-4.25.45-5.5 1.5Z"/><path d="M8 4.25v9.5"/></symbol>
   <symbol id="i-chat-send" viewBox="0 0 16 16"><path d="M8 13V3.25M4 7.25l4-4 4 4"/></symbol>
   <symbol id="i-chat-down" viewBox="0 0 16 16"><path d="M8 3v9.75M4 8.75l4 4 4-4"/></symbol>
   <symbol id="i-chat-bubble" viewBox="0 0 16 16"><path d="M3.5 2.75h9a1.75 1.75 0 0 1 1.75 1.75v5a1.75 1.75 0 0 1-1.75 1.75H8.25L5 13.5v-2.25H3.5A1.75 1.75 0 0 1 1.75 9.5v-5A1.75 1.75 0 0 1 3.5 2.75Z"/><path d="M5.25 6.25h5.5M5.25 8.5h3.5"/></symbol>
@@ -2263,20 +2397,64 @@
   </div>
 
   <div id="tab-skills" class="tab">
-    <div class="pane">
-      <form id="skill-install" class="skill-install-row">
-        <input id="skill-target" type="text" autocomplete="off"
-               placeholder="Install: owner/repo · clawhub:slug · hub:slug · or a bare slug">
-        <button class="primary" id="skill-install-btn">Install</button>
-      </form>
-      <form id="skill-search" class="skill-install-row">
-        <input id="skill-q" type="text" autocomplete="off"
-               placeholder="Search the skill catalog (pasclaw.dev + ClawHub)">
-        <button class="primary" id="skill-search-btn">Search</button>
-      </form>
-      <div id="skill-status" class="settings-status"></div>
-      <div id="skill-catalog"></div>
-      <div id="skills-pane"></div>
+    <!-- Skills: what GET /v1/skills lists (workspace/skills/), what the
+         agent staged for approval (GET /v1/skills/pending), and the
+         catalog search and install form. Changes land on disk at once and
+         take effect when the gateway restarts. -->
+    <div class="pane" id="sk-pane">
+      <div class="sk-wrap">
+        <header class="sk-head">
+          <div>
+            <h2>Skills</h2>
+            <p class="sk-lead">A skill teaches the agent one task: instructions it reads when the task comes up, a prompt it can run, or a shell command it can call. Each is a <code>SKILL.md</code> in <code>workspace/skills/</code>; installs and removals take effect when the gateway restarts.
+              <a href="#settings" data-sk-settings>Options in Settings › Tools &amp; sandbox</a></p>
+          </div>
+          <div class="sk-head-actions">
+            <button type="button" class="icon-btn" id="sk-refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg><span>Refresh</span></button>
+            <button type="button" class="primary" id="sk-add-jump"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Add a skill</button>
+          </div>
+        </header>
+
+        <div class="sk-status" id="skill-status" role="status" aria-live="polite" hidden></div>
+
+        <section class="sk-sec" id="sk-pend-sec" aria-labelledby="sk-pend-h" hidden>
+          <div class="sk-sec-head"><h3 id="sk-pend-h">Waiting for your approval</h3><span class="n" id="sk-pend-n"></span></div>
+          <p class="sk-note">The agent wrote these. None is used until you approve it; read what it would save first.</p>
+          <div class="sk-list" id="sk-pending" role="list"></div>
+        </section>
+
+        <section class="sk-sec" aria-labelledby="sk-inst-h">
+          <div class="sk-sec-head">
+            <h3 id="sk-inst-h">Installed</h3><span class="n" id="sk-n"></span>
+            <label class="sk-filter" id="sk-filter-wrap" hidden><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+              <input id="sk-filter" type="search" autocomplete="off" placeholder="Filter by name or description" aria-label="Filter installed skills"></label>
+          </div>
+          <div class="sk-list" id="skills-pane" aria-live="polite"><div class="sk-msg">Loading skills…</div></div>
+        </section>
+
+        <section class="sk-sec" id="sk-add" aria-labelledby="sk-add-h">
+          <div class="sk-sec-head"><h3 id="sk-add-h">Add a skill</h3></div>
+          <div class="sk-add">
+            <form id="skill-search" class="sk-form">
+              <label for="skill-q">Search the catalog</label>
+              <div class="sk-form-row">
+                <input id="skill-q" type="search" autocomplete="off" placeholder="e.g. pdf, calendar, deploy">
+                <button class="icon-btn" id="skill-search-btn"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>Search</button>
+              </div>
+              <p class="sk-hint">Searches pasclaw.dev and ClawHub.</p>
+            </form>
+            <div class="sk-catalog" id="skill-catalog" aria-live="polite"></div>
+            <form id="skill-install" class="sk-form">
+              <label for="skill-target">Or install by name</label>
+              <div class="sk-form-row">
+                <input id="skill-target" type="text" autocomplete="off" spellcheck="false" placeholder="owner/repo, clawhub:slug, hub:slug or a slug">
+                <button class="primary" id="skill-install-btn"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg>Install</button>
+              </div>
+              <p class="sk-hint"><code>owner/repo</code> or <code>owner/repo/path</code> installs from GitHub, <code>clawhub:slug</code> from ClawHub, <code>hub:slug</code> from pasclaw.dev; a bare slug tries pasclaw.dev, then ClawHub. ClawHub installs record each file's digest, so a later change shows here.</p>
+            </form>
+          </div>
+        </section>
+      </div>
     </div>
   </div>
 
@@ -7339,166 +7517,9 @@ const tabLoaders = {
 
   cron() { cronSetup(); return cronLoad(); },
 
-  async skills() {
-    const pane = $("#skills-pane");
-    const status = $("#skill-status");
-    const form = $("#skill-install"), target = $("#skill-target");
-    const btn = $("#skill-install-btn");
-
-    function setStatus(msg, cls) {
-      status.textContent = msg || "";
-      status.className = "settings-status" + (cls ? " " + cls : "");
-    }
-    async function render() {
-      pane.innerHTML = "";
-      try {
-        const j = await (await gwFetch("/v1/skills")).json();
-        if (!j.skills || !j.skills.length) {
-          pane.innerHTML = `<div class="empty-pane">No skills installed. Install one above (e.g. <code>clawhub:slug</code> or <code>owner/repo</code>).</div>`;
-        } else {
-          for (const s of j.skills) {
-            const el = document.createElement("div");
-            el.className = "skill-card";
-            const kindLabel = s.kind || "knowledge";
-            el.innerHTML = `<button class="remove" type="button">remove</button>`
-                         + `<div><span class="name">${escapeHtml(s.name)}</span>`
-                         + `<span class="kind">${escapeHtml(kindLabel)}</span></div>`
-                         + (s.description ? `<div class="desc">${escapeHtml(s.description)}</div>` : "")
-                         + `<div class="path">${escapeHtml(s.path || s.dir || "")}</div>`;
-            el.querySelector(".remove").addEventListener("click", () => removeSkill(s.id || s.name, s.name));
-            pane.appendChild(el);
-          }
-        }
-      } catch (e) { pane.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
-      await renderPending();
-    }
-    /* Agent-authored skills awaiting operator approval (self-improving
-       skills). Only shows a block when there are any pending -- a
-       deployment that never enabled the feature sees nothing. */
-    async function renderPending() {
-      let p;
-      try { p = await (await gwFetch("/v1/skills/pending")).json(); }
-      catch { return; }
-      if (!p || !p.pending || !p.pending.length) return;
-      const hdr = document.createElement("div");
-      hdr.className = "skill-pending-hdr";
-      hdr.textContent = "Pending approval (" + p.pending.length + ")";
-      pane.appendChild(hdr);
-      for (const s of p.pending) {
-        const el = document.createElement("div");
-        el.className = "skill-card pending";
-        el.innerHTML =
-            `<div><span class="name">${escapeHtml(s.name)}</span>`
-          + `<span class="kind">${escapeHtml(s.action)}</span>`
-          + `<span class="path">${escapeHtml(s.id)}</span></div>`
-          + (s.content ? `<pre class="skill-preview">${escapeHtml(s.content)}</pre>` : "")
-          + `<div class="skill-actions">`
-          + `<button class="primary pend-approve" type="button">approve</button> `
-          + `<button class="pend-reject" type="button">reject</button>`
-          + `</div>`;
-        el.querySelector(".pend-approve").addEventListener("click", () => pendAction(s.id, "approve"));
-        el.querySelector(".pend-reject").addEventListener("click", () => pendAction(s.id, "reject"));
-        pane.appendChild(el);
-      }
-    }
-    async function pendAction(id, path) {
-      setStatus((path === "approve" ? "approving " : "rejecting ") + id + "…");
-      try {
-        const r = await gwFetch("/v1/skills/pending/" + path, {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ id }) });
-        const j = await r.json().catch(() => ({}));
-        if (r.ok) setStatus(path === "approve" ? "approved (effective next restart)" : "rejected", "ok");
-        else setStatus(path + " failed: " + (j.error || ("http " + r.status)), "err");
-      } catch (e) { setStatus(path + " failed: " + e, "err"); }
-      await render();
-    }
-    async function removeSkill(id, label) {
-      const shown = label || id;
-      if (!window.confirm('Remove skill "' + shown + '"? (files are deleted; restart to apply)')) return;
-      setStatus("removing " + shown + "…");
-      try {
-        const r = await gwFetch("/v1/skills/" + encodeURIComponent(id), { method: "DELETE" });
-        const j = await r.json().catch(() => ({}));
-        if (r.ok && j.removed) setStatus(j.note || "removed", "ok");
-        else setStatus("remove failed: " + (j.error || ("http " + r.status)), "err");
-      } catch (e) { setStatus("remove failed: " + e, "err"); }
-      await render();
-    }
-    /* Shared install path: used by the manual target form AND the per-row
-       Install buttons in the catalog results below. Returns true on success
-       so callers can decide whether to clear input / refresh. */
-    async function doInstall(t) {
-      if (!t) return false;
-      setStatus("installing " + t + "… (fetching from hub/GitHub)");
-      try {
-        const r = await gwFetch("/v1/skills", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ target: t }) });
-        const j = await r.json().catch(() => ({}));
-        if (r.ok && j.installed) { setStatus("installed " + j.installed + " — " + (j.note || ""), "ok"); return true; }
-        setStatus("install failed: " + (j.error || ("http " + r.status)), "err"); return false;
-      } catch (e) { setStatus("install failed: " + e, "err"); return false; }
-    }
-    async function install() {
-      const t = target.value.trim();
-      if (!t) return;
-      btn.disabled = true;
-      const ok = await doInstall(t);
-      btn.disabled = false;
-      if (ok) target.value = "";
-      await render();
-    }
-
-    /* Catalog browse-and-install: query GET /v1/skills/search and render
-       each hit with an Install button that targets the right hub via the
-       result's source (pasclaw.dev -> hub:, ClawHub -> clawhub:). */
-    const cform = $("#skill-search"), cq = $("#skill-q"), cres = $("#skill-catalog");
-    async function searchCatalog() {
-      const q = cq.value.trim();
-      if (!q) { cres.innerHTML = ""; return; }
-      cres.innerHTML = `<div class="empty-pane">searching the catalog…</div>`;
-      try {
-        const r = await gwFetch("/v1/skills/search?q=" + encodeURIComponent(q));
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok || j.error) {
-          cres.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(j.error || ("http " + r.status))}</div>`;
-          return;
-        }
-        const rows = j.results || [];
-        if (!rows.length) { cres.innerHTML = `<div class="empty-pane">No catalog skills match “${escapeHtml(q)}”.</div>`; return; }
-        cres.innerHTML = "";
-        for (const it of rows) {
-          const tgt = (it.source === "clawhub" ? "clawhub:" : "hub:") + it.slug;
-          const el = document.createElement("div");
-          el.className = "skill-card";
-          el.innerHTML = `<button class="primary install" type="button">install</button>`
-                       + `<div><span class="name">${escapeHtml(it.display_name || it.slug)}</span>`
-                       + `<span class="kind">${escapeHtml(it.source)}</span></div>`
-                       + (it.summary ? `<div class="desc">${escapeHtml(it.summary)}</div>` : "")
-                       + `<div class="path">${escapeHtml(tgt)}${it.version ? " · v" + escapeHtml(it.version) : ""}</div>`;
-          const ib = el.querySelector(".install");
-          ib.addEventListener("click", async () => {
-            ib.disabled = true;
-            const ok = await doInstall(tgt);
-            ib.disabled = false;
-            if (ok) { ib.textContent = "installed"; await render(); }
-          });
-          cres.appendChild(el);
-        }
-      } catch (e) { cres.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(String(e))}</div>`; }
-    }
-
-    if (!form.dataset.wired) {
-      form.dataset.wired = "1";
-      form.addEventListener("submit", e => { e.preventDefault(); install(); });
-    }
-    if (!cform.dataset.wired) {
-      cform.dataset.wired = "1";
-      cform.addEventListener("submit", e => { e.preventDefault(); searchCatalog(); });
-    }
-    await render();
-  },
+  /* Skills tab: installed, staged for approval, catalog and install.
+     See skSetup. */
+  skills() { skSetup(); return skLoad(); },
 
   async kb() {
     const upForm = $("#kb-upload"), file = $("#kb-file");
@@ -9042,6 +9063,463 @@ function cronFitArgs() {
     if (a.classList.contains("open")) { more.hidden = false; continue; }
     more.hidden = !(a.scrollHeight > a.clientHeight + 1);
   }
+}
+
+/* ===== Skills tab =====
+   A row per skill GET /v1/skills lists: its kind, where it came from and
+   whether its files still match when an install recorded that
+   (provenance, integrity), the description clamped to two lines, and
+   details (file, source, digest) behind a disclosure. The agent's staged
+   skills (GET /v1/skills/pending) come first, with the SKILL.md each
+   would save, Approve, and Reject. Remove and Reject ask in the row
+   before they delete anything. Catalog search and install by name close
+   the page. Names, descriptions and SKILL.md text are drawn as text. */
+const SK_KINDS = {
+  "": { label: "Knowledge", icon: "sk-book", tip: "Instructions the agent reads when the task comes up. Adds no tool." },
+  knowledge: { label: "Knowledge", icon: "sk-book", tip: "Instructions the agent reads when the task comes up. Adds no tool." },
+  prompt: { label: "Prompt", icon: "chat-bubble", tip: "A prompt the agent can run as a tool, and you as a slash command." },
+  shell: { label: "Shell", icon: "terminal", tip: "A shell command the agent can call as a tool." },
+};
+const SK_SOURCES = { clawhub: "ClawHub", pasclawhub: "pasclaw.dev", hub: "pasclaw.dev", github: "GitHub", local: "Local" };
+const SK_INTEGRITY = {
+  ok: ["ok", "Unchanged since install", "Every file matches the digest recorded when it was installed."],
+  modified: ["bad", "Changed since install", "A file's contents changed after it was installed."],
+  incomplete: ["bad", "Files missing", "A file recorded at install is gone."],
+  "extra files": ["bad", "Extra files", "A file was added after it was installed."],
+  "unreadable record": ["bad", "Install record damaged", "Its .provenance.json could not be read."],
+};
+const SK_ACTIONS = { create: "New skill", edit: "Rewrite", patch: "Edit" };
+const SK_FILTER_MIN = 6;
+let skWired = false, skSeq = 0, skSkills = [];
+
+function skEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function skBtn(cls, ic, label) {
+  const b = skEl("button", cls);
+  b.type = "button";
+  b.innerHTML = ic ? icon(ic) : "";
+  if (label) b.appendChild(skEl("span", "sk-btn-label", label));
+  return b;
+}
+function skAgo(iso) {
+  const t = Date.parse(iso || "");
+  if (isNaN(t)) return "";
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + " min ago";
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + " h ago";
+  return Math.floor(h / 24) + " days ago";
+}
+function skVer(v) { return v ? (/^v/i.test(v) ? v : "v" + v) : ""; }
+
+function skSetup() {
+  if (skWired) return;
+  skWired = true;
+  $("#sk-refresh").addEventListener("click", () => skLoad());
+  $("#sk-add-jump").addEventListener("click", skJumpToAdd);
+  $("#sk-filter").addEventListener("input", skApplyFilter);
+  $("#skill-install").addEventListener("submit", e => { e.preventDefault(); skInstallTyped(); });
+  $("#skill-search").addEventListener("submit", e => { e.preventDefault(); skSearch(); });
+  $("#tab-skills").addEventListener("click", e => {
+    if (e.target.closest("[data-sk-retry]")) { skLoad(); return; }
+    if (e.target.closest("[data-sk-add]")) { e.preventDefault(); skJumpToAdd(); return; }
+    if (e.target.closest("[data-sk-settings]")) {
+      e.preventDefault();
+      try { localStorage.setItem("pasclaw.settings.section", "tools"); } catch {}
+      showTab("settings");
+      const b = document.querySelector('#set-nav button[data-sec="tools"]');
+      if (b && $("#tab-settings").classList.contains("active")) b.click();
+      return;
+    }
+    if (e.target.closest(".sk-status-x")) { skStatus(); return; }
+    const more = e.target.closest(".sk-more");
+    if (more) {
+      const d = more.previousElementSibling, open = !d.classList.contains("open");
+      d.classList.toggle("open", open);
+      more.textContent = open ? "Show less" : "Show all";
+      more.setAttribute("aria-expanded", String(open));
+    }
+  });
+  let t = 0;
+  window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(skFitDesc, 150); });
+  tabHooks.skills = { show: () => skLoad() };
+}
+
+function skJumpToAdd() {
+  $("#sk-add").scrollIntoView({ block: "start", behavior: "smooth" });
+  $("#skill-q").focus({ preventScroll: true });
+}
+
+/* The banner for the last action: busy (neutral), ok or err. */
+function skStatus(kind, msg) {
+  const el = $("#skill-status");
+  if (!msg) { el.hidden = true; el.replaceChildren(); return; }
+  el.className = "sk-status" + (kind === "ok" || kind === "err" ? " " + kind : "");
+  el.innerHTML = icon(kind === "ok" ? "check" : kind === "err" ? "alert" : "info");
+  el.appendChild(skEl("span", "sk-status-text", msg));
+  if (kind !== "busy") {
+    const x = skBtn("sk-status-x", "x", "");
+    x.setAttribute("aria-label", "Dismiss");
+    el.appendChild(x);
+  }
+  el.hidden = false;
+}
+
+async function skGet(path) {
+  try {
+    const r = await gwFetch(path);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, err: j.error || ("HTTP " + r.status) };
+    return { ok: true, j };
+  } catch (e) { return { ok: false, err: String(e && e.message || e) }; }
+}
+
+async function skLoad() {
+  const list = $("#skills-pane"), seq = ++skSeq, btn = $("#sk-refresh");
+  btn.disabled = true; btn.classList.add("busy");
+  if (!list.querySelector(".sk-row")) {
+    list.removeAttribute("role");
+    list.replaceChildren(skEl("div", "sk-msg", "Loading skills…"));
+  }
+  const [inst, pend] = await Promise.all([skGet("/v1/skills"), skGet("/v1/skills/pending")]);
+  if (seq !== skSeq) return;
+  btn.disabled = false; btn.classList.remove("busy");
+  /* Staged skills are a feature a deployment may never turn on: if the
+     route fails, the section stays away rather than showing an error. */
+  skRenderPending(pend.ok && Array.isArray(pend.j.pending) ? pend.j.pending : []);
+  if (!inst.ok) {
+    skSkills = [];
+    $("#sk-n").textContent = "";
+    $("#sk-filter-wrap").hidden = true;
+    list.removeAttribute("role");
+    const m = skEl("div", "sk-msg err");
+    m.append(skEl("span", null, "Couldn't load the skills: " + inst.err));
+    const retry = skEl("button", "icon-btn", "Try again");
+    retry.type = "button"; retry.dataset.skRetry = "";
+    m.appendChild(retry);
+    list.replaceChildren(m);
+    return;
+  }
+  skSkills = Array.isArray(inst.j.skills) ? inst.j.skills : [];
+  skRender();
+}
+
+function skRender() {
+  const list = $("#skills-pane"), n = skSkills.length;
+  $("#sk-n").textContent = n ? String(n) : "";
+  $("#sk-filter-wrap").hidden = n < SK_FILTER_MIN;
+  if (!n) {
+    list.removeAttribute("role");
+    const d = skEl("div", "sk-empty");
+    d.innerHTML = '<span class="sk-empty-ic">' + icon("sk-book") + '</span><div><b>No skills installed</b>'
+      + '<p>Find one in the <a href="#skills" data-sk-add>catalog below</a>, or install one by name: '
+      + '<code>owner/repo</code> from GitHub, <code>clawhub:slug</code> from ClawHub. The agent can also write '
+      + 'skills for you to approve; that is set in <a href="#settings" data-sk-settings>Settings › Tools &amp; sandbox</a>.</p></div>';
+    list.replaceChildren(d);
+    return;
+  }
+  list.setAttribute("role", "list");
+  list.replaceChildren(...skSkills.map(skRow), skEl("div", "sk-msg sk-nomatch"));
+  skApplyFilter();
+}
+
+function skApplyFilter() {
+  const wrap = $("#sk-filter-wrap");
+  const q = wrap.hidden ? "" : $("#sk-filter").value.trim().toLowerCase();
+  let shown = 0;
+  for (const r of $$("#skills-pane .sk-row")) {
+    const hit = !q || r.dataset.q.includes(q);
+    r.hidden = !hit;
+    if (hit) shown++;
+  }
+  const none = $("#skills-pane .sk-nomatch");
+  if (none) {
+    none.hidden = !q || shown > 0;
+    none.textContent = "No installed skill matches “" + q + "”.";
+  }
+  $("#sk-n").textContent = skSkills.length ? (q ? shown + " of " + skSkills.length : String(skSkills.length)) : "";
+  skFitDesc();
+}
+
+/* Show all appears only where the two-line clamp hides something. */
+function skFitDesc() {
+  for (const d of $$("#tab-skills .sk-desc")) {
+    const more = d.nextElementSibling;
+    if (!more || !more.classList.contains("sk-more")) continue;
+    if (d.classList.contains("open")) { more.hidden = false; continue; }
+    more.hidden = !(d.scrollHeight > d.clientHeight + 1);
+  }
+}
+
+function skDesc(text) {
+  const wrap = skEl("div", "sk-desc-wrap");
+  wrap.appendChild(skEl("p", "sk-desc" + (text ? "" : " none"), text || "No description."));
+  if (text) {
+    const more = skEl("button", "sk-more", "Show all");
+    more.type = "button"; more.hidden = true;
+    more.setAttribute("aria-expanded", "false");
+    wrap.appendChild(more);
+  }
+  return wrap;
+}
+
+function skKind(k) {
+  const key = String(k || "").toLowerCase();
+  return SK_KINDS[key] || { label: k, icon: "sk-book", tip: "" };
+}
+
+/* An in-row confirm for a step that deletes something: the trigger opens
+   it, Cancel or Escape closes it, the red button runs onGo. */
+function skConfirm(row, trigger, title, text, goLabel, onGo) {
+  const box = skEl("div", "sk-confirm");
+  box.hidden = true;
+  box.setAttribute("role", "alertdialog");
+  box.innerHTML = icon("alert");
+  const t = skEl("div", "sk-confirm-text");
+  t.append(skEl("b", null, title), skEl("span", null, text));
+  const acts = skEl("div", "sk-confirm-actions");
+  const cancel = skEl("button", "icon-btn sk-cancel", "Cancel");
+  const go = skEl("button", "sk-btn-danger sk-go", goLabel);
+  cancel.type = go.type = "button";
+  acts.append(cancel, go);
+  box.append(t, acts);
+  const set = open => {
+    box.hidden = !open;
+    trigger.setAttribute("aria-expanded", String(open));
+    if (open) cancel.focus(); else trigger.focus();
+  };
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.addEventListener("click", () => set(box.hidden));
+  cancel.addEventListener("click", () => set(false));
+  box.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); set(false); } });
+  go.addEventListener("click", async () => {
+    go.disabled = cancel.disabled = trigger.disabled = true;
+    await onGo();
+  });
+  row.appendChild(box);
+}
+
+function skRow(s) {
+  const kind = skKind(s.kind), p = s.provenance || null;
+  const name = s.name || s.id || "(no name)";
+  const row = skEl("div", "sk-row sk-inst");
+  row.setAttribute("role", "listitem");
+  row.dataset.id = s.id || "";
+  row.dataset.q = [s.name, s.id, s.description].join("\n").toLowerCase();
+  const ic = skEl("span", "sk-ic");
+  ic.innerHTML = icon(kind.icon);
+  ic.title = kind.label;
+
+  const main = skEl("div", "sk-main"), l1 = skEl("div", "sk-l1");
+  l1.appendChild(skEl("span", "sk-name", name));
+  const kt = skEl("span", "sk-tag sk-kind", kind.label);
+  if (kind.tip) kt.title = kind.tip;
+  l1.appendChild(kt);
+  if (p && p.source) {
+    const src = skEl("span", "sk-tag plain sk-src", [SK_SOURCES[p.source] || p.source, skVer(p.version)].filter(Boolean).join(" "));
+    src.title = "Where it was installed from";
+    l1.appendChild(src);
+  }
+  if (s.integrity) {
+    const [cls, label, tip] = SK_INTEGRITY[s.integrity] || ["bad", s.integrity, ""];
+    const it = skEl("span", "sk-tag sk-integrity " + cls, label);
+    if (tip) it.title = tip;
+    l1.appendChild(it);
+  }
+  main.append(l1, skDesc(s.description));
+
+  const det = skEl("details", "sk-det");
+  det.appendChild(skEl("summary", null, "Details"));
+  const dl = skEl("dl", "sk-facts");
+  const fact = (k, v, cls) => { dl.append(skEl("dt", null, k), skEl("dd", cls || null, v)); };
+  fact("Kind", kind.label + (kind.tip ? ". " + kind.tip : ""));
+  fact("File", s.path || s.dir || "", "mono");
+  if (p) {
+    fact("Source", [SK_SOURCES[p.source] || p.source, p.slug, skVer(p.version)].filter(Boolean).join(" · "));
+    if (p.installed_at) {
+      const d = new Date(p.installed_at);
+      fact("Installed", isNaN(d) ? p.installed_at : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }));
+    }
+    if (p.archive_sha256) fact("Archive SHA-256", p.archive_sha256, "mono");
+    if (s.integrity) fact("Files", (SK_INTEGRITY[s.integrity] || [0, 0, s.integrity])[2]);
+  } else {
+    fact("Source", "Not recorded. ClawHub installs keep a record of where a skill came from; others do not.");
+  }
+  det.appendChild(dl);
+  main.appendChild(det);
+
+  const side = skEl("div", "sk-side");
+  const rm = skBtn("icon-btn sk-danger sk-remove", "trash", "Remove");
+  rm.title = "Delete this skill's files";
+  rm.setAttribute("aria-label", "Remove " + name);
+  side.appendChild(rm);
+  row.append(ic, main, side);
+  skConfirm(row, rm, "Remove " + name + "?",
+    "Its files in workspace/skills/ are deleted, which cannot be undone. The agent stops seeing it when the gateway restarts.",
+    "Remove", () => skRemove(s));
+  return row;
+}
+
+async function skRemove(s) {
+  const shown = s.name || s.id;
+  skStatus("busy", "Removing " + shown + "…");
+  try {
+    const r = await gwFetch("/v1/skills/" + encodeURIComponent(s.id || s.name), { method: "DELETE" });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.removed) skStatus("ok", "Removed " + shown + ". Restart the gateway to drop it from the agent's tools.");
+    else skStatus("err", "Couldn't remove " + shown + ": " + (j.error || ("HTTP " + r.status)));
+  } catch (e) { skStatus("err", "Couldn't remove " + shown + ": " + (e && e.message || e)); }
+  await skLoad();
+}
+
+function skRenderPending(items) {
+  $("#sk-pend-sec").hidden = !items.length;
+  $("#sk-pend-n").textContent = items.length ? String(items.length) : "";
+  $("#sk-pending").replaceChildren(...items.map(skPendRow));
+}
+
+function skPendRow(p) {
+  const name = p.name || p.id || "(no name)";
+  const row = skEl("div", "sk-row sk-pend");
+  row.setAttribute("role", "listitem");
+  row.dataset.id = p.id || "";
+  const ic = skEl("span", "sk-ic");
+  ic.innerHTML = icon("eye");
+  ic.title = "Waiting for review";
+
+  const main = skEl("div", "sk-main"), l1 = skEl("div", "sk-l1");
+  l1.append(skEl("span", "sk-name", name),
+            skEl("span", "sk-tag accent sk-action", SK_ACTIONS[p.action] || p.action || "Change"));
+  const ago = skAgo(p.created);
+  if (ago) {
+    const t = skEl("time", "sk-time", "staged " + ago);
+    t.dateTime = p.created;
+    t.title = new Date(p.created).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
+    l1.appendChild(t);
+  }
+  main.appendChild(l1);
+  const det = skEl("details", "sk-det");
+  det.open = true;
+  det.appendChild(skEl("summary", null, "SKILL.md it would save"));
+  det.appendChild(skEl("pre", "sk-pre", p.content || "(empty)"));
+  main.appendChild(det);
+
+  const side = skEl("div", "sk-side");
+  const rej = skBtn("icon-btn sk-danger sk-reject", "x", "Reject");
+  const ok = skBtn("primary sk-approve", "check", "Approve");
+  ok.title = "Save it to workspace/skills/. It loads when the gateway restarts.";
+  side.append(rej, ok);
+  row.append(ic, main, side);
+  ok.addEventListener("click", async () => {
+    ok.disabled = rej.disabled = true;
+    await skPendAction(p, "approve");
+  });
+  skConfirm(row, rej, "Reject " + name + "?",
+    "The staged SKILL.md is deleted and nothing is saved. The agent can propose it again later.",
+    "Reject", () => skPendAction(p, "reject"));
+  return row;
+}
+
+async function skPendAction(p, act) {
+  const shown = p.name || p.id;
+  skStatus("busy", (act === "approve" ? "Approving " : "Rejecting ") + shown + "…");
+  try {
+    const r = await gwFetch("/v1/skills/pending/" + act, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: p.id }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) skStatus("ok", act === "approve"
+      ? "Approved " + shown + ". It is saved and loads when the gateway restarts."
+      : "Rejected " + shown + ". Nothing was saved.");
+    else skStatus("err", "Couldn't " + act + " " + shown + ": " + (j.error || ("HTTP " + r.status)));
+  } catch (e) { skStatus("err", "Couldn't " + act + " " + shown + ": " + (e && e.message || e)); }
+  if (typeof refreshApprovals === "function") refreshApprovals();
+  await skLoad();
+}
+
+/* POST /v1/skills: shared by the typed target and the catalog's Install
+   buttons. True on success. */
+async function skInstall(t) {
+  if (!t) return false;
+  skStatus("busy", "Installing " + t + "… fetching it from the hub or GitHub.");
+  try {
+    const r = await gwFetch("/v1/skills", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target: t }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.installed) {
+      skStatus("ok", "Installed " + j.installed + ". Restart the gateway to load it into the agent's tools.");
+      return true;
+    }
+    skStatus("err", "Couldn't install " + t + ": " + (j.error || ("HTTP " + r.status)));
+  } catch (e) { skStatus("err", "Couldn't install " + t + ": " + (e && e.message || e)); }
+  return false;
+}
+
+async function skInstallTyped() {
+  const input = $("#skill-target"), btn = $("#skill-install-btn"), t = input.value.trim();
+  if (!t) { input.focus(); return; }
+  btn.disabled = true;
+  const ok = await skInstall(t);
+  btn.disabled = false;
+  if (ok) input.value = "";
+  await skLoad();
+}
+
+/* GET /v1/skills/search: each hit installs through the hub it came from
+   (pasclaw.dev -> hub:, ClawHub -> clawhub:). */
+async function skSearch() {
+  const q = $("#skill-q").value.trim(), res = $("#skill-catalog"), btn = $("#skill-search-btn");
+  if (!q) { res.replaceChildren(); return; }
+  btn.disabled = true;
+  res.replaceChildren(skEl("div", "sk-msg", "Searching the catalog…"));
+  const g = await skGet("/v1/skills/search?q=" + encodeURIComponent(q));
+  btn.disabled = false;
+  if (!g.ok || g.j.error) {
+    res.replaceChildren(skEl("div", "sk-msg err", "Search failed: " + (g.ok ? g.j.error : g.err)));
+    return;
+  }
+  const rows = Array.isArray(g.j.results) ? g.j.results : [];
+  if (!rows.length) { res.replaceChildren(skEl("div", "sk-msg", "No catalog skill matches “" + q + "”.")); return; }
+  const list = skEl("div", "sk-list");
+  list.setAttribute("role", "list");
+  list.append(...rows.map(skCatRow));
+  res.replaceChildren(list);
+  skFitDesc();
+}
+
+function skCatRow(it) {
+  const tgt = (it.source === "clawhub" ? "clawhub:" : "hub:") + it.slug;
+  const row = skEl("div", "sk-row sk-cat");
+  row.setAttribute("role", "listitem");
+  const ic = skEl("span", "sk-ic");
+  ic.innerHTML = icon("cloud");
+  const main = skEl("div", "sk-main"), l1 = skEl("div", "sk-l1");
+  l1.appendChild(skEl("span", "sk-name", it.display_name || it.slug));
+  l1.appendChild(skEl("span", "sk-tag plain", [SK_SOURCES[it.source] || it.source, skVer(it.version)].filter(Boolean).join(" ")));
+  main.append(l1, skDesc(it.summary));
+  const meta = skEl("div", "sk-hint");
+  meta.append("Installs as ", skEl("code", null, tgt));
+  main.appendChild(meta);
+  const side = skEl("div", "sk-side");
+  const have = skSkills.some(s => s.id === it.slug || (s.provenance && s.provenance.slug === it.slug));
+  const b = skBtn("icon-btn sk-install", have ? "check" : "download", have ? "Installed" : "Install");
+  b.disabled = have;
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    if (await skInstall(tgt)) {
+      b.innerHTML = icon("check");
+      b.appendChild(skEl("span", "sk-btn-label", "Installed"));
+      await skLoad();
+    } else b.disabled = false;
+  });
+  side.appendChild(b);
+  row.append(ic, main, side);
+  return row;
 }
 
 /* Scheduled work has its own tab and route; say how much there is. */

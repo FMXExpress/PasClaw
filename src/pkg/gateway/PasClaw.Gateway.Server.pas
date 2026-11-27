@@ -759,6 +759,7 @@ uses
   PasClaw.Tools.Types,        { TTool -- MCP tool enumeration for the palette }
   PasClaw.Skills.Zip,       { PackDirToZip -- workspace export download }
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
+  PasClaw.Skills.Provenance, { ReadProvenance / VerifySkill -- GET /v1/skills }
   PasClaw.Skills.ClawHub,  { SearchClawHub -- catalog search (clawhub.ai) }
   PasClaw.Skills.PasClawHub, { SearchPasClawHub -- catalog search (pasclaw.dev) }
   PasClaw.KB.Index,        { IKBIndex -- /v1/kb list / upload / search }
@@ -2754,8 +2755,11 @@ procedure TGatewayServer.HandleSkillsList(AResp: TIdHTTPResponseInfo);
 var
   Root: TJsonObject;
   Arr: TJsonArray;
-  Item: TJsonObject;
+  Item, ProvObj: TJsonObject;
   Skills: TSkillSpecArray;
+  Prov: TSkillProvenance;
+  Ver: TSkillVerifyResult;
+  ProvErr: string;
   i: Integer;
 begin
   Root := TJsonObject.Create;
@@ -2771,6 +2775,27 @@ begin
       Item.PutStr('kind',        Skills[i].Kind);
       Item.PutStr('path',        Skills[i].Source);
       Item.PutStr('dir',         Skills[i].Dir);
+      { Where a skill came from and whether its files still match, when an
+        install recorded it (.provenance.json, see PasClaw.Skills.
+        Provenance). Absent for skills with no record: installed by hand,
+        from GitHub, or before records existed. Legacy .json skills sit in
+        the skills root itself, which has no record of its own. }
+      if not HasSuffix(LowerCase(Skills[i].Source), '.json') then
+      begin
+        Ver := VerifySkill(Skills[i].Dir);
+        if Ver.Status <> svNoRecord then
+          Item.PutStr('integrity', LowerCase(VerifyStatusText(Ver.Status)));
+        if ReadProvenance(Skills[i].Dir, Prov, ProvErr) then
+        begin
+          ProvObj := TJsonObject.Create;
+          ProvObj.PutStr('source',         Prov.Source);
+          ProvObj.PutStr('slug',           Prov.Slug);
+          ProvObj.PutStr('version',        Prov.Version);
+          ProvObj.PutStr('installed_at',   Prov.InstalledAt);
+          ProvObj.PutStr('archive_sha256', Prov.ArchiveSha256);
+          Item.PutObject('provenance', ProvObj);
+        end;
+      end;
       Arr.AddObject(Item);
     end;
     Root.PutArray('skills', Arr);
