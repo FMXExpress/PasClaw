@@ -513,11 +513,125 @@
   .col-list .crumb{font-family:var(--mono);font-size:11.5px;color:var(--text-3);padding:.3rem .55rem .45rem;
     border-bottom:1px solid var(--border);margin-bottom:.35rem;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .fs-roots{display:flex;gap:.25rem;padding:.1rem .3rem .45rem;flex-wrap:wrap}
-  .fs-roots button{background:transparent;color:var(--text-2);border:1px solid var(--border-strong);
-    border-radius:999px;padding:.1rem .6rem;font-size:12px}
-  .fs-roots button:hover{background:var(--surface-2);color:var(--text)}
-  .fs-roots button.active{background:var(--surface-3);border-color:transparent;color:var(--text)}
+
+  /* ===== Files tab =====
+     A folder on the left (roots, a breadcrumb, then folders and files with
+     size and modified time), the open file on the right: a header with its
+     name, folder, size and actions, then the text with line numbers, the
+     rendered Markdown, an image, or a hex dump. Below 760px the two stack,
+     the folder above the file. Everything is scoped to fsb-. */
+  .fsb-shell{flex:1;min-width:0;min-height:0;display:flex}
+  .fsb-side{flex:0 0 24rem;min-width:0;display:flex;flex-direction:column;
+    border-right:1px solid var(--border);background:var(--surface)}
+  .fsb-bar{display:flex;align-items:flex-start;gap:.35rem;padding:.6rem .75rem}
+  .fsb-roots{display:flex;gap:2px;padding:3px;margin:.75rem .75rem 0;align-self:flex-start;min-width:0;
+    background:var(--surface-2);border:1px solid var(--border);border-radius:8px}
+  .fsb-roots:empty{display:none}
+  .fsb-roots button{background:transparent;border:0;border-radius:6px;padding:.22rem .7rem;
+    font-size:12.5px;color:var(--text-2);white-space:nowrap}
+  .fsb-roots button:hover{background:var(--surface-3);color:var(--text)}
+  .fsb-roots button[aria-pressed=true]{background:var(--surface-3);color:var(--text);font-weight:550}
+  html.lite .fsb-roots button[aria-pressed=true]{background:var(--surface);
+    box-shadow:0 1px 2px rgba(20,25,40,.1),0 0 0 1px var(--border)}
+  .fsb-ibtn{justify-content:center;width:28px;height:28px;padding:0;flex:none}
+  .fsb-ibtn svg.ic{vertical-align:0}
+  .fsb-crumb{flex:1;display:flex;align-items:center;flex-wrap:wrap;gap:.05rem .1rem;min-width:0;
+    min-height:28px;margin-left:-.3rem;font-size:13px}
+  .fsb-crumb button{display:inline-flex;align-items:center;gap:.3rem;max-width:14rem;min-width:0;
+    background:transparent;border:0;border-radius:4px;padding:.12rem .3rem;color:var(--text-2);font-size:13px}
+  .fsb-crumb button>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fsb-crumb button:hover{background:var(--surface-2);color:var(--text)}
+  .fsb-crumb button[aria-current=page]{color:var(--text);font-weight:600;cursor:default}
+  .fsb-crumb button[aria-current=page]:hover{background:transparent}
+  .fsb-crumb .sep{color:var(--text-3);padding:0 .05rem;user-select:none}
+  .fsb-cols,.fsb-row{display:grid;grid-template-columns:minmax(0,1fr) 4.6rem 5.6rem;align-items:center;gap:.6rem}
+  .fsb-cols{padding:.35rem 1.1rem .35rem 1.15rem;border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+    font-size:11.5px;font-weight:500;color:var(--text-3)}
+  .fsb-cols>span+span,.fsb-row>.fsb-size,.fsb-row>.fsb-mod{text-align:right}
+  .fsb-list{flex:1;min-height:0;overflow:auto;padding:.35rem .4rem;outline:none}
+  .fsb-row{padding:.34rem .7rem .34rem .75rem;border-radius:var(--radius);cursor:pointer;
+    font-size:13px;color:var(--text);user-select:none}
+  .fsb-row:hover{background:var(--surface-2)}
+  .fsb-row[aria-selected=true]{background:var(--accent-soft)}
+  .fsb-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .fsb-name{display:flex;align-items:center;gap:.5rem;min-width:0}
+  .fsb-name>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fsb-name svg.ic{color:var(--text-3);vertical-align:0}
+  .fsb-row.dir .fsb-name svg.ic{color:var(--accent)}
+  .fsb-size,.fsb-mod{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .fsb-count{padding:.45rem 1.15rem;border-top:1px solid var(--border);font-size:12px;color:var(--text-3)}
+  .fsb-count:empty{display:none}
+  .fsb-skel{height:.8rem;margin:.72rem .75rem;border-radius:4px;background:var(--surface-2)}
+  .fsb-skel:nth-child(2n){width:70%} .fsb-skel:nth-child(3n){width:55%}
+
+  /* Empty, error and nothing-open states: the Relay tab's pattern. */
+  .fsb-state{display:flex;gap:.8rem;align-items:flex-start;padding:1.1rem .8rem;max-width:30rem}
+  .fsb-view>.fsb-body>.fsb-state{margin:16vh auto 0;padding:1.2rem 1.5rem}
+  .fsb-state-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:34px;height:34px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .fsb-side .fsb-state-ic{background:var(--surface-3)}
+  .fsb-state-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .fsb-state.err .fsb-state-ic{background:var(--danger-soft);color:var(--danger)}
+  .fsb-state b{display:block;margin-bottom:.15rem;font-size:13.5px;font-weight:600;color:var(--text)}
+  .fsb-state p{margin:0;font-size:13px;line-height:1.55;color:var(--text-2);overflow-wrap:anywhere}
+  .fsb-state .icon-btn{margin-top:.6rem}
+
+  .fsb-view{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
+  .fsb-vhead{display:flex;align-items:center;flex-wrap:wrap;gap:.5rem .75rem;min-width:0;
+    padding:.6rem 1rem;border-bottom:1px solid var(--border);background:var(--surface)}
+  .fsb-vhead[hidden]{display:none}
+  .fsb-vic{display:inline-flex;color:var(--text-3)}
+  .fsb-vic svg.ic{vertical-align:0}
+  .fsb-vtitle{display:flex;flex-direction:column;flex:1 1 12rem;min-width:0}
+  .fsb-vtitle b{font-size:13.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fsb-vtitle span{font:11.5px/1.45 var(--mono);color:var(--text-3);overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap}
+  .fsb-vsize{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .fsb-vact{display:flex;align-items:center;gap:.35rem}
+  #fsb-close{display:none}
+  .fsb-seg{display:flex;gap:2px;padding:2px;background:var(--surface-2);border:1px solid var(--border);border-radius:7px}
+  .fsb-seg[hidden]{display:none}
+  .fsb-seg button{background:transparent;border:0;border-radius:5px;padding:.14rem .6rem;font-size:12px;color:var(--text-2)}
+  .fsb-seg button:hover{background:var(--surface-3);color:var(--text)}
+  .fsb-seg button[aria-pressed=true]{background:var(--surface-3);color:var(--text);font-weight:550}
+  html.lite .fsb-seg button[aria-pressed=true]{background:var(--surface);box-shadow:0 0 0 1px var(--border)}
+  .fsb-note{display:flex;align-items:flex-start;gap:.5rem;margin:.75rem 1rem 0;padding:.55rem .8rem;
+    border:1px solid var(--warn);border-radius:8px;background:var(--warn-soft);
+    font-size:13px;line-height:1.5;color:var(--text)}
+  .fsb-note svg.ic{margin-top:2px;color:var(--warn)}
+  .fsb-note.info{border-color:var(--border);background:var(--surface)}
+  .fsb-note.info svg.ic{color:var(--accent)}
+  .fsb-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+  .fsb-code{flex:1;min-height:0;display:flex;align-items:flex-start;overflow:auto;
+    font:12.5px/1.6 var(--mono)}
+  .fsb-code pre{margin:0;font:inherit;white-space:pre}
+  .fsb-ln{position:sticky;left:0;flex:none;min-height:100%;padding:.75rem .7rem .75rem 1rem;text-align:right;
+    color:var(--text-3);background:var(--bg);border-right:1px solid var(--border);user-select:none}
+  .fsb-text{flex:1;padding:.75rem 1.2rem 1.5rem .9rem;color:var(--text);tab-size:4}
+  .fsb-md{flex:1;min-height:0;overflow:auto;padding:1.25rem 1.6rem 2rem;font-size:14px;line-height:1.6}
+  .fsb-md>*{max-width:52rem}
+  .fsb-scroll{flex:1;min-height:0;overflow:auto;padding:1rem}
+  .fsb-scroll .hexdump{color:var(--text-2)}
+  .fsb-empty-file{padding:1rem 1.2rem;font-size:13px;color:var(--text-3)}
+  /* Narrow: the folder above the file. With nothing open the folder has
+     the whole height; with a file open it keeps the top part and the file
+     takes the rest, with a close button to give the height back. */
+  @media (max-width:760px){
+    .fsb-shell{flex-direction:column}
+    .fsb-side{flex:1 1 auto;min-height:0;border-right:0;overflow:hidden}
+    .fsb-shell:not(.open) .fsb-view{display:none}
+    .fsb-shell.open .fsb-side{flex:0 0 auto;max-height:40%;border-bottom:1px solid var(--border)}
+    .fsb-cols,.fsb-row{grid-template-columns:minmax(0,1fr) 4.2rem 4.6rem;gap:.45rem}
+    .fsb-vhead{padding:.5rem .75rem}
+    .fsb-vtitle{flex-basis:7rem}
+    .fsb-vact .lbl{display:none}
+    #fsb-close{display:inline-flex}
+    .fsb-ln{padding-left:.6rem;padding-right:.5rem}
+    .fsb-text{padding-right:.75rem}
+    .fsb-md{padding:1rem .9rem 1.5rem}
+    .fsb-note{margin:.6rem .75rem 0}
+  }
 
   /* ===== Table tabs (MCP, Cron) ===== */
   .pane{flex:1;overflow:auto;padding:1.25rem;min-width:0}
@@ -1459,6 +1573,8 @@
   <symbol id="i-chat-send" viewBox="0 0 16 16"><path d="M8 13V3.25M4 7.25l4-4 4 4"/></symbol>
   <symbol id="i-chat-down" viewBox="0 0 16 16"><path d="M8 3v9.75M4 8.75l4 4 4-4"/></symbol>
   <symbol id="i-chat-bubble" viewBox="0 0 16 16"><path d="M3.5 2.75h9a1.75 1.75 0 0 1 1.75 1.75v5a1.75 1.75 0 0 1-1.75 1.75H8.25L5 13.5v-2.25H3.5A1.75 1.75 0 0 1 1.75 9.5v-5A1.75 1.75 0 0 1 3.5 2.75Z"/><path d="M5.25 6.25h5.5M5.25 8.5h3.5"/></symbol>
+  <symbol id="i-files-folder" viewBox="0 0 16 16"><path d="M2 4.25c0-.7.55-1.25 1.25-1.25h2.9l1.5 1.75h5.1c.7 0 1.25.55 1.25 1.25v6.25c0 .7-.55 1.25-1.25 1.25h-9.5C2.55 13.5 2 12.95 2 12.25z"/></symbol>
+  <symbol id="i-files-up" viewBox="0 0 16 16"><path d="M8 13V3.5M4.25 7.25 8 3.5l3.75 3.75"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 16 16"><path d="M4.75 12.5h6.75a2.75 2.75 0 0 0 .3-5.48 4 4 0 0 0-7.7 1.1A2.2 2.2 0 0 0 4.75 12.5Z"/></symbol>
   <symbol id="i-cron-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="M8 4.75V8l2.25 1.5"/></symbol>
 </defs></svg>
@@ -1672,13 +1788,41 @@
   </div>
 
   <div id="tab-files" class="tab">
-    <div class="two-col">
-      <div class="col-list">
-        <div class="fs-roots" id="fs-roots"></div>
-        <div class="crumb" id="fs-crumb">…</div>
-        <div id="fs-list"></div>
-      </div>
-      <pre class="col-view" id="fs-view"><div class="empty-pane">Pick a file to view.</div></pre>
+    <!-- Files: browse the workspace (GET /v1/fs) and read one file at a time
+         (GET /v1/fs/read, capped at 256 KB; binaries page through
+         /v1/fs/peek). Names and contents are drawn as text. -->
+    <div class="fsb-shell" id="fsb-shell">
+      <section class="fsb-side" aria-label="Folder">
+        <div class="fsb-roots" id="fs-roots" role="group" aria-label="Roots"></div>
+        <div class="fsb-bar">
+          <div class="fsb-crumb" id="fs-crumb" role="navigation" aria-label="Path"></div>
+          <button type="button" class="icon-btn fsb-ibtn" id="fsb-up" title="Parent folder (Backspace)" aria-label="Parent folder"><svg class="ic" aria-hidden="true"><use href="#i-files-up"/></svg></button>
+          <button type="button" class="icon-btn fsb-ibtn" id="fsb-refresh" title="Refresh" aria-label="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+        </div>
+        <div class="fsb-cols" aria-hidden="true"><span>Name</span><span>Size</span><span>Modified</span></div>
+        <div class="fsb-list" id="fs-list" role="listbox" aria-label="Files"></div>
+        <div class="fsb-count" id="fsb-count" aria-live="polite"></div>
+      </section>
+      <section class="fsb-view" aria-label="File">
+        <header class="fsb-vhead" id="fsb-vhead" hidden>
+          <span class="fsb-vic" id="fsb-vic"></span>
+          <div class="fsb-vtitle">
+            <b id="fsb-vname"></b>
+            <span id="fsb-vpath"></span>
+          </div>
+          <span class="fsb-vsize" id="fsb-vsize"></span>
+          <div class="fsb-seg" id="fsb-mdseg" role="group" aria-label="Markdown view" hidden>
+            <button type="button" data-md="preview" aria-pressed="true">Preview</button>
+            <button type="button" data-md="source" aria-pressed="false">Source</button>
+          </div>
+          <div class="fsb-vact">
+            <button type="button" class="icon-btn" id="fsb-copy" title="Copy the file's text"><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg><span class="lbl">Copy</span></button>
+            <button type="button" class="icon-btn" id="fsb-dl" title="Download"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg><span class="lbl">Download</span></button>
+            <button type="button" class="icon-btn fsb-ibtn" id="fsb-close" title="Close the file" aria-label="Close the file"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
+          </div>
+        </header>
+        <div class="fsb-body" id="fs-view"></div>
+      </section>
     </div>
   </div>
 
@@ -3577,42 +3721,429 @@ function looksBinary(s) {
   return n > 0 && ctrl / n > 0.15;
 }
 
-async function viewFile(path, name, size) {
-  const v = $("#fs-view");
+/* ===== Files tab: the folder list and the open file =====
+   GET /v1/fs lists a folder (name, size, dir, mtime); GET /v1/fs/read reads
+   one file, capped at 256 KB, and flags binaries, which page through
+   /v1/fs/peek. Every name and every byte of content goes in as text --
+   only Markdown goes through renderMarkdown, which escapes first. */
+const fsb = { cwd: "", roots: { ws: "", cwd: "" }, entries: [], sel: -1, seq: 0, vseq: 0,
+              open: null, text: null, md: "preview" };
+const fsbSep = p => (p.indexOf("/") >= 0 || p.indexOf("\\") < 0) ? "/" : "\\";
+const fsbNorm = p => (p.length > 1 ? p.replace(/[\\/]+$/, "") : p);
+function fsbJoin(dir, name) {
+  const s = fsbSep(dir);
+  return /[\\/]$/.test(dir) ? dir + name : dir + s + name;
+}
+/* An absolute path as breadcrumb segments, each with the path it opens. */
+function fsbSegments(p) {
+  const s = fsbSep(p), segs = [];
+  let acc = "";
+  p.split(/[\\/]+/).forEach((part, i) => {
+    if (i === 0) {
+      acc = part === "" ? s : part + s;
+      segs.push({ label: part === "" ? s : part, path: acc, root: true });
+    } else if (part) {
+      acc = /[\\/]$/.test(acc) ? acc + part : acc + s + part;
+      segs.push({ label: part, path: acc });
+    }
+  });
+  return segs;
+}
+function fsbParent(p) { const segs = fsbSegments(p); return segs.length > 1 ? segs[segs.length - 2].path : ""; }
+function fsbAgo(unix) {
+  const d = Date.now() / 1000 - unix;
+  if (d < -60) return new Date(unix * 1000).toLocaleDateString();
+  if (d < 45) return "just now";
+  if (d < 3600) return Math.max(1, Math.round(d / 60)) + " min ago";
+  if (d < 86400) return Math.floor(d / 3600) + " h ago";
+  if (d < 7 * 86400) return Math.floor(d / 86400) + " d ago";
+  const dt = new Date(unix * 1000);
+  return dt.toLocaleDateString(undefined, dt.getFullYear() === new Date().getFullYear()
+    ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" });
+}
+/* An empty / error / nothing-open panel. title and text are set as text. */
+function fsbState(kind, ic, title, text, action) {
+  const box = document.createElement("div");
+  box.className = "fsb-state" + (kind ? " " + kind : "");
+  box.innerHTML = '<span class="fsb-state-ic">' + icon(ic) + '</span><div><b></b><p></p></div>';
+  box.querySelector("b").textContent = title;
+  box.querySelector("p").textContent = text;
+  if (action) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "icon-btn"; b.textContent = action.label;
+    b.addEventListener("click", action.run);
+    box.querySelector("div").appendChild(b);
+  }
+  return box;
+}
+async function fsbError(r) {
+  let msg = "HTTP " + r.status;
+  try { const j = await r.json(); if (j && j.error) msg = j.error; } catch {}
+  return msg;
+}
+
+async function fsbLoad(path, opts) {
+  opts = opts || {};
+  const seq = ++fsb.seq, list = $("#fs-list");
+  const hadFocus = list.contains(document.activeElement);
+  if (!opts.quiet) {
+    list.textContent = "";
+    for (let i = 0; i < 6; i++) { const s = document.createElement("div"); s.className = "fsb-skel"; list.appendChild(s); }
+    list.setAttribute("aria-busy", "true");
+  }
+  let j;
+  try {
+    const r = await gwFetch(path ? "/v1/fs?path=" + encodeURIComponent(path) : "/v1/fs");
+    if (!r.ok) throw new Error(await fsbError(r));
+    j = await r.json();
+  } catch (e) {
+    if (seq !== fsb.seq) return;
+    list.removeAttribute("aria-busy");
+    list.textContent = "";
+    const ws = fsb.roots.ws;
+    list.appendChild(fsbState("err", "alert", "Can't open this folder", String(e.message || e),
+      ws && path !== ws ? { label: "Open Workspace", run: () => fsbLoad(ws) } : null));
+    $("#fsb-count").textContent = "";
+    return;
+  }
+  if (seq !== fsb.seq) return;
+  list.removeAttribute("aria-busy");
+  fsb.cwd = j.path || path || "";
+  fsb.roots = { ws: j.workspace_root || "", cwd: j.cwd_root || "" };
+  fsb.entries = (j.entries || []).slice().sort((a, b) =>
+    (b.dir ? 1 : 0) - (a.dir ? 1 : 0) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  fsbRenderRoots();
+  fsbRenderCrumb();
+  $("#fsb-up").disabled = !fsbParent(fsb.cwd);
+  let sel = -1;
+  if (opts.select != null) sel = fsb.entries.findIndex(e => e.name === opts.select);
+  fsbRenderList(sel, hadFocus);
+}
+
+function fsbRenderRoots() {
+  const box = $("#fs-roots");
+  box.textContent = "";
+  const add = (label, p) => {
+    if (!p) return;
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label; b.title = p;
+    b.setAttribute("aria-pressed", String(fsbNorm(fsb.cwd) === fsbNorm(p)));
+    b.addEventListener("click", () => fsbLoad(p));
+    box.appendChild(b);
+  };
+  /* The crumb already names the root the folder is in, so a lone root is
+     only offered as a way back once the folder is outside it. */
+  const two = fsb.roots.cwd && fsbNorm(fsb.roots.cwd) !== fsbNorm(fsb.roots.ws);
+  if (!two && fsbRootOf(fsb.cwd)) return;
+  add("Workspace", fsb.roots.ws);
+  if (two) add("Launch dir", fsb.roots.cwd);
+}
+
+/* The root (Workspace or Launch dir) a folder is in, if any. */
+function fsbRootOf(p) {
+  const s = fsbSep(p), c = fsbNorm(p);
+  for (const [label, root] of [["Workspace", fsb.roots.ws], ["Launch dir", fsb.roots.cwd]]) {
+    if (!root) continue;
+    const r = fsbNorm(root);
+    if (c === r || c.startsWith(r.endsWith(s) ? r : r + s)) return { label, root };
+  }
+  return null;
+}
+
+/* Inside a root, the crumb starts at the root's name; elsewhere at "/". */
+function fsbRenderCrumb() {
+  const nav = $("#fs-crumb"), cwd = fsb.cwd, s = fsbSep(cwd);
+  nav.textContent = "";
+  nav.title = cwd;
+  let segs = fsbSegments(cwd);
+  const in_ = fsbRootOf(cwd);
+  if (in_) segs = [{ label: in_.label, path: in_.root, root: true, named: true }]
+                    .concat(segs.slice(fsbSegments(in_.root).length));
+  segs.forEach((g, i) => {
+    if (i > 0 && !(i === 1 && segs[0].label === s)) {
+      const sep = document.createElement("span"); sep.className = "sep"; sep.textContent = "/"; sep.setAttribute("aria-hidden", "true");
+      nav.appendChild(sep);
+    }
+    const b = document.createElement("button");
+    b.type = "button";
+    if (g.named) b.innerHTML = icon("files-folder");
+    const t = document.createElement("span"); t.textContent = g.label; b.appendChild(t);
+    b.title = g.path;
+    if (i === segs.length - 1) b.setAttribute("aria-current", "page");
+    else b.addEventListener("click", () => fsbLoad(g.path));
+    nav.appendChild(b);
+  });
+}
+
+function fsbRenderList(sel, focus) {
+  const list = $("#fs-list");
+  list.textContent = "";
+  const es = fsb.entries;
+  const nd = es.filter(e => e.dir).length, nf = es.length - nd;
+  $("#fsb-count").textContent = es.length
+    ? [nd ? nd + (nd === 1 ? " folder" : " folders") : "", nf ? nf + (nf === 1 ? " file" : " files") : ""].filter(Boolean).join(", ")
+    : "";
+  if (!es.length) {
+    list.appendChild(fsbState("", "files-folder", "This folder is empty", "Files the agent writes here show up after a refresh."));
+    fsb.sel = -1;
+    return;
+  }
+  const openPath = fsb.open ? fsb.open.path : "";
+  es.forEach((e, i) => {
+    const full = fsbJoin(fsb.cwd, e.name);
+    const row = document.createElement("div");
+    row.className = "fsb-row" + (e.dir ? " dir" : "");
+    row.id = "fsb-r" + i;
+    row.dataset.i = i;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", "false");
+    row.tabIndex = -1;
+    const nm = document.createElement("span");
+    nm.className = "fsb-name";
+    nm.innerHTML = icon(e.dir ? "files-folder" : "file");
+    const t = document.createElement("span");
+    t.textContent = e.name; t.title = e.name;
+    nm.appendChild(t);
+    const sz = document.createElement("span");
+    sz.className = "fsb-size";
+    sz.textContent = e.dir ? "—" : humanBytes(e.size);
+    if (!e.dir) sz.title = Number(e.size).toLocaleString() + " bytes";
+    const md = document.createElement("time");
+    md.className = "fsb-mod";
+    if (e.mtime > 0) {
+      const d = new Date(e.mtime * 1000);
+      md.textContent = fsbAgo(e.mtime);
+      md.dateTime = d.toISOString();
+      md.title = "Modified " + d.toLocaleString();
+    } else md.textContent = "—";
+    row.append(nm, sz, md);
+    if (sel < 0 && openPath && full === openPath) sel = i;
+    list.appendChild(row);
+  });
+  fsbSelect(sel < 0 ? 0 : sel, focus, sel < 0 && !focus);
+}
+
+/* Mark row i as the current one (roving tabindex); quiet leaves it
+   unmarked, only reachable by Tab. */
+function fsbSelect(i, focus, quiet) {
+  const rows = $("#fs-list").querySelectorAll(".fsb-row");
+  if (!rows.length) return;
+  i = Math.max(0, Math.min(i, rows.length - 1));
+  rows.forEach((r, k) => { r.tabIndex = k === i ? 0 : -1; r.setAttribute("aria-selected", String(k === i && !quiet)); });
+  fsb.sel = i;
+  if (focus) { rows[i].focus({ preventScroll: true }); }
+  if (focus || !quiet) rows[i].scrollIntoView({ block: "nearest" });
+}
+
+function fsbActivate(i) {
+  const e = fsb.entries[i];
+  if (!e) return;
+  fsbSelect(i, false);
+  const full = fsbJoin(fsb.cwd, e.name);
+  if (e.dir) fsbLoad(full);
+  else fsbOpen(full, e.name, e.size);
+}
+
+function fsbUp() {
+  const p = fsbParent(fsb.cwd);
+  if (!p) return;
+  const segs = fsbSegments(fsb.cwd);
+  fsbLoad(p, { select: segs[segs.length - 1].label });
+}
+
+/* ---- the viewer ---- */
+function fsbClose() {
+  fsb.vseq++; fsb.open = null; fsb.text = null;
   freeFsBlob();
+  $("#fsb-vhead").hidden = true;
+  $("#fsb-shell").classList.remove("open");
+  const v = $("#fs-view");
+  v.textContent = "";
+  v.appendChild(fsbState("", "file", "No file open",
+    "Pick a file to read it here. Text opens with line numbers, Markdown renders, and binary files show as a hex dump."));
+}
+
+function fsbNote(kind, text) {
+  const n = document.createElement("div");
+  n.className = "fsb-note" + (kind ? " " + kind : "");
+  n.innerHTML = icon(kind === "info" ? "info" : "alert") + "<span></span>";
+  n.querySelector("span").textContent = text;
+  return n;
+}
+
+function fsbCodeView(text) {
+  const wrap = document.createElement("div");
+  wrap.className = "fsb-code";
+  const body = text.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+  const n = body.split("\n").length;
+  const ln = document.createElement("pre");
+  ln.className = "fsb-ln"; ln.setAttribute("aria-hidden", "true");
+  const nums = new Array(n);
+  for (let i = 0; i < n; i++) nums[i] = i + 1;
+  ln.textContent = nums.join("\n");
+  const pre = document.createElement("pre");
+  pre.className = "fsb-text";
+  pre.textContent = body;
+  wrap.append(ln, pre);
+  return wrap;
+}
+
+function fsbRenderText() {
+  const v = $("#fs-view"), o = fsb.open;
+  if (!o || fsb.text == null) return;
+  v.textContent = "";
+  if (o.truncated)
+    v.appendChild(fsbNote("", "Large file: showing the first 256 KB of " + humanBytes(o.size) +
+                              ". Download it to see the rest."));
+  if (fsb.text === "") {
+    const e = document.createElement("div"); e.className = "fsb-empty-file"; e.textContent = "This file is empty.";
+    v.appendChild(e);
+  } else if (o.md && fsb.md === "preview") {
+    const m = document.createElement("div");
+    m.className = "fsb-md md";
+    m.innerHTML = renderMarkdown(fsb.text);
+    wireCopyButtons(m);
+    v.appendChild(m);
+  } else v.appendChild(fsbCodeView(fsb.text));
+}
+
+async function fsbOpen(path, name, size) {
+  const vseq = ++fsb.vseq, v = $("#fs-view");
+  freeFsBlob();
+  const md = /\.(md|markdown)$/i.test(name);
+  fsb.open = { path, name, size: Number(size) || 0, md, truncated: false };
+  fsb.text = null;
+  $("#fsb-shell").classList.add("open");
+  $("#fsb-vhead").hidden = false;
+  $("#fsb-vic").innerHTML = icon("file");
+  $("#fsb-vname").textContent = name;
+  $("#fsb-vname").title = name;
+  $("#fsb-vpath").textContent = fsb.cwd;
+  $("#fsb-vpath").title = path;
+  $("#fsb-vsize").textContent = humanBytes(size);
+  $("#fsb-vsize").title = Number(size).toLocaleString() + " bytes";
+  $("#fsb-mdseg").hidden = !md;
+  $("#fsb-mdseg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.md === fsb.md)));
+  $("#fsb-copy").disabled = true;
+  v.textContent = "";
+  const loading = document.createElement("div"); loading.className = "fsb-empty-file"; loading.textContent = "Loading…";
+  v.appendChild(loading);
+  const fail = msg => {
+    if (vseq !== fsb.vseq) return;
+    v.textContent = "";
+    v.appendChild(fsbState("err", "alert", "Can't open this file", msg));
+  };
   if (FS_IMG_RE.test(name)) {
     if (size > FS_IMG_MAX) {
-      v.classList.remove("md");
-      v.textContent = "(" + humanBytes(size) + " image — too large to preview inline; use ⬇ to download)";
+      v.textContent = "";
+      v.appendChild(fsbNote("", "This image is " + humanBytes(size) + ", too large to preview. Download it to view it."));
       return;
     }
     try {
-      const blob = await (await gwFetch("/v1/fs/download?path=" + encodeURIComponent(path))).blob();
+      const r = await gwFetch("/v1/fs/download?path=" + encodeURIComponent(path));
+      if (!r.ok) throw new Error(await fsbError(r));
+      const blob = await r.blob();
+      if (vseq !== fsb.vseq) return;
       lastFsBlobUrl = URL.createObjectURL(blob);
-      v.classList.remove("md");
-      v.innerHTML = '<img class="fs-img" alt="' + escapeHtml(name) + '" src="' + lastFsBlobUrl + '">';
-    } catch (e) { v.classList.remove("md"); v.textContent = String(e); }
+      v.textContent = "";
+      const box = document.createElement("div"); box.className = "fsb-scroll";
+      const img = document.createElement("img"); img.className = "fs-img"; img.alt = name; img.src = lastFsBlobUrl;
+      box.appendChild(img); v.appendChild(box);
+    } catch (e) { fail(String(e.message || e)); }
     return;
   }
+  let r;
   try {
     /* /v1/fs/read is server-capped at 256 KB, so this never pulls a giant file
-       just to sniff it; a binary one routes to the paged hex viewer below. */
-    const r = await (await gwFetch("/v1/fs/read?path=" + encodeURIComponent(path))).json();
-    /* The server flags binary content (it won't decode it -- doing so 500s on
-       Delphi) so we go straight to the hex viewer without reading it as text. */
-    if (r.binary) { viewHex(path, name, r.size || size); return; }
-    const content = r.content || "";
-    if (looksBinary(content)) { viewHex(path, name, size); return; }
-    renderDocInto(v, name, content + (r.truncated ? "\n…(truncated)" : ""));
-  } catch (e) { v.classList.remove("md"); v.textContent = String(e); }
+       just to sniff it; a binary one routes to the paged hex viewer. */
+    const resp = await gwFetch("/v1/fs/read?path=" + encodeURIComponent(path));
+    if (!resp.ok) throw new Error(await fsbError(resp));
+    r = await resp.json();
+  } catch (e) { fail(String(e.message || e)); return; }
+  if (vseq !== fsb.vseq) return;
+  const content = r.content || "";
+  /* The server flags binary content (it won't decode it -- doing so 500s on
+     Delphi), so it goes straight to the hex viewer. */
+  if (r.binary || looksBinary(content)) {
+    v.textContent = "";
+    v.appendChild(fsbNote("info", "Binary file: there is no text to show, so this is a hex dump. Download it to open it in another program."));
+    const box = document.createElement("div"); box.className = "fsb-scroll";
+    v.appendChild(box);
+    viewHex(path, name, r.size || size, box);
+    return;
+  }
+  fsb.open.truncated = !!r.truncated;
+  fsb.text = content;
+  $("#fsb-copy").disabled = content === "";
+  fsbRenderText();
 }
+
+/* Wire the tab's controls once. */
+(function initFilesTab() {
+  const list = $("#fs-list");
+  if (!list) return;
+  list.addEventListener("click", ev => {
+    const row = ev.target.closest(".fsb-row");
+    if (row) fsbActivate(+row.dataset.i);
+  });
+  /* Focus follows selection, whichever way a row got focus. */
+  list.addEventListener("focusin", ev => {
+    const row = ev.target.closest(".fsb-row");
+    if (row && +row.dataset.i !== fsb.sel) fsbSelect(+row.dataset.i, false);
+  });
+  list.addEventListener("keydown", ev => {
+    const n = fsb.entries.length;
+    if (ev.key === "Backspace" || (ev.key === "ArrowUp" && ev.altKey) || ev.key === "ArrowLeft") {
+      ev.preventDefault(); fsbUp(); return;
+    }
+    if (!n) return;
+    const cur = ev.target.closest(".fsb-row");
+    const i = cur ? +cur.dataset.i : Math.max(0, fsb.sel);
+    const go = k => { ev.preventDefault(); fsbSelect(k, true); };
+    if (ev.key === "ArrowDown") go(i + 1);
+    else if (ev.key === "ArrowUp") go(i - 1);
+    else if (ev.key === "Home") go(0);
+    else if (ev.key === "End") go(n - 1);
+    else if (ev.key === "PageDown") go(i + 10);
+    else if (ev.key === "PageUp") go(i - 10);
+    else if (ev.key === "Enter" || ev.key === " " || (ev.key === "ArrowRight" && fsb.entries[i].dir)) {
+      ev.preventDefault(); fsbActivate(i);
+    }
+  });
+  $("#fsb-up").addEventListener("click", fsbUp);
+  $("#fsb-refresh").addEventListener("click", () => {
+    const e = fsb.entries[fsb.sel];
+    fsbLoad(fsb.cwd, { quiet: true, select: e ? e.name : null });
+  });
+  $("#fsb-close").addEventListener("click", fsbClose);
+  $("#fsb-dl").addEventListener("click", () => { if (fsb.open) downloadPath(fsb.open.path, fsb.open.name); });
+  $("#fsb-copy").addEventListener("click", () => {
+    const btn = $("#fsb-copy"), lbl = btn.querySelector(".lbl");
+    if (fsb.text == null) return;
+    const done = () => {
+      lbl.textContent = "Copied"; btn.classList.add("ok");
+      setTimeout(() => { lbl.textContent = "Copy"; btn.classList.remove("ok"); }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(fsb.text).then(done).catch(() => fallbackCopy(fsb.text, done));
+    else fallbackCopy(fsb.text, done);
+  });
+  $("#fsb-mdseg").addEventListener("click", ev => {
+    const b = ev.target.closest("button[data-md]");
+    if (!b) return;
+    fsb.md = b.dataset.md;
+    $("#fsb-mdseg").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    fsbRenderText();
+  });
+  fsbClose();
+})();
 
 /* Paged hex viewer. Fetches ONLY the window being viewed via /v1/fs/peek, so a
    500 MB file over a remote gateway costs one ~16 KB request per page, not a
    full download. Each page is scrollable in the pane; First/Prev/Next/Last move
    through the file. */
-function viewHex(path, name, sizeHint) {
-  const v = $("#fs-view");
+function viewHex(path, name, sizeHint, into) {
+  const v = into || $("#fs-view");
   const PAGE = 16384;
   let offset = 0, total = Number(sizeHint) || 0;
   async function render() {
@@ -6126,59 +6657,12 @@ const tabLoaders = {
   },
 
   async files() {
-    let cwd = "";
-    async function load(path) {
-      $("#fs-crumb").textContent = path || "(home)";
-      const list = $("#fs-list");
-      list.innerHTML = "loading…";
-      try {
-        const url = path ? "/v1/fs?path=" + encodeURIComponent(path) : "/v1/fs";
-        const j = await (await gwFetch(url)).json();
-        cwd = j.path || path || "";
-        $("#fs-crumb").textContent = cwd || "(home)";   // show the resolved dir
-        // Quick-switch chips for the two browseable roots: the PasClaw
-        // workspace ($PASCLAW_HOME/workspace) and the launch dir (cwd). The
-        // server emits each only when readable; dedupe when they're equal.
-        const roots = $("#fs-roots");
-        roots.innerHTML = "";
-        const addRoot = (label, p) => {
-          if (!p) return;
-          if (label === "Launch dir" && p === j.workspace_root) return; // same as workspace
-          const b = document.createElement("button");
-          b.textContent = label; b.title = p;
-          if (cwd === p) b.classList.add("active");
-          b.addEventListener("click", () => load(p));
-          roots.appendChild(b);
-        };
-        addRoot("Workspace", j.workspace_root);
-        addRoot("Launch dir", j.cwd_root);
-        list.innerHTML = "";
-        if (cwd) {
-          const up = document.createElement("div");
-          up.className = "item"; up.innerHTML = `<span>../</span>`;
-          up.addEventListener("click", () => load(parentPath(cwd)));
-          list.appendChild(up);
-        }
-        for (const e of (j.entries || [])) {
-          const el = document.createElement("div");
-          el.className = "item";
-          const full = (cwd ? cwd.replace(/\/$/, "") + "/" : "") + e.name;
-          el.innerHTML = `<span>${escapeHtml(e.name)}${e.dir?"/":""}</span>`
-                       + `<span class="size">${e.dir ? "" : humanBytes(e.size)}</span>`
-                       + (e.dir ? "" : `<button class="dl-btn icon-btn" title="Download" aria-label="Download">${icon("download")}</button>`);
-          el.addEventListener("click", () => { if (e.dir) load(full); else viewFile(full, e.name, e.size); });
-          if (!e.dir) el.querySelector(".dl-btn").addEventListener("click", ev => {
-            ev.stopPropagation(); downloadPath(full, e.name);
-          });
-          list.appendChild(el);
-        }
-      } catch (e) { list.textContent = String(e); }
-    }
-    function parentPath(p) {
-      const i = p.replace(/\/$/, "").lastIndexOf("/");
-      return i > 0 ? p.slice(0, i) : "";
-    }
-    load("");
+    /* Back on the tab: re-read the folder in place, keeping the selection. */
+    tabHooks.files = { show() {
+      const e = fsb.entries[fsb.sel];
+      fsbLoad(fsb.cwd, { quiet: true, select: e ? e.name : null });
+    } };
+    await fsbLoad("");
   },
 
   /* MCP tab: a row per configured server with what its connection

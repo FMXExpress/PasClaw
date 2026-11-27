@@ -5618,6 +5618,7 @@ var
   Arr: TJsonArray;
   Item: TJsonObject;
   SR: TSearchRec;
+  Mt: TDateTime;
 begin
   { Ensure the agent workspace exists so the Files tab can default to (and
     offer a switch to) it even on a fresh web-only / Docker boot where no
@@ -5718,6 +5719,15 @@ begin
         Item.PutStr ('name', SR.Name);
         Item.PutInt ('size', SR.Size);
         Item.PutBool('dir',  (SR.Attr and faDirectory) <> 0);
+        { Modified time, Unix seconds (UTC), for the Files tab's Modified
+          column. Read from the search record already in hand -- no extra
+          stat per entry. Same FPC / Delphi split as PasClaw.Permissions. }
+        {$IFDEF FPC}
+        Mt := FileDateToDateTime(SR.Time);
+        {$ELSE}
+        Mt := SR.TimeStamp;
+        {$ENDIF}
+        Item.PutInt ('mtime', DateTimeToUnix(Mt, False));
         Arr.AddObject(Item);
       until FindNext(SR) <> 0;
     finally
