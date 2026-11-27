@@ -684,6 +684,100 @@
   .badge.on{background:var(--ok-soft);color:var(--ok)}
   .badge.off{background:var(--surface-3);color:var(--text-2)}
 
+  /* ===== MCP tab =====
+     Laid out like the Relay tab: a heading and a line on what MCP servers
+     are, a strip of counts, then a row per server with its state as a dot
+     and a pill, what it negotiated, its tools behind a disclosure, and a
+     failed connect's error in a danger box. Below 760px the strip goes two
+     by two and the facts stack. */
+  #mcp-pane{padding:1.5rem 2rem 3rem}
+  .mcp-wrap{max-width:58rem;margin:0 auto;display:flex;flex-direction:column;gap:1.75rem;min-width:0}
+  .mcp-head-row{display:flex;align-items:center;gap:.6rem}
+  .mcp-head h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .mcp-head-row .icon-btn{margin-left:auto;padding:.3rem}
+  .mcp-head-row .icon-btn.busy svg.ic{animation:mcpSpin .8s linear infinite}
+  @keyframes mcpSpin{to{transform:rotate(360deg)}}
+  .mcp-lead{margin:.3rem 0 0;max-width:44rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .mcp-lead a{white-space:nowrap}
+  .mcp-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--surface);
+    border:1px solid var(--border);border-radius:var(--radius-lg)}
+  .mcp-strip[hidden]{display:none}
+  .mcp-stat{display:flex;flex-direction:column;gap:.05rem;padding:.75rem 1rem;min-width:0}
+  .mcp-stat+.mcp-stat{border-left:1px solid var(--border)}
+  .mcp-num{font-size:20px;font-weight:600;line-height:1.3;color:var(--text);font-variant-numeric:tabular-nums}
+  .mcp-lbl{font-size:12px;color:var(--text-3);white-space:nowrap}
+  .mcp-stat.bad .mcp-num,.mcp-stat.bad .mcp-lbl{color:var(--danger)}
+  .mcp-sec{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+  .mcp-sec-head{display:flex;align-items:baseline;gap:.5rem;min-width:0}
+  .mcp-sec-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text)}
+  .mcp-sec-head .n{font-size:12.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .mcp-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .mcp-srv{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:.35rem .8rem;padding:.85rem 1rem}
+  .mcp-srv+.mcp-srv{border-top:1px solid var(--border)}
+  .mcp-dot{display:inline-block;flex:none;width:8px;height:8px;margin-top:.45rem;border-radius:50%;background:var(--text-3)}
+  .mcp-srv[data-state=ready]>.mcp-dot{background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+  .mcp-srv[data-state=connecting]>.mcp-dot{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);
+    animation:typingPulse 1.4s ease-in-out infinite}
+  .mcp-srv[data-state=failed]>.mcp-dot{background:var(--danger);box-shadow:0 0 0 3px var(--danger-soft)}
+  .mcp-srv[data-state=disabled]>.mcp-dot{background:transparent;box-shadow:inset 0 0 0 1.5px var(--text-3)}
+  .mcp-srv-main{display:flex;flex-direction:column;gap:.4rem;min-width:0}
+  .mcp-srv-l1{display:flex;align-items:center;flex-wrap:wrap;gap:.3rem .5rem;min-width:0}
+  .mcp-srv-name{min-width:0;font:600 13px/1.4 var(--mono);color:var(--text);overflow-wrap:anywhere}
+  .mcp-tag{display:inline-flex;align-items:center;padding:0 .45rem;border-radius:999px;font-size:11px;font-weight:500;
+    line-height:1.65;white-space:nowrap;background:var(--surface-3);color:var(--text-2)}
+  .mcp-tag.ok{background:var(--ok-soft);color:var(--ok)}
+  .mcp-tag.accent{background:var(--accent-soft);color:var(--accent)}
+  .mcp-tag.bad{background:var(--danger-soft);color:var(--danger)}
+  .mcp-tag.plain{background:transparent;color:var(--text-3);box-shadow:inset 0 0 0 1px var(--border-strong)}
+  .mcp-cmd{display:block;min-width:0;font:11.5px/1.5 var(--mono);color:var(--text-3);word-break:break-all}
+  .mcp-facts{display:flex;flex-wrap:wrap;gap:.2rem 1.4rem;margin:0;font-size:12.5px;line-height:1.5;min-width:0}
+  .mcp-facts>div{display:flex;gap:.4rem;min-width:0}
+  .mcp-facts dt{color:var(--text-3)}
+  .mcp-facts dd{margin:0;min-width:0;color:var(--text);overflow-wrap:anywhere}
+  .mcp-facts dd code{font-size:12px}
+  .mcp-facts .sub{color:var(--text-3)}
+  .mcp-note{margin:0;font-size:12.5px;line-height:1.5;color:var(--text-3)}
+  .mcp-err{display:flex;gap:.5rem;align-items:flex-start;padding:.5rem .7rem;border:1px solid var(--danger-line);
+    border-radius:8px;background:var(--danger-soft);font-size:12.5px;line-height:1.5;color:var(--text);min-width:0}
+  .mcp-err svg.ic{margin-top:1px;color:var(--danger)}
+  .mcp-err b{font-weight:600}
+  .mcp-err-text{display:block;margin-top:.1rem;font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+  .mcp-tools{min-width:0}
+  .mcp-tools>summary{display:inline-flex;align-items:center;gap:.2rem;cursor:pointer;list-style:none;
+    font-size:12.5px;color:var(--accent);border-radius:2px}
+  .mcp-tools>summary::-webkit-details-marker{display:none}
+  .mcp-tools>summary::before{content:"";flex:none;width:.4rem;height:.4rem;margin:0 .25rem 0 .1rem;
+    border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+    transform:rotate(-45deg);opacity:.75;transition:transform .12s}
+  .mcp-tools[open]>summary::before{transform:rotate(45deg)}
+  .mcp-tool-list{list-style:none;margin:.45rem 0 0;padding:0;border:1px solid var(--border);border-radius:8px;
+    background:var(--surface-2);max-height:20rem;overflow:auto}
+  .mcp-tool-list li{display:grid;grid-template-columns:minmax(8rem,auto) minmax(0,1fr);gap:.15rem 1rem;
+    padding:.35rem .7rem;font-size:12.5px;line-height:1.5}
+  .mcp-tool-list li+li{border-top:1px solid var(--border)}
+  .mcp-tool-list code{font:12px/1.5 var(--mono);color:var(--text);overflow-wrap:anywhere}
+  .mcp-tool-list span{min-width:0;color:var(--text-2);overflow-wrap:anywhere}
+  .mcp-empty{display:flex;gap:.9rem;align-items:flex-start;padding:1.2rem 1.25rem}
+  .mcp-empty-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .mcp-empty-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .mcp-empty b{display:block;margin-bottom:.2rem;font-size:13.5px;font-weight:600;color:var(--text)}
+  .mcp-empty p{margin:0 0 .75rem;max-width:40rem;font-size:13px;line-height:1.55;color:var(--text-2)}
+  .mcp-empty code{background:var(--surface-2);border-radius:4px;padding:.03rem .3rem;font-size:.92em}
+  .mcp-msg{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;padding:1rem 1.25rem;font-size:13px;color:var(--text-3)}
+  .mcp-msg.err{color:var(--danger)}
+  @media (max-width:760px){
+    #mcp-pane{padding:1rem 1rem 2rem}
+    .mcp-wrap{gap:1.4rem}
+    .mcp-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .mcp-stat+.mcp-stat{border-left:0}
+    .mcp-stat:nth-child(2n){border-left:1px solid var(--border)}
+    .mcp-stat:nth-child(n+3){border-top:1px solid var(--border)}
+    .mcp-facts{flex-direction:column}
+    .mcp-tool-list li{grid-template-columns:minmax(0,1fr)}
+    .mcp-empty{flex-direction:column;gap:.7rem}
+  }
+
   /* ===== Checkpoints tab ===== */
   #cp-pane{display:flex;flex-direction:column;min-height:0;flex:1;padding:0}
   .cp-bar{display:flex;align-items:center;gap:.4rem;padding:.6rem 1.25rem;
@@ -1216,6 +1310,7 @@
   <symbol id="i-code" viewBox="0 0 16 16"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></symbol>
   <symbol id="i-power" viewBox="0 0 16 16"><path d="M5 4.1a5 5 0 1 0 6 0M8 2.25v5.5"/></symbol>
   <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="M8 7.25v3.5M8 5.25h.01"/></symbol>
+  <symbol id="i-mcp-plug" viewBox="0 0 16 16"><path d="M6 2.25v3M10 2.25v3M4.25 5.25h7.5v2.5a3.75 3.75 0 0 1-7.5 0z"/><path d="M8 11.5v2.25"/></symbol>
   <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></symbol>
   <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.75 8S4 3.75 8 3.75 14.25 8 14.25 8 12 12.25 8 12.25 1.75 8 1.75 8Z"/><circle cx="8" cy="8" r="2"/></symbol>
   <symbol id="i-eye-off" viewBox="0 0 16 16"><path d="m2.5 2.5 11 11"/><path d="M6.5 3.95A6 6 0 0 1 8 3.75C12 3.75 14.25 8 14.25 8a11 11 0 0 1-1.6 2.15M10.3 11.75A5.6 5.6 0 0 1 8 12.25C4 12.25 1.75 8 1.75 8a11 11 0 0 1 2.5-3.05"/><path d="M6.6 6.6a2 2 0 0 0 2.8 2.8"/></symbol>
@@ -1448,11 +1543,33 @@
   </div>
 
   <div id="tab-mcp" class="tab">
-    <div class="pane">
-      <table class="data" id="mcp-table">
-        <thead><tr><th>Name</th><th>Command</th><th>Args</th><th>Status</th><th>Protocol</th></tr></thead>
-        <tbody></tbody>
-      </table>
+    <!-- MCP: the servers in config.json's mcp_servers, each with what this
+         gateway's connection to it negotiated (GET /v1/mcp) and the tools it
+         registered (GET /v1/mcp/tools, namespaced server__tool). Read-only:
+         servers are added and edited in Settings > MCP servers. -->
+    <div class="pane" id="mcp-pane">
+      <div class="mcp-wrap">
+        <header class="mcp-head">
+          <div class="mcp-head-row">
+            <h2>MCP servers</h2>
+            <button type="button" class="icon-btn" id="mcp-refresh" aria-label="Refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+          </div>
+          <p class="mcp-lead">Model Context Protocol servers give the agent more tools. The gateway connects to each one when it starts, by running its command or calling its URL.
+            <a href="#settings" class="mcp-settings-link" data-mcp-settings>Configure in Settings › MCP servers</a></p>
+        </header>
+
+        <section class="mcp-strip" id="mcp-strip" aria-label="Server summary" hidden>
+          <div class="mcp-stat" data-k="ready"><span class="mcp-num" id="mcp-stat-ready">—</span><span class="mcp-lbl">ready</span></div>
+          <div class="mcp-stat" data-k="connecting"><span class="mcp-num" id="mcp-stat-connecting">—</span><span class="mcp-lbl">connecting</span></div>
+          <div class="mcp-stat" data-k="failed" id="mcp-stat-failed-cell"><span class="mcp-num" id="mcp-stat-failed">—</span><span class="mcp-lbl">failed</span></div>
+          <div class="mcp-stat" data-k="tools"><span class="mcp-num" id="mcp-stat-tools">—</span><span class="mcp-lbl">tools</span></div>
+        </section>
+
+        <section class="mcp-sec" aria-labelledby="mcp-servers-h">
+          <div class="mcp-sec-head"><h3 id="mcp-servers-h">Servers</h3><span class="n" id="mcp-servers-n"></span></div>
+          <div class="mcp-list" id="mcp-list"><div class="mcp-msg">Loading servers…</div></div>
+        </section>
+      </div>
     </div>
   </div>
 
@@ -5819,31 +5936,9 @@ const tabLoaders = {
     load("");
   },
 
-  async mcp() {
-    const tbody = $("#mcp-table tbody"); tbody.innerHTML = "";
-    try {
-      const j = await (await gwFetch("/v1/mcp")).json();
-      if (!j.servers || !j.servers.length) {
-        tbody.innerHTML = `<tr><td colspan=5><div class="empty-pane">No MCP servers configured.</div></td></tr>`;
-        return;
-      }
-      for (const s of j.servers) {
-        const tr = document.createElement("tr");
-        /* state/protocol_version come from the live connection; a disabled
-           server, or one this gateway never connected, has neither. */
-        const live = s.state ? ` · ${s.state}` : "";
-        const proto = s.protocol_version
-          ? `<span title="${escapeHtml(s.negotiation || "")}">${escapeHtml(s.protocol_version)}</span>`
-          : (s.error ? `<span title="${escapeHtml(s.error)}">—</span>` : "—");
-        tr.innerHTML = `<td>${escapeHtml(s.name)}</td>`
-                     + `<td>${escapeHtml(s.cmd)}</td>`
-                     + `<td>${escapeHtml(s.args || "")}</td>`
-                     + `<td><span class="badge ${s.enabled?"on":"off"}">${s.enabled?"enabled":"disabled"}</span>${escapeHtml(live)}</td>`
-                     + `<td>${proto}</td>`;
-        tbody.appendChild(tr);
-      }
-    } catch (e) { tbody.innerHTML = `<tr><td colspan=5>${escapeHtml(String(e))}</td></tr>`; }
-  },
+  /* MCP tab: a row per configured server with what its connection
+     negotiated, and its tools. See setupMcpTab. */
+  mcp() { setupMcpTab(); },
 
   async cron() {
     const tbody = $("#cron-table tbody"); tbody.innerHTML = "";
@@ -8495,6 +8590,237 @@ if (location.hash.slice(1)) showTab(location.hash.slice(1));
 })();
 maybeOnboard();
 m.focus();
+
+/* ===== MCP tab implementation =====
+   tabLoaders.mcp runs setupMcpTab once; after that tabHooks.mcp reloads on
+   each visit. GET /v1/mcp gives each configured server and, once this
+   gateway has started it, what the connection negotiated; GET
+   /v1/mcp/tools gives the tools they registered, named server__tool. Server
+   names, commands, tool names and errors come from config.json and from the
+   servers themselves, so they reach the page only as textContent. While a
+   server is connecting the tab checks again every 3 s, until another tab
+   opens. The state hangs off a function, not a let, so a /#mcp deep link
+   (which runs the loader during boot, above this block) finds it. */
+function mcpUI() {
+  return mcpUI.s || (mcpUI.s = { setup: false, seq: 0, timer: null, sig: "", open: new Set() });
+}
+function mcpTabActive() { const t = $("#tab-mcp"); return !!t && t.classList.contains("active"); }
+
+function setupMcpTab() {
+  const ui = mcpUI();
+  if (ui.setup) return;
+  ui.setup = true;
+  $("#mcp-refresh").addEventListener("click", () => mcpRefresh(false));
+  $("#tab-mcp").addEventListener("click", e => {
+    if (e.target.closest("[data-mcp-settings]")) { e.preventDefault(); mcpOpenSettings(); }
+    else if (e.target.closest("[data-mcp-retry]")) mcpRefresh(false);
+  });
+  /* Which tool lists are open survives a refresh. */
+  $("#mcp-list").addEventListener("toggle", e => {
+    const d = e.target, row = d.closest && d.closest(".mcp-srv");
+    if (!row || !d.classList.contains("mcp-tools")) return;
+    if (d.open) ui.open.add(row.dataset.name); else ui.open.delete(row.dataset.name);
+  }, true);
+  tabHooks.mcp = { show() { mcpRefresh(false); }, leave() { mcpStop(); } };
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) mcpStop(); else if (mcpTabActive()) mcpRefresh(false);
+  });
+  mcpRefresh(true);
+}
+function mcpStop() { const ui = mcpUI(); clearTimeout(ui.timer); ui.timer = null; }
+
+async function mcpRefresh(prompt) {
+  const ui = mcpUI(), seq = ++ui.seq, btn = $("#mcp-refresh");
+  mcpStop();
+  btn.classList.add("busy");
+  let servers = null, tools = null, err = "";
+  try {
+    /* Only the first load may ask for a gateway token. */
+    const r = await gwFetch("/v1/mcp", prompt ? {} : { noPrompt: true });
+    if (!r.ok) err = "Couldn't load the MCP servers (HTTP " + r.status + ").";
+    else { const j = await r.json(); servers = Array.isArray(j.servers) ? j.servers : []; }
+  } catch { err = "Couldn't reach the gateway to load the MCP servers."; }
+  /* The tool list is extra: without it the rows just leave tools out. */
+  if (!err) {
+    try {
+      const r = await gwFetch("/v1/mcp/tools", { noPrompt: true });
+      if (r.ok) { const j = await r.json(); if (Array.isArray(j.tools)) tools = j.tools; }
+    } catch {}
+  }
+  if (seq !== ui.seq) return;
+  btn.classList.remove("busy");
+  if (err) { mcpRenderDown(err); return; }
+  mcpRender(servers, tools);
+  if (servers.some(s => s && s.enabled && s.state === "connecting") && mcpTabActive() && !document.hidden)
+    ui.timer = setTimeout(() => mcpRefresh(false), 3000);
+}
+
+function mcpEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+/* ready / connecting / failed come from the connection; a disabled server
+   has none, and neither has one this gateway never started (it ran with
+   --no-mcp, or the server was added since it started). */
+function mcpStateOf(s) {
+  if (!s.enabled) return "disabled";
+  return ["ready", "connecting", "failed"].includes(s.state) ? s.state : "idle";
+}
+/* The pill: its words and its tone. */
+function mcpPill(st) {
+  return { ready: ["Ready", "ok"], connecting: ["Connecting", "accent"], failed: ["Failed", "bad"],
+           disabled: ["Disabled", ""], idle: ["Not connected", ""] }[st];
+}
+
+/* Each tool goes to the server whose name, plus "__", starts it; the
+   longest such name wins, as in the bridge, since names can hold "__". */
+function mcpGroupTools(servers, tools) {
+  const by = new Map(servers.map(s => [String(s.name || ""), []]));
+  const names = [...by.keys()].filter(Boolean).sort((a, b) => b.length - a.length);
+  for (const t of tools || []) {
+    const full = String((t && t.name) || "");
+    const srv = names.find(n => full.length > n.length + 2 && full.startsWith(n + "__"));
+    if (srv == null) continue;
+    let desc = String((t && t.description) || "");
+    const tag = "[mcp:" + srv + "] ";
+    if (desc.startsWith(tag)) desc = desc.slice(tag.length);
+    by.get(srv).push({ name: full.slice(srv.length + 2), full, desc });
+  }
+  return by;
+}
+
+function mcpRender(servers, tools) {
+  const ui = mcpUI(), box = $("#mcp-list");
+  const sig = JSON.stringify([servers, tools && tools.map(t => [t && t.name, t && t.description])]);
+  if (sig === ui.sig) return;
+  ui.sig = sig;
+  const strip = $("#mcp-strip");
+  $("#mcp-servers-n").textContent = servers.length ? String(servers.length) : "";
+  box.textContent = "";
+  if (!servers.length) {
+    strip.hidden = true;
+    box.removeAttribute("role");
+    box.appendChild(mcpEmptyState());
+    return;
+  }
+  const by = mcpGroupTools(servers, tools);
+  const count = { ready: 0, connecting: 0, failed: 0, tools: 0 };
+  box.setAttribute("role", "list");
+  for (const s of servers) {
+    const st = mcpStateOf(s), ts = by.get(String(s.name || "")) || [];
+    if (st in count) count[st]++;
+    count.tools += ts.length;
+    box.appendChild(mcpRow(s, st, tools ? ts : null));
+  }
+  strip.hidden = false;
+  for (const k of ["ready", "connecting", "failed"]) $("#mcp-stat-" + k).textContent = fmtInt(count[k]);
+  $("#mcp-stat-tools").textContent = tools ? fmtInt(count.tools) : "—";
+  $("#mcp-stat-failed-cell").classList.toggle("bad", count.failed > 0);
+}
+
+function mcpRow(s, st, tools) {
+  const name = String(s.name || ""), [label, tone] = mcpPill(st);
+  const row = mcpEl("div", "mcp-srv");
+  row.setAttribute("role", "listitem");
+  row.dataset.state = st;
+  row.dataset.name = name;
+  const dot = mcpEl("span", "mcp-dot");
+  dot.setAttribute("aria-hidden", "true");
+  const main = mcpEl("div", "mcp-srv-main"), l1 = mcpEl("div", "mcp-srv-l1");
+  const cmd = String(s.cmd || ""), args = String(s.args || "");
+  const http = /^https?:\/\//i.test(cmd);
+  const transport = mcpEl("span", "mcp-tag plain", http ? "HTTP" : "stdio");
+  transport.title = http ? "Reached at a URL (Streamable HTTP)" : "Started as a command; spoken to over stdin and stdout";
+  l1.append(mcpEl("code", "mcp-srv-name", name || "(no name)"), mcpEl("span", "mcp-tag mcp-state " + tone, label), transport);
+  const line = mcpEl("code", "mcp-cmd", args ? cmd + " " + args : cmd);
+  main.append(l1, line);
+
+  /* What the connection negotiated: only what the route gave. */
+  const facts = mcpEl("dl", "mcp-facts");
+  const fact = (k, ...parts) => {
+    const d = mcpEl("div"), dd = mcpEl("dd");
+    dd.append(...parts);
+    d.append(mcpEl("dt", null, k), dd);
+    facts.appendChild(d);
+  };
+  if (s.protocol_version) {
+    const parts = [mcpEl("code", null, String(s.protocol_version))];
+    if (s.negotiation) parts.push(mcpEl("span", "sub", " via " + s.negotiation));
+    fact("Protocol", ...parts);
+  }
+  if (s.server_name || s.server_version)
+    fact("Server", document.createTextNode([s.server_name, s.server_version].filter(Boolean).map(String).join(" ")));
+  if (tools && (tools.length || st === "ready")) fact("Tools", document.createTextNode(fmtInt(tools.length)));
+  if (facts.children.length) main.appendChild(facts);
+
+  if (st === "failed") {
+    const box = mcpEl("div", "mcp-err"), txt = mcpEl("div");
+    box.innerHTML = icon("alert");
+    txt.appendChild(mcpEl("b", null, "Couldn't connect."));
+    if (s.error) txt.appendChild(mcpEl("span", "mcp-err-text", String(s.error)));
+    box.appendChild(txt);
+    main.appendChild(box);
+  } else if (st === "connecting") {
+    main.appendChild(mcpEl("p", "mcp-note", "Starting up. This page checks again every few seconds."));
+  } else if (st === "disabled") {
+    main.appendChild(mcpEl("p", "mcp-note", "Turned off, so the gateway doesn't start it."));
+  } else if (st === "idle") {
+    main.appendChild(mcpEl("p", "mcp-note", "This gateway hasn't connected to it. Servers connect when the gateway starts, so one added since then needs a restart."));
+  }
+
+  if (tools && tools.length) {
+    const d = mcpEl("details", "mcp-tools");
+    d.open = mcpUI().open.has(name);
+    d.appendChild(mcpEl("summary", null, tools.length === 1 ? "Show its tool" : "Show its " + tools.length + " tools"));
+    const ul = mcpEl("ul", "mcp-tool-list");
+    for (const t of tools) {
+      const li = mcpEl("li"), c = mcpEl("code", null, t.name);
+      c.title = t.full;
+      li.append(c, mcpEl("span", null, t.desc));
+      ul.appendChild(li);
+    }
+    d.appendChild(ul);
+    main.appendChild(d);
+  }
+  row.append(dot, main);
+  return row;
+}
+
+function mcpEmptyState() {
+  const d = mcpEl("div", "mcp-empty");
+  d.innerHTML = '<span class="mcp-empty-ic">' + icon("mcp-plug") + '</span><div><b>No MCP servers configured</b>'
+    + '<p>An MCP server gives the agent tools it doesn\'t have built in, such as a browser, a database or an '
+    + 'issue tracker. Add one with the command that starts it, or its URL, and restart PasClaw to connect it.</p>'
+    + '<button type="button" class="primary" data-mcp-settings>Add a server in Settings</button></div>';
+  return d;
+}
+
+function mcpRenderDown(msg) {
+  const ui = mcpUI(), box = $("#mcp-list");
+  ui.sig = "";
+  $("#mcp-strip").hidden = true;
+  $("#mcp-servers-n").textContent = "";
+  box.removeAttribute("role");
+  box.textContent = "";
+  const d = mcpEl("div", "mcp-msg err");
+  d.append(mcpEl("span", null, msg));
+  const b = mcpEl("button", "icon-btn", "Try again");
+  b.type = "button";
+  b.dataset.mcpRetry = "";
+  d.appendChild(b);
+  box.appendChild(d);
+}
+
+/* Settings opens on its MCP servers section, wherever it was last. */
+function mcpOpenSettings() {
+  try { localStorage.setItem("pasclaw.settings.section", "mcp"); } catch {}
+  showTab("settings");
+  const b = document.querySelector('#set-nav button[data-sec="mcp"]');
+  if (b && $("#tab-settings").classList.contains("active")) b.click();
+}
 
 /* ===== Relay tab implementation =====
    See tabLoaders.relay above for the entry. What it does:
