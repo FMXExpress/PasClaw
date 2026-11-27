@@ -783,6 +783,7 @@ uses
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
   PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
+  PasClaw.Config.Profile,      { ResolveProfileBodies -- /v1/providers/<name>/models }
   PasClaw.Stream.Reliability,
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prune,
@@ -11576,10 +11577,15 @@ procedure TGatewayServer.HandleProviderModels(const Name: string;
    refresh`: the cache answers when it has the list, a live fetch fills it
    otherwise, and ?refresh=1 fetches again. When a live fetch fails, a
    stale cache is still returned, with the error beside it. The provider
-   comes from the saved config.json (markers resolved, as LoadConfig
-   resolves them), so one added in Settings is listed before the restart
-   that brings it into the running config; the running config when the
-   file is missing or unreadable. Model ids only -- no keys, no URLs.
+   comes from the layers LoadConfig would apply at the next start: the
+   profile this gateway resolved (FCfg.ProfileName -- it already weighed
+   --profile, PASCLAW_PROFILE and the file's own choice), then config.json
+   on top, markers resolved. So one added in Settings is listed before the
+   restart that brings it into the running config, and one a profile
+   supplies is listed at all (it was a 404 when only the file was read:
+   Codex review on #655). Then the running config, for a provider those
+   layers do not have, and when the file is missing or unreadable. Model
+   ids only -- no keys, no URLs.
 
    {"provider", "kind", "source": "live"|"cache"|"relay"|"none",
     "fetched_at", "default_model", "models": [{"id", "name"}], "error"} *)
@@ -11592,6 +11598,8 @@ var
   Root, Item: TJsonObject;
   Arr: TJsonArray;
   Workers: TRelayWorkerArray;
+  Bodies: TProfileBodyArray;
+  PErr: string;
   i, j, Idx: Integer;
   procedure AddModel(const Id, Display: string);
   begin
@@ -11608,6 +11616,15 @@ begin
   begin
     Cfg := TConfig.Create;
     try
+      { FromJSON merges, so the layers apply in LoadConfig's order. }
+      if (FCfg.ProfileName <> '') and
+         ResolveProfileBodies(GetHome, FCfg.ProfileName, Bodies, PErr) then
+        for i := 0 to High(Bodies) do
+          try
+            Cfg.FromJSON(ExpandEnvVarsInJSON(Bodies[i]));
+          except
+            { a broken layer: LoadConfig logs and skips it too }
+          end;
       Cfg.FromJSON(ExpandEnvVarsInJSON(ReadFileText(GetConfigPath)));
       OwnCfg := True;
     except
@@ -11619,6 +11636,17 @@ begin
     Idx := -1;
     for i := 0 to High(Cfg.Providers) do
       if SameText(Cfg.Providers[i].Name, Name) then begin Idx := i; Break; end;
+    if (Idx < 0) and OwnCfg then
+      for i := 0 to High(FCfg.Providers) do
+        if SameText(FCfg.Providers[i].Name, Name) then
+        begin
+          { Not in the saved layers, but the gateway runs with it. }
+          Cfg.Free;
+          OwnCfg := False;
+          Cfg := FCfg;
+          Idx := i;
+          Break;
+        end;
     if Idx < 0 then
     begin
       WriteJSON(AResp, 404, '{"error":' + JsonStr('no saved provider named "' + Name + '"') + '}');
