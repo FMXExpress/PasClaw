@@ -41,9 +41,14 @@ type
     FPath:    string;
     FEntries: array of TCronStateEntry;
     function IndexOf(const Id: string): Integer;
+    procedure DoLoad(Recover: Boolean);
   public
     constructor Create(const Path: string);
     procedure Load;
+    { Load for a reader other than the scheduler thread (GET /v1/cron):
+      it never renames anything, so it cannot race a Save. Mid-save it
+      reads the .bak, the last state that was whole. }
+    procedure Peek;
     procedure Save;
     function  GetLastFired(const Id: string): Int64;
     procedure SetLastFired(const Id: string; UnixSeconds: Int64);
@@ -89,6 +94,16 @@ begin
 end;
 
 procedure TCronState.Load;
+begin
+  DoLoad(True);
+end;
+
+procedure TCronState.Peek;
+begin
+  DoLoad(False);
+end;
+
+procedure TCronState.DoLoad(Recover: Boolean);
 var
   Body, ReadFrom, Bak: string;
   Root: TJsonObject;
@@ -100,6 +115,8 @@ begin
   Bak := FPath + '.bak';
   if FileExists(FPath) then
     ReadFrom := FPath
+  else if FileExists(Bak) and not Recover then
+    ReadFrom := Bak
   else if FileExists(Bak) then
   begin
     { Save crashed between "move old to .bak" and "install new" --

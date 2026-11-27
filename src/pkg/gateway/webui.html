@@ -778,6 +778,72 @@
     .mcp-empty{flex-direction:column;gap:.7rem}
   }
 
+  /* ===== Cron tab =====
+     Laid out like Relay: a heading with a line on what runs here and where
+     it is edited, then a row per job. A row has a dot and a chip for
+     enabled or disabled, the job id, the schedule in mono with a plain
+     reading beside it when the expression is a simple one, the skill it
+     runs and its arguments (two lines, then Show all), and the last run on
+     the right. Below 760px the last run goes under the job. */
+  #cron-pane{padding:1.5rem 2rem 3rem}
+  .cr-wrap{max-width:58rem;margin:0 auto;display:flex;flex-direction:column;gap:1.5rem;min-width:0}
+  .cr-head{display:flex;align-items:flex-start;gap:1rem;min-width:0}
+  .cr-head>div{flex:1;min-width:0}
+  .cr-head h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .cr-lead{margin:.3rem 0 0;max-width:44rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .cr-lead a{white-space:nowrap}
+  #cron-refresh{flex:none}
+  .cr-sec{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+  .cr-sec-head{display:flex;align-items:baseline;gap:.5rem;min-width:0}
+  .cr-sec-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text)}
+  .cr-sec-head .n{font-size:12.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .cr-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .cr-job{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:.35rem .8rem;padding:.85rem 1rem}
+  .cr-job+.cr-job{border-top:1px solid var(--border)}
+  .cr-dot{display:inline-block;width:8px;height:8px;margin-top:.4rem;border-radius:50%;background:var(--text-3)}
+  .cr-job.on>.cr-dot{background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+  .cr-main{display:flex;flex-direction:column;gap:.45rem;min-width:0}
+  .cr-l1{display:flex;align-items:center;flex-wrap:wrap;gap:.3rem .5rem;min-width:0}
+  .cr-id{min-width:0;font:600 13px/1.4 var(--mono);color:var(--text);overflow-wrap:anywhere}
+  .cr-job:not(.on) .cr-id{color:var(--text-2)}
+  .cr-tag{display:inline-flex;align-items:center;padding:0 .45rem;border-radius:999px;font-size:11px;font-weight:500;
+    line-height:1.65;white-space:nowrap;background:var(--surface-3);color:var(--text-2)}
+  .cr-tag.ok{background:var(--ok-soft);color:var(--ok)}
+  .cr-sched{display:flex;align-items:baseline;flex-wrap:wrap;gap:.25rem .6rem;min-width:0;font-size:13px;color:var(--text)}
+  .cr-spec{padding:.02rem .45rem;border:1px solid var(--border-strong);border-radius:var(--radius);
+    background:var(--surface-2);font:12px/1.55 var(--mono);color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere}
+  .cr-runs{font-size:12.5px;line-height:1.5;color:var(--text-3);overflow-wrap:anywhere}
+  .cr-runs code{font:12px/1.5 var(--mono);color:var(--text-2)}
+  .cr-args-wrap{display:flex;flex-direction:column;align-items:flex-start;gap:.2rem;min-width:0}
+  .cr-args{align-self:stretch;margin:0;padding:.05rem 0 .05rem .7rem;border-left:2px solid var(--border-strong);
+    font-size:13px;line-height:1.5;color:var(--text-2);white-space:pre-wrap;overflow-wrap:anywhere;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
+  .cr-args.open{display:block;-webkit-line-clamp:unset;line-clamp:none}
+  .cr-more{background:none;border:0;border-radius:2px;padding:0 0 0 .75rem;font-size:12px;color:var(--accent);cursor:pointer}
+  .cr-more:hover{background:none;text-decoration:underline}
+  .cr-more[hidden]{display:none}
+  .cr-side{display:flex;flex-direction:column;align-items:flex-end;gap:.1rem;font-size:12.5px;
+    color:var(--text-3);white-space:nowrap;text-align:right}
+  .cr-side time{font-variant-numeric:tabular-nums;color:var(--text);cursor:default}
+  .cr-side .never{color:var(--text-3)}
+  .cr-empty{display:flex;gap:.9rem;align-items:flex-start;padding:1.2rem 1.25rem}
+  .cr-empty-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .cr-empty-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .cr-empty b{display:block;margin-bottom:.2rem;font-size:13.5px;font-weight:600;color:var(--text)}
+  .cr-empty p{margin:0;max-width:40rem;font-size:13px;line-height:1.55;color:var(--text-2)}
+  .cr-empty code{background:var(--surface-2);border-radius:4px;padding:.03rem .3rem;font-size:.92em}
+  .cr-msg{display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;padding:1rem 1.25rem;font-size:13px;color:var(--text-3)}
+  .cr-msg.err{color:var(--danger)}
+  .cr-foot{margin:0;font-size:12px;color:var(--text-3)}
+  .cr-foot[hidden]{display:none}
+  @media (max-width:760px){
+    #cron-pane{padding:1rem 1rem 2rem}
+    .cr-head{flex-direction:column;gap:.6rem}
+    .cr-job{grid-template-columns:auto minmax(0,1fr)}
+    .cr-side{grid-column:2;flex-direction:row;align-items:baseline;gap:.35rem;text-align:left}
+  }
+
   /* ===== Checkpoints tab ===== */
   #cp-pane{display:flex;flex-direction:column;min-height:0;flex:1;padding:0}
   .cp-bar{display:flex;align-items:center;gap:.4rem;padding:.6rem 1.25rem;
@@ -1318,6 +1384,7 @@
   <symbol id="i-browser" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M2 6.25h12M4.5 4.6h.01M6 4.6h.01"/></symbol>
   <symbol id="i-terminal" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="m4.75 6.5 2 1.75-2 1.75M8.5 10.25h2.75"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 16 16"><path d="M4.75 12.5h6.75a2.75 2.75 0 0 0 .3-5.48 4 4 0 0 0-7.7 1.1A2.2 2.2 0 0 0 4.75 12.5Z"/></symbol>
+  <symbol id="i-cron-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="M8 4.75V8l2.25 1.5"/></symbol>
 </defs></svg>
 <header>
   <span class="logo"><span class="blue">Pas</span><span class="red">Claw</span></span>
@@ -1574,11 +1641,25 @@
   </div>
 
   <div id="tab-cron" class="tab">
-    <div class="pane">
-      <table class="data" id="cron-table">
-        <thead><tr><th>Id</th><th>Spec</th><th>Skill</th><th>Args</th><th>Channel</th><th>Status</th></tr></thead>
-        <tbody></tbody>
-      </table>
+    <!-- Cron: the jobs in config.json's crons[], as GET /v1/cron reports
+         them, with the slot each last fired for. Read-only: jobs are edited
+         in Settings › Scheduling. -->
+    <div class="pane" id="cron-pane">
+      <div class="cr-wrap">
+        <header class="cr-head">
+          <div>
+            <h2>Cron</h2>
+            <p class="cr-lead">Skills that run on their own, on a schedule, while the gateway is up. Each job can post what its skill returns to a channel.
+              <a href="#settings" data-cron-settings>Edit in Settings › Scheduling</a></p>
+          </div>
+          <button type="button" class="icon-btn" id="cron-refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg><span>Refresh</span></button>
+        </header>
+        <section class="cr-sec" aria-labelledby="cron-jobs-h">
+          <div class="cr-sec-head"><h3 id="cron-jobs-h">Jobs</h3><span class="n" id="cron-n"></span></div>
+          <div class="cr-list" id="cron-list" aria-live="polite"><div class="cr-msg">Loading jobs…</div></div>
+          <p class="cr-foot" id="cron-foot" hidden>Schedule times are the gateway machine's local time; hover a last run for its exact time.</p>
+        </section>
+      </div>
     </div>
   </div>
 
@@ -5940,27 +6021,7 @@ const tabLoaders = {
      negotiated, and its tools. See setupMcpTab. */
   mcp() { setupMcpTab(); },
 
-  async cron() {
-    const tbody = $("#cron-table tbody"); tbody.innerHTML = "";
-    try {
-      const j = await (await gwFetch("/v1/cron")).json();
-      if (!j.entries || !j.entries.length) {
-        tbody.innerHTML = `<tr><td colspan=6><div class="empty-pane">No cron entries.</div></td></tr>`;
-        return;
-      }
-      for (const c of j.entries) {
-        const tr = document.createElement("tr");
-        const ch = c.channel_kind ? `${c.channel_kind}:${c.channel_target}` : "--";
-        tr.innerHTML = `<td>${escapeHtml(c.id)}</td>`
-                     + `<td>${escapeHtml(c.spec)}</td>`
-                     + `<td>${escapeHtml(c.skill)}</td>`
-                     + `<td>${escapeHtml(c.args || "")}</td>`
-                     + `<td>${escapeHtml(ch)}</td>`
-                     + `<td><span class="badge ${c.enabled?"on":"off"}">${c.enabled?"on":"off"}</span></td>`;
-        tbody.appendChild(tr);
-      }
-    } catch (e) { tbody.innerHTML = `<tr><td colspan=6>${escapeHtml(String(e))}</td></tr>`; }
-  },
+  cron() { cronSetup(); return cronLoad(); },
 
   async skills() {
     const pane = $("#skills-pane");
@@ -6803,6 +6864,221 @@ async function bgSend(h, form) {
     bgSetNote(j.error || ("http " + r.status), true);
   } catch (e) { bgSetNote(String(e), true); }
   btn.disabled = false;
+}
+
+/* ===== Cron tab =====
+   A row per job from GET /v1/cron. Ids, skills, arguments and specs are
+   config text, so every one goes in with textContent. The plain reading of
+   a schedule is given only for the shapes below, where it is exact; any
+   other expression shows the expression alone. The list loads when the tab
+   opens (and on Refresh); it does not poll. */
+const CRON_CHANNELS = { discord: "Discord", slack: "Slack", teams: "Teams", webhook: "a webhook",
+                        line: "LINE", whatsapp: "WhatsApp" };
+const CRON_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+let cronWired = false, cronSeq = 0;
+
+function cronEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+/* "*\/5 * * * *" -> "Every 5 minutes", "0 9 * * 1-5" -> "Weekdays at 09:00".
+   Steps are read only when they divide the hour or the day evenly (a step
+   of 7 minutes restarts at :00, so it is not "every 7 minutes"). Anything
+   else returns "" and the row shows the expression alone. */
+function cronReading(spec) {
+  const f = String(spec || "").trim().split(/\s+/);
+  if (f.length !== 5) return "";
+  const [mi, ho, dom, mon, dow] = f;
+  const num = (s, lo, hi) => /^\d{1,2}$/.test(s) && +s >= lo && +s <= hi;
+  const step = (s, whole) => {
+    const m = /^\*\/(\d{1,2})$/.exec(s);
+    return m && +m[1] >= 1 && +m[1] < whole && whole % +m[1] === 0 ? +m[1] : 0;
+  };
+  const pad = s => String(+s).padStart(2, "0");
+  if (mon !== "*") return "";
+  if (dom !== "*") {
+    if (dow === "*" && num(dom, 1, 31) && num(mi, 0, 59) && num(ho, 0, 23))
+      return `Monthly on day ${+dom} at ${pad(ho)}:${pad(mi)}`;
+    return "";
+  }
+  if (dow === "*") {
+    if (mi === "*" && ho === "*") return "Every minute";
+    const ms = step(mi, 60);
+    if (ms && ho === "*") return ms === 1 ? "Every minute" : `Every ${ms} minutes`;
+    if (num(mi, 0, 59) && ho === "*") return +mi === 0 ? "Every hour, on the hour" : `Every hour at :${pad(mi)}`;
+    const hs = step(ho, 24);
+    if (num(mi, 0, 59) && hs) {
+      const every = hs === 1 ? "Every hour" : `Every ${hs} hours`;
+      return +mi === 0 ? every + ", on the hour" : `${every} at :${pad(mi)}`;
+    }
+  }
+  if (!num(mi, 0, 59) || !num(ho, 0, 23)) return "";
+  const at = `at ${pad(ho)}:${pad(mi)}`;
+  if (dow === "*") return "Every day " + at;
+  if (dow === "1-5") return "Weekdays " + at;
+  if (!/^[0-7](,[0-7])*$/.test(dow)) return "";
+  const days = [...new Set(dow.split(",").map(d => +d % 7))].sort((a, b) => a - b);
+  if (days.length === 7) return "Every day " + at;
+  if (days.length === 2 && days[0] === 0 && days[1] === 6) return "Weekends " + at;
+  if (days.length === 1) return `Every ${CRON_DAYS[days[0]]} ${at}`;
+  const names = days.map(d => CRON_DAYS[d].slice(0, 3));
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} ${at}`;
+}
+
+function cronAgo(sec) {
+  const s = Math.round(Date.now() / 1000 - sec);
+  if (s < 0) return "scheduled for later";     // a clock that disagrees; the hover has the time
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + " min ago";
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + " h ago";
+  return Math.floor(h / 24) + " days ago";
+}
+
+function cronSetup() {
+  if (cronWired) return;
+  cronWired = true;
+  $("#cron-refresh").addEventListener("click", () => cronLoad());
+  $("#tab-cron").addEventListener("click", e => {
+    if (e.target.closest("[data-cron-settings]")) { e.preventDefault(); cronOpenSettings(); return; }
+    if (e.target.closest("[data-cron-retry]")) { cronLoad(); return; }
+    const more = e.target.closest(".cr-more");
+    if (more) {
+      const a = more.previousElementSibling, open = !a.classList.contains("open");
+      a.classList.toggle("open", open);
+      more.textContent = open ? "Show less" : "Show all";
+      more.setAttribute("aria-expanded", String(open));
+    }
+  });
+  let t = 0;
+  window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(cronFitArgs, 150); });
+  tabHooks.cron = { show: () => cronLoad() };
+}
+
+function cronOpenSettings() {
+  try { localStorage.setItem("pasclaw.settings.section", "scheduling"); } catch {}
+  showTab("settings");
+  const b = document.querySelector('#set-nav button[data-sec="scheduling"]');
+  if (b && $("#tab-settings").classList.contains("active")) b.click();
+}
+
+async function cronLoad() {
+  const list = $("#cron-list"), seq = ++cronSeq;
+  const btn = $("#cron-refresh");
+  btn.disabled = true;
+  if (!list.querySelector(".cr-job")) {
+    list.removeAttribute("role");
+    list.replaceChildren(cronEl("div", "cr-msg", "Loading jobs…"));
+  }
+  let entries;
+  try {
+    const r = await gwFetch("/v1/cron");
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    entries = Array.isArray(j.entries) ? j.entries : [];
+  } catch (e) {
+    if (seq !== cronSeq) return;
+    btn.disabled = false;
+    $("#cron-n").textContent = "";
+    $("#cron-foot").hidden = true;
+    list.removeAttribute("role");
+    const m = cronEl("div", "cr-msg err");
+    m.append(cronEl("span", null, "Couldn't load the jobs: " + (e && e.message || e)));
+    const retry = cronEl("button", "icon-btn", "Try again");
+    retry.type = "button"; retry.dataset.cronRetry = "";
+    m.appendChild(retry);
+    list.replaceChildren(m);
+    return;
+  }
+  if (seq !== cronSeq) return;
+  btn.disabled = false;
+  cronRender(entries);
+}
+
+function cronRender(entries) {
+  const list = $("#cron-list");
+  const on = entries.filter(c => c.enabled).length;
+  $("#cron-n").textContent = entries.length
+    ? `${entries.length} · ${on} enabled` : "";
+  $("#cron-foot").hidden = !entries.length;
+  if (!entries.length) {
+    list.removeAttribute("role");
+    const d = cronEl("div", "cr-empty");
+    d.innerHTML = '<span class="cr-empty-ic">' + icon("cron-clock") + '</span><div><b>No scheduled jobs</b>'
+      + '<p>A job runs one of your skills on a cron schedule, such as <code>0 9 * * 1-5</code> for weekdays at 09:00, '
+      + 'and can post what it returns to a channel. Add one in '
+      + '<a href="#settings" data-cron-settings>Settings › Scheduling</a>.</p></div>';
+    list.replaceChildren(d);
+    return;
+  }
+  list.setAttribute("role", "list");
+  list.replaceChildren(...entries.map(cronRow));
+  cronFitArgs();
+}
+
+function cronRow(c) {
+  const row = cronEl("div", "cr-job" + (c.enabled ? " on" : ""));
+  row.setAttribute("role", "listitem");
+  row.dataset.id = c.id || "";
+  const dot = cronEl("span", "cr-dot");
+  dot.setAttribute("aria-hidden", "true");
+
+  const main = cronEl("div", "cr-main"), l1 = cronEl("div", "cr-l1");
+  l1.append(cronEl("span", "cr-id", c.id || "(no id)"),
+            cronEl("span", "cr-tag cr-state" + (c.enabled ? " ok" : ""), c.enabled ? "Enabled" : "Disabled"));
+
+  const sched = cronEl("div", "cr-sched");
+  const spec = cronEl("code", "cr-spec", c.spec || "");
+  spec.title = "Cron expression: minute, hour, day of month, month, day of week";
+  sched.appendChild(spec);
+  const reading = cronReading(c.spec);
+  if (reading) sched.appendChild(cronEl("span", "cr-human", reading));
+
+  /* "@maintain" is the scheduler's one reserved name: the maintenance pass. */
+  const runs = cronEl("div", "cr-runs");
+  if (String(c.skill || "").toLowerCase() === "@maintain") runs.append("Runs the nightly maintenance pass (");
+  else runs.append("Runs skill ");
+  runs.appendChild(cronEl("code", "cr-skill", c.skill || "(none)"));
+  if (String(c.skill || "").toLowerCase() === "@maintain") runs.append(")");
+  if (c.channel_kind) runs.append(", posts the result to " + (CRON_CHANNELS[c.channel_kind] || c.channel_kind));
+  main.append(l1, sched, runs);
+
+  if (c.args) {
+    const wrap = cronEl("div", "cr-args-wrap");
+    const args = cronEl("p", "cr-args", c.args);
+    const more = cronEl("button", "cr-more", "Show all");
+    more.type = "button"; more.hidden = true;
+    more.setAttribute("aria-expanded", "false");
+    wrap.append(args, more);
+    main.appendChild(wrap);
+  }
+
+  const side = cronEl("div", "cr-side");
+  side.appendChild(cronEl("span", "cr-side-lbl", "Last run"));
+  if (c.last_fired) {
+    const d = new Date(c.last_fired * 1000);
+    const t = cronEl("time", "cr-last", cronAgo(c.last_fired));
+    t.dateTime = d.toISOString();
+    t.title = d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
+    side.appendChild(t);
+  } else {
+    side.appendChild(cronEl("span", "cr-last never", "Not yet"));
+  }
+  row.append(dot, main, side);
+  return row;
+}
+
+/* Show all appears only where the two-line clamp hides something. */
+function cronFitArgs() {
+  for (const a of $$("#cron-list .cr-args")) {
+    const more = a.nextElementSibling;
+    if (a.classList.contains("open")) { more.hidden = false; continue; }
+    more.hidden = !(a.scrollHeight > a.clientHeight + 1);
+  }
 }
 
 /* Scheduled work has its own tab and route; say how much there is. */

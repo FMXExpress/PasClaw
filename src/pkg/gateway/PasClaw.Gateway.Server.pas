@@ -792,6 +792,7 @@ uses
   PasClaw.Vault.Client,     { SearchVault / GetVaultEntry -- /v1/vault browse }
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.Background, { /v1/background -- the background-jobs view }
+  PasClaw.Cron.State,       { last_fired on GET /v1/cron }
   PasClaw.Gateway.WebUI,
   PasClaw.Gateway.Desktop,  { desktop client surface: workspaces, projects,
                               tasks, jobs, apps, pages }
@@ -2678,10 +2679,18 @@ var
   Root: TJsonObject;
   Arr: TJsonArray;
   Item: TJsonObject;
+  State: TCronState;
+  Fired: Int64;
   i: Integer;
 begin
+  { last_fired: the slot the scheduler last handled, from its state file
+    (read-only -- the scheduler thread owns the file). It stores the
+    slot's local wall-clock time in unix form; send a true unix time, or
+    null for a job that has not fired. }
+  State := TCronState.Create(DefaultCronStatePath);
   Root := TJsonObject.Create;
   try
+    State.Peek;
     Arr := TJsonArray.Create;
     for i := 0 to High(FCfg.Crons) do
     begin
@@ -2692,13 +2701,24 @@ begin
       Item.PutStr ('args',           FCfg.Crons[i].Args);
       Item.PutBool('enabled',        FCfg.Crons[i].Enabled);
       Item.PutStr ('channel_kind',   FCfg.Crons[i].ChannelKind);
-      Item.PutStr ('channel_target', FCfg.Crons[i].ChannelTarget);
+      { A webhook URL carries its own credential: masked, as /v1/config
+        masks it. Nothing reads the real one from here. }
+      if FCfg.Crons[i].ChannelTarget <> '' then
+        Item.PutStr('channel_target', MaskedSecretPlaceholder)
+      else
+        Item.PutStr('channel_target', '');
+      Fired := State.GetLastFired(FCfg.Crons[i].Id);
+      if Fired > 0 then
+        Item.PutInt('last_fired', DateTimeToUnix(UnixToDateTime(Fired), False))
+      else
+        Item.PutRaw('last_fired', 'null');
       Arr.AddObject(Item);
     end;
     Root.PutArray('entries', Arr);
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
+    State.Free;
   end;
 end;
 
