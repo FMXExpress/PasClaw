@@ -440,7 +440,12 @@ def main():
     ap.add_argument("--exit-on-unknown", action="store_true")
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--port-file", default="")
+    ap.add_argument("--start-delay", type=float, default=0,
+                    help="seconds to wait before serving, like a server slow to start")
     ARGS = ap.parse_args()
+    if ARGS.start_delay > 0:
+        import time
+        time.sleep(ARGS.start_delay)
     if ARGS.transport == "http":
         run_http()
     else:
