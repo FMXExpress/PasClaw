@@ -61,6 +61,21 @@ line on what it does and the config key for each setting, providers as cards,
 and a bar along the bottom that counts unsaved changes. Saved keys are
 write-only fields that say whether a value is set.
 
+## Web UI — relay (`/` → Relay)
+
+![The Relay tab with two workers connected](./web-ui-relay.png)
+
+Workers that run models on their own hardware and pull the gateway's
+requests ([providers-relay.md](../providers-relay.md)). The line under the
+title says the default provider is a relay provider; the strip counts the
+workers online and the queue; each worker is a row with its models as chips,
+online, its request count and when it was last seen. Below, **Add a worker**:
+the gateway URL and the masked worker token, then the options (this browser,
+`pasclaw relay`, Python, Replicate). The two workers are the capture
+script's own: each holds `/v1/relay/poll` open with the models it names, and
+takes no job. The headless browser has no WebGPU, so the in-browser worker
+says so.
+
 ## Web UI — phone width
 
 ![The chat tab at phone width](./web-ui-phone.png)
@@ -137,10 +152,15 @@ not look for.
 
 Run twice from a fresh fixture home at the same path, `web-ui-chat`,
 `web-ui-context`, `web-ui-memory`, `web-ui-workflow`, `web-ui-settings` and
-`web-ui-phone` come out **byte-identical**. Three do not:
+`web-ui-phone` come out **byte-identical**. Four do not:
 
 - `web-desktop.png`: the taskbar shows a wall clock, so those bytes differ on
   every run. Everything else about it is deterministic.
+- `web-ui-relay.png`: the queue counts come from when the fixture's own
+  requests (the memory distiller's, which no capture worker serves) reach the
+  queue, so a run can show one queued or none. It is taken after the shots
+  above and before the Background seeding, with its two workers gone again
+  before that, so the other shots are unchanged.
 - `web-ui-background.png`: the job's start time, its handle and "just now"
   come from the run. It is taken last, after `shoot` starts one background
   subagent from a chat of its own, so the shots before it are unchanged.

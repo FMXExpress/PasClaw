@@ -9,8 +9,9 @@ Two steps, because the gateway has to be running between them:
 
 `init` writes the fixture config and a MEMORY.md. `shoot` seeds the running
 gateway with projects, one workflow and one finished conversation, then
-captures; then it starts one background subagent from a chat of its own and
-captures the Background tab.
+captures; then it connects two relay workers and captures the Relay tab;
+then it starts one background subagent from a chat of its own and captures
+the Background tab.
 
 Every shot names its colour scheme. The web UI follows the OS theme until a
 theme is chosen, and Playwright's default is light, so a shot that does not
@@ -111,6 +112,15 @@ step 2**. Nothing else in the notes constrains the order.
 
 Not checked: whether docs/release.md itself still says so -- the note may \
 predate an edit."""
+
+# The Relay tab: two workers that connect the way real ones do, by holding
+# /v1/relay/poll open and naming their models. They take no job: each names
+# models, and the fixture's requests ask for relay-operator, which neither
+# serves. Connected after the shots above, gone before the Background seeding.
+RELAY_WORKERS = [
+    ("gpu-box-1", "Qwen2.5-Coder-7B-Instruct,llama-3.1-8b"),
+    ("pixel-8-phone", "Phi-3.5-mini-instruct"),
+]
 
 W, H = 1600, 1000
 
@@ -329,6 +339,41 @@ def seed_background(base):
     print("background: %d relay turn(s) answered" % len(answered))
 
 
+def relay_status(base):
+    return json.loads(get(base + "/v1/relay/status"))
+
+
+def connect_relay_workers(base):
+    """Open one held poll per RELAY_WORKERS entry; returns the open streams.
+
+    urlopen returns once the headers are in, and the open stream is the
+    worker's registration: nothing has to read it for the worker to stay."""
+    before = relay_status(base).get("connected_workers", 0)
+    streams = []
+    for wid, caps in RELAY_WORKERS:
+        req = urllib.request.Request(base + "/v1/relay/poll", headers={
+            "X-Relay-Worker-Id": wid, "X-Relay-Capabilities": caps,
+            "Accept": "text/event-stream"})
+        streams.append(urllib.request.urlopen(req, timeout=120))
+    deadline = time.time() + 10
+    while relay_status(base).get("connected_workers", 0) < before + len(RELAY_WORKERS):
+        if time.time() > deadline:
+            raise SystemExit("the relay workers never showed as connected")
+        time.sleep(0.2)
+    return streams
+
+
+def disconnect_relay_workers(base, streams):
+    for s in streams:
+        s.close()
+    names = {wid for wid, _ in RELAY_WORKERS}
+    deadline = time.time() + 15
+    while any(w.get("id") in names for w in relay_status(base).get("workers", [])):
+        if time.time() > deadline:
+            raise SystemExit("the relay workers never went away")
+        time.sleep(0.2)
+
+
 def seed_conversation(base):
     stop = threading.Event()
     answered = []
@@ -453,6 +498,33 @@ def cmd_shoot(args):
         browser.close()
 
     if not args.no_seed:
+        # The Relay tab, with two workers connected for it and gone before
+        # the Background seeding below. After the shots above, which then
+        # come out as they did before it.
+        streams = connect_relay_workers(base)
+        try:
+            with sync_playwright() as p:
+                browser = launch(p)
+                page = browser.new_page(viewport={"width": W, "height": H}, color_scheme="dark")
+                errs = []
+                page.on("pageerror", lambda e: errs.append(str(e)))
+                page.on("console",
+                        lambda m: errs.append(m.text) if m.type == "error" else None)
+                page.goto(base + "/#relay", wait_until="networkidle", timeout=30000)
+                page.wait_for_selector("#relay-workers .rl-w", timeout=15000)
+                page.wait_for_selector("#relay-provider[data-state=ok]", timeout=15000)
+                page.wait_for_timeout(800)
+                dest = os.path.join(out, "web-ui-relay.png")
+                page.screenshot(path=dest)
+                print("%-16s %7d bytes  title=%r" % ("web-ui-relay", os.path.getsize(dest), page.title()))
+                if errs:
+                    for e in errs[:5]:
+                        print("    JS ERROR: %s" % e[:200])
+                    failures.append(("web-ui-relay", len(errs)))
+                browser.close()
+        finally:
+            disconnect_relay_workers(base, streams)
+
         # After the shots above, so their chat list and transcript are the
         # ones they always were.
         seed_background(base)

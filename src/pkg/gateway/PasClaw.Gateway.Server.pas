@@ -6872,6 +6872,10 @@ begin
       WObj.PutInt('requests_seen', Workers[i].RequestsSeen);
       WObj.PutStr('last_seen', FormatDateTime('yyyy-mm-dd"T"hh:nn:ss',
                                                 Workers[i].LastSeen));
+      { last_seen is the gateway's local time with no zone, so a browser
+        in another time zone (or a gateway in a UTC container) cannot
+        turn it into "12 s ago". The age, measured here, can. }
+      WObj.PutInt('last_seen_age_ms', MilliSecondsBetween(Now, Workers[i].LastSeen));
       Arr.AddObject(WObj);
     end;
     Root.PutArray('workers', Arr);
