@@ -239,6 +239,21 @@ function freePort() {
     if (await page.locator("#bg-msg-text").count()) fail("a message box for a shell job");
     ok("a shell job shows its command, output and exit code, and takes no message");
 
+    /* A running shell job past 64 KB: the server sends a fixed-size tail, so
+       the output's length stops changing while its content does. The open
+       view must keep following it (it used to freeze on its first render). */
+    await chatApi("SH head -c 70000 /dev/zero | tr '\\0' x; echo; seq 1 40 | while read i; do echo tick-$i; sleep 0.25; done");
+    const ht = await (async () => { let h; await until(async () => { const j = (await jobs()).find(x => x.kind === "shell" && x.handle !== hs); h = j && j.handle; return !!h; }, "the long shell job"); return h; })();
+    await item(ht).waitFor({ timeout: 5000 });
+    await item(ht).click();
+    await until(async () => /tick-\d+/.test(await page.textContent("#bg-detail .bg-output")), "the first ticks");
+    const firstTick = Math.max(...((await page.textContent("#bg-detail .bg-output")).match(/tick-(\d+)/g) || ["tick-0"]).map(t => +t.slice(5)));
+    await until(async () => {
+      const ticks = ((await page.textContent("#bg-detail .bg-output")).match(/tick-(\d+)/g) || []).map(t => +t.slice(5));
+      return ticks.length && Math.max(...ticks) >= firstTick + 8;
+    }, "later ticks: the open view stopped following a shell job's output past 64 KB (stuck after tick-" + firstTick + ")", 9000);
+    ok("a running shell job past 64 KB keeps updating in the open view");
+
     /* ---- light theme ---- */
     await item(h1).click();
     await page.waitForSelector("#bg-detail .bg-chip.done");

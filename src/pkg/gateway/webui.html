@@ -4906,13 +4906,21 @@ function bgRow(body, role, html) {
   return r.querySelector(".bub");
 }
 
+/* FNV-1a over a string: a cheap fingerprint of CONTENT. Lengths are not
+   enough to tell whether a job's detail changed: past 64 KB a running shell
+   job's output is a fixed-size tail, and a transcript at its message cap
+   drops one from the front as it adds one, so the view froze. */
+function strHash(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36);
+}
+
 function renderBgDetail(j) {
   const pane = $("#bg-detail");
   const msgs = j.messages || [];
-  const last = msgs.length ? msgs[msgs.length - 1] : null;
-  const sig = [j.handle, j.state, j.stopping, msgs.length, last ? (last.content || "").length : 0,
-               (last && last.tool_calls) ? last.tool_calls.length : 0, (j.output || "").length,
-               j.continued_by || "", bgChatTitle(j.session)].join("|");
+  const sig = [j.handle, j.state, j.stopping, msgs.length, strHash(JSON.stringify(msgs)),
+               strHash(j.output || ""), j.continued_by || "", bgChatTitle(j.session)].join("|");
   if (sig === bg.detailSig) {
     const el = $("#bg-elapsed");
     if (el) el.textContent = (j.finished_at ? "took " : "running for ") + fmtDur(j.elapsed_sec);
