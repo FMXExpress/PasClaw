@@ -122,7 +122,9 @@ make test-shell-filters
 ...
 ```
 
-`make test` is the aggregate — runs the full battery. `make smoke` is the cheapest sanity check (smoke build only; no test compile).
+`make test` is the aggregate — runs the full battery. It builds `build/pasclaw` first, which brings the shared compiled units in `build/lib` up to date, then runs the tests one per core at a time, each test's output printed together when it ends. Every test compile reads `build/lib` and writes only into a directory of its own (`build/lib/t/<target>`), so compiles running at once never write the same unit. The tests get a `PASCLAW_HOME` of their own (`build/test-home`, emptied first), never `~/.pasclaw`. `make test TEST_JOBS=1` runs them one at a time; `make -jN test-all` runs the list with no build-first step. `make smoke` is the cheapest sanity check (smoke build only; no test compile).
+
+A new test target goes in `TEST_TARGETS`, compiles with `$(TEST_FPC)` rather than `$(FPC) $(FPCFLAGS)`, and must not depend on running alone: free ports, temporary directories, and no fixed paths another test could share.
 
 ### Regression test naming
 

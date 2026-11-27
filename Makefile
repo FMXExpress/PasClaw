@@ -178,7 +178,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test test-updater-versions test-advisor test-advisor-e2e test-mcp-client test-mcp-client-e2e dos dos-host dos-toolchain test-dos test-dos-dosbox xp xp-toolchain test-xp test-gateway-listen-fail test-config-save-env-markers test-provider-models-e2e test-webui-model-picker-e2e test-verify test-verify-routes test-steering-fastpath test-workspace-listing test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-memory-tiers test-backup test-maintain openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape lint-version lint-utf8-file-io test-workspaces test-projects test-tool-schema test-teams test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser test-background-view test-background-view-e2e test-webui-background-e2e test-webui-settings-e2e
+.PHONY: all clean run test test-all test-updater-versions test-advisor test-advisor-e2e test-mcp-client test-mcp-client-e2e dos dos-host dos-toolchain test-dos test-dos-dosbox xp xp-toolchain test-xp test-gateway-listen-fail test-config-save-env-markers test-provider-models-e2e test-webui-model-picker-e2e test-verify test-verify-routes test-steering-fastpath test-workspace-listing test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-memory-tiers test-backup test-maintain openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape lint-version lint-utf8-file-io test-workspaces test-projects test-tool-schema test-teams test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser test-background-view test-background-view-e2e test-webui-background-e2e test-webui-settings-e2e test-webui-relay-e2e
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -210,7 +210,22 @@ PASCLAW_SOURCES := $(shell find src -type f \( -name '*.pas' -o -name '*.dpr' -o
 # rebuilt and the old code is linked. Once per make run, before any recipe,
 # drop the units whose sources changed since the previous run started.
 # See scripts/sweep-stale-units.sh; pinned by test-stale-units.
-STALE_UNIT_SWEEP := $(shell PASCLAW_VERSION='$(VERSION)' sh scripts/sweep-stale-units.sh $(BUILDDIR)/lib src)
+# `make test` runs its tests in a second make, after its own sweep and
+# $(BIN): that make names the directory already swept in SWEPT_LIB and does
+# not sweep it again -- by then the web UI's unit is newer than the marker
+# (building webui.res touches it), and a second sweep would delete the unit
+# $(BIN) had just compiled while the tests read it. A make for another
+# BUILDDIR (the XP build test-xp starts) still sweeps its own.
+STALE_UNIT_SWEEP := $(if $(filter $(BUILDDIR)/lib,$(SWEPT_LIB)),,$(shell PASCLAW_VERSION='$(VERSION)' sh scripts/sweep-stale-units.sh $(BUILDDIR)/lib src))
+
+# Test programs compile at once under `make test`, so none of them may
+# write $(BUILDDIR)/lib: two compiles writing one .ppu at a time corrupt it.
+# Each reads the units there (listed first, so FPC finds the compiled unit
+# before its source; $(BIN) brought them up to date) and writes what it
+# compiles itself -- its program, and a unit $(BIN) does not use or that is
+# out of date -- to a directory of its own, emptied first.
+TEST_FPC = rm -rf $(BUILDDIR)/lib/t/$@ && mkdir -p $(BUILDDIR)/lib/t/$@ && \
+	$(FPC) -Fu$(BUILDDIR)/lib $(FPCFLAGS) -FU$(BUILDDIR)/lib/t/$@
 
 # The sweep rewrites .sweep-version only when the version changed, so a
 # commit that touched no source (docs only) still relinks with the new
@@ -277,91 +292,91 @@ smoke: $(BIN)
 # `git describe` version against the tag it sits on used to loop for ever.
 test-updater-versions: | $(BUILDDIR) $(INDY_DIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/updater_version_tests.pas -o$(BUILDDIR)/updater_version_tests
+	$(TEST_FPC) src/tests/updater_version_tests.pas -o$(BUILDDIR)/updater_version_tests
 	@$(BUILDDIR)/updater_version_tests
 
 test-hashline: $(WEBUI_RES) | $(BUILDDIR) $(INDY_DIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/hashline_patch_tests.pas -o$(BUILDDIR)/hashline_patch_tests
+	$(TEST_FPC) src/tests/hashline_patch_tests.pas -o$(BUILDDIR)/hashline_patch_tests
 	@$(BUILDDIR)/hashline_patch_tests
 
 # Pure tool-activity formatter tests. No Indy/webui resource needed — the
 # ToolView unit only depends on PasClaw.JSON and PasClaw.Hashline.
 test-toolview: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/toolview_tests.pas -o$(BUILDDIR)/toolview_tests
+	$(TEST_FPC) src/tests/toolview_tests.pas -o$(BUILDDIR)/toolview_tests
 	@$(BUILDDIR)/toolview_tests
 
 # Anthropic provider — server-side web_search / web_fetch wire shape.
 test-anthropic-server-tools: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/anthropic_server_tools_tests.pas -o$(BUILDDIR)/anthropic_server_tools_tests
+	$(TEST_FPC) src/tests/anthropic_server_tools_tests.pas -o$(BUILDDIR)/anthropic_server_tools_tests
 	@$(BUILDDIR)/anthropic_server_tools_tests
 
 # OpenAI provider — server-side web_search_options wire shape.
 test-openai-server-tools: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/openai_server_tools_tests.pas -o$(BUILDDIR)/openai_server_tools_tests
+	$(TEST_FPC) src/tests/openai_server_tools_tests.pas -o$(BUILDDIR)/openai_server_tools_tests
 	@$(BUILDDIR)/openai_server_tools_tests
 
 # tool_choice keyword + force-a-specific-tool forms (OpenAI + Anthropic).
 test-tool-choice: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/tool_choice_tests.pas -o$(BUILDDIR)/tool_choice_tests
+	$(TEST_FPC) src/tests/tool_choice_tests.pas -o$(BUILDDIR)/tool_choice_tests
 	@$(BUILDDIR)/tool_choice_tests
 
 # /v1/responses tool_choice parse (flat top-level name + nested function.name).
 test-responses-tool-choice: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/responses_tool_choice_tests.pas -o$(BUILDDIR)/responses_tool_choice_tests
+	$(TEST_FPC) src/tests/responses_tool_choice_tests.pas -o$(BUILDDIR)/responses_tool_choice_tests
 	@$(BUILDDIR)/responses_tool_choice_tests
 
 # PasClaw.CliUI Print/PrintLn helpers — link + UTF-8 byte round-trip.
 test-println-helper: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/println_helper_tests.pas -o$(BUILDDIR)/println_helper_tests
+	$(TEST_FPC) src/tests/println_helper_tests.pas -o$(BUILDDIR)/println_helper_tests
 	@$(BUILDDIR)/println_helper_tests
 
 # PasClaw.Utils.TagUTF8 — codepage retag at byte-stream boundaries.
 test-utf8-codepage-tag: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/utf8_codepage_tag_tests.pas -o$(BUILDDIR)/utf8_codepage_tag_tests
+	$(TEST_FPC) src/tests/utf8_codepage_tag_tests.pas -o$(BUILDDIR)/utf8_codepage_tag_tests
 	@$(BUILDDIR)/utf8_codepage_tag_tests
 
 # Gemini provider — JSON Schema scrub for additionalProperties etc.
 test-gemini-schema-strip: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/gemini_schema_strip_tests.pas -o$(BUILDDIR)/gemini_schema_strip_tests
+	$(TEST_FPC) src/tests/gemini_schema_strip_tests.pas -o$(BUILDDIR)/gemini_schema_strip_tests
 	@$(BUILDDIR)/gemini_schema_strip_tests
 
 # Markdown -> ANSI terminal renderer.
 test-markdown-render: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/markdown_render_tests.pas -o$(BUILDDIR)/markdown_render_tests
+	$(TEST_FPC) src/tests/markdown_render_tests.pas -o$(BUILDDIR)/markdown_render_tests
 	@$(BUILDDIR)/markdown_render_tests
 
 # PasClaw.JSON — UTF-8 byte preservation through Parse + GetStr/ItemStr.
 test-skills-provenance: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/skills_provenance_tests.pas -o$(BUILDDIR)/skills_provenance_tests
+	$(TEST_FPC) src/tests/skills_provenance_tests.pas -o$(BUILDDIR)/skills_provenance_tests
 	@$(BUILDDIR)/skills_provenance_tests
 
 test-ssrf-guard: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/ssrf_guard_tests.pas -o$(BUILDDIR)/ssrf_guard_tests
+	$(TEST_FPC) src/tests/ssrf_guard_tests.pas -o$(BUILDDIR)/ssrf_guard_tests
 	@$(BUILDDIR)/ssrf_guard_tests
 test-shell-denylist-bypass: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/shell_denylist_bypass_tests.pas -o$(BUILDDIR)/shell_denylist_bypass_tests
+	$(TEST_FPC) src/tests/shell_denylist_bypass_tests.pas -o$(BUILDDIR)/shell_denylist_bypass_tests
 	@$(BUILDDIR)/shell_denylist_bypass_tests
 test-shell-cwd-report: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/shell_cwd_report_tests.pas -o$(BUILDDIR)/shell_cwd_report_tests
+	$(TEST_FPC) src/tests/shell_cwd_report_tests.pas -o$(BUILDDIR)/shell_cwd_report_tests
 	@$(BUILDDIR)/shell_cwd_report_tests
 
 test-relay-servertools: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/relay_servertools_tests.pas -o$(BUILDDIR)/relay_servertools_tests
+	$(TEST_FPC) src/tests/relay_servertools_tests.pas -o$(BUILDDIR)/relay_servertools_tests
 	@$(BUILDDIR)/relay_servertools_tests
 
 # /v1/stats by_model must credit the model that actually spent the tokens.
@@ -369,14 +384,14 @@ test-relay-servertools: | $(BUILDDIR)
 # whichever model ran last (150,015 tokens credited to one that used 15).
 test-stats-attribution: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/stats_attribution_repro.pas -o$(BUILDDIR)/stats_attribution_repro
+	$(TEST_FPC) src/tests/stats_attribution_repro.pas -o$(BUILDDIR)/stats_attribution_repro
 	@PASCLAW_HOME=$$(mktemp -d) ; export PASCLAW_HOME ; \
 	$(BUILDDIR)/stats_attribution_repro ; rc=$$? ; \
 	rm -rf "$$PASCLAW_HOME" ; exit $$rc
 
 test-json-utf8-roundtrip: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/json_utf8_roundtrip_tests.pas -o$(BUILDDIR)/json_utf8_roundtrip_tests
+	$(TEST_FPC) src/tests/json_utf8_roundtrip_tests.pas -o$(BUILDDIR)/json_utf8_roundtrip_tests
 	@$(BUILDDIR)/json_utf8_roundtrip_tests
 
 # The "index unavailable" text must name the SQLite binding this build
@@ -384,7 +399,7 @@ test-json-utf8-roundtrip: | $(BUILDDIR)
 # hand-built JSON error bodies.
 test-sqlite-hint: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/sqlite_hint_tests.pas -o$(BUILDDIR)/sqlite_hint_tests
+	$(TEST_FPC) src/tests/sqlite_hint_tests.pas -o$(BUILDDIR)/sqlite_hint_tests
 	@$(BUILDDIR)/sqlite_hint_tests
 	@# Structural guard. SqliteBackendHint is the FALLBACK; call sites must
 	@# go through SqliteOpenFailureReason(Idx.LastError) so the driver's own
@@ -408,7 +423,7 @@ test-sqlite-hint: | $(BUILDDIR)
 # the LastError interface change could have broken invisibly.
 test-memory-search-roundtrip: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/memory_search_roundtrip_tests.pas -o$(BUILDDIR)/memory_search_roundtrip_tests
+	$(TEST_FPC) src/tests/memory_search_roundtrip_tests.pas -o$(BUILDDIR)/memory_search_roundtrip_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; export PASCLAW_HOME ; \
 	$(BUILDDIR)/memory_search_roundtrip_tests ; rc=$$? ; \
 	rm -rf "$$PASCLAW_HOME" ; exit $$rc
@@ -417,7 +432,7 @@ test-memory-search-roundtrip: | $(BUILDDIR)
 # a legacy 8-bit source is reinterpreted as Latin-1 (never EEncodingError).
 test-read-file-encoding: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/read_file_encoding_tests.pas -o$(BUILDDIR)/read_file_encoding_tests
+	$(TEST_FPC) src/tests/read_file_encoding_tests.pas -o$(BUILDDIR)/read_file_encoding_tests
 	@$(BUILDDIR)/read_file_encoding_tests
 
 # Structural lint for the Delphi-only studio sources. FPC cannot compile
@@ -471,21 +486,21 @@ lint-studio:
 # row cap, identifier validation, redaction.
 test-db-tools: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/db_tools_tests.pas -o$(BUILDDIR)/db_tools_tests
+	$(TEST_FPC) src/tests/db_tools_tests.pas -o$(BUILDDIR)/db_tools_tests
 	@$(BUILDDIR)/db_tools_tests
 
 # Lenient parse: bare control chars inside strings (unescaped LLM JSON) are
 # repaired instead of crashing; valid JSON untouched; bad JSON still errors.
 test-json-lenient: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/json_lenient_tests.pas -o$(BUILDDIR)/json_lenient_tests
+	$(TEST_FPC) src/tests/json_lenient_tests.pas -o$(BUILDDIR)/json_lenient_tests
 	@$(BUILDDIR)/json_lenient_tests
 
 # Reranker (cross-encoder) core: model registry + EncodePair pair-packing +
 # token_type_ids segmentation + truncation (ONNX-independent; live scoring needs ORT).
 test-rerank: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/rerank_tests.pas -o$(BUILDDIR)/rerank_tests
+	$(TEST_FPC) src/tests/rerank_tests.pas -o$(BUILDDIR)/rerank_tests
 	@$(BUILDDIR)/rerank_tests
 
 # XLM-R SentencePiece Unigram tokenizer (bge-reranker). Tiny synthetic vocab,
@@ -493,7 +508,7 @@ test-rerank: | $(BUILDDIR)
 # the provisioned tokenizer.json (see the branch's scratch validator).
 test-sentencepiece: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/sentencepiece_tests.pas -o$(BUILDDIR)/sentencepiece_tests
+	$(TEST_FPC) src/tests/sentencepiece_tests.pas -o$(BUILDDIR)/sentencepiece_tests
 	@$(BUILDDIR)/sentencepiece_tests
 
 # Retrieval reranking eval (MRR / recall@5, bi-encoder vs cross-encoder).
@@ -503,19 +518,19 @@ test-sentencepiece: | $(BUILDDIR)
 # for real numbers.
 test-rerank-eval: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/rerank_eval.pas -o$(BUILDDIR)/rerank_eval
+	$(TEST_FPC) src/tests/rerank_eval.pas -o$(BUILDDIR)/rerank_eval
 	@$(BUILDDIR)/rerank_eval
 
 # PasClaw.Providers.Models — /v1/models cache schema round-trip + helpers.
 test-model-discovery: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/model_discovery_tests.pas -o$(BUILDDIR)/model_discovery_tests
+	$(TEST_FPC) src/tests/model_discovery_tests.pas -o$(BUILDDIR)/model_discovery_tests
 	@$(BUILDDIR)/model_discovery_tests
 
 # Model-callable cron tool: config.json crons[] add/list/remove + validation.
 test-cron-tool: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/cron_tool_tests.pas -o$(BUILDDIR)/cron_tool_tests
+	$(TEST_FPC) src/tests/cron_tool_tests.pas -o$(BUILDDIR)/cron_tool_tests
 	@PASCLAW_HOME=$(BUILDDIR)/cron-tool-test-home $(BUILDDIR)/cron_tool_tests
 
 # Desktop stack. Each runs against its own throwaway PASCLAW_HOME so the
@@ -523,7 +538,7 @@ test-cron-tool: | $(BUILDDIR)
 test-workspaces: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/workspaces-test-home
-	$(FPC) $(FPCFLAGS) src/tests/workspaces_tests.pas -o$(BUILDDIR)/workspaces_tests
+	$(TEST_FPC) src/tests/workspaces_tests.pas -o$(BUILDDIR)/workspaces_tests
 	@PASCLAW_HOME=$(BUILDDIR)/workspaces-test-home $(BUILDDIR)/workspaces_tests
 	@# Second pass against the home the first built: PASCLAW_WORKSPACE must
 	@# outrank the active_workspace the first pass persisted.
@@ -533,13 +548,13 @@ test-workspaces: | $(BUILDDIR)
 test-projects: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/projects-test-home
-	$(FPC) $(FPCFLAGS) src/tests/projects_tests.pas -o$(BUILDDIR)/projects_tests
+	$(TEST_FPC) src/tests/projects_tests.pas -o$(BUILDDIR)/projects_tests
 	@PASCLAW_HOME=$(BUILDDIR)/projects-test-home $(BUILDDIR)/projects_tests
 
 test-teams: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/teams-test-home
-	$(FPC) $(FPCFLAGS) src/tests/teams_tests.pas -o$(BUILDDIR)/teams_tests
+	$(TEST_FPC) src/tests/teams_tests.pas -o$(BUILDDIR)/teams_tests
 	@PASCLAW_HOME=$(BUILDDIR)/teams-test-home $(BUILDDIR)/teams_tests
 
 # docs/team-board-plan.md Phase 1: submit / verdict / frozen criteria /
@@ -548,7 +563,7 @@ test-teams: | $(BUILDDIR)
 test-team-review: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/team-review-test-home
-	$(FPC) $(FPCFLAGS) src/tests/team_review_tests.pas -o$(BUILDDIR)/team_review_tests
+	$(TEST_FPC) src/tests/team_review_tests.pas -o$(BUILDDIR)/team_review_tests
 	@PASCLAW_HOME=$(BUILDDIR)/team-review-test-home $(BUILDDIR)/team_review_tests
 
 # docs/team-board-plan.md Phases 2-5: waits_on / next / leases, Needs
@@ -556,19 +571,19 @@ test-team-review: | $(BUILDDIR)
 test-team-board: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/team-board-test-home
-	$(FPC) $(FPCFLAGS) src/tests/team_board_tests.pas -o$(BUILDDIR)/team_board_tests
+	$(TEST_FPC) src/tests/team_board_tests.pas -o$(BUILDDIR)/team_board_tests
 	@PASCLAW_HOME=$(BUILDDIR)/team-board-test-home $(BUILDDIR)/team_board_tests
 
 test-tool-schema: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/tool-schema-test-home
-	$(FPC) $(FPCFLAGS) src/tests/tool_schema_tests.pas -o$(BUILDDIR)/tool_schema_tests
+	$(TEST_FPC) src/tests/tool_schema_tests.pas -o$(BUILDDIR)/tool_schema_tests
 	@PASCLAW_HOME=$(BUILDDIR)/tool-schema-test-home $(BUILDDIR)/tool_schema_tests
 
 test-apps: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/apps-test-home
-	$(FPC) $(FPCFLAGS) src/tests/apps_tests.pas -o$(BUILDDIR)/apps_tests
+	$(TEST_FPC) src/tests/apps_tests.pas -o$(BUILDDIR)/apps_tests
 	@PASCLAW_HOME=$(BUILDDIR)/apps-test-home $(BUILDDIR)/apps_tests
 
 # A shape check for the units no CI here can compile -- chiefly the
@@ -604,7 +619,7 @@ lint-pascal-shape:
 test-mail: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/mail-test-home
-	$(FPC) $(FPCFLAGS) src/tests/mail_tests.pas -o$(BUILDDIR)/mail_tests
+	$(TEST_FPC) src/tests/mail_tests.pas -o$(BUILDDIR)/mail_tests
 	@PASCLAW_HOME=$(BUILDDIR)/mail-test-home $(BUILDDIR)/mail_tests
 
 # The wall: business A in workspace 1 and business B in workspace 2 must not
@@ -613,13 +628,13 @@ test-mail: | $(BUILDDIR)
 test-workspace-isolation: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/isolation-test-home
-	$(FPC) $(FPCFLAGS) src/tests/workspace_isolation_tests.pas -o$(BUILDDIR)/workspace_isolation_tests
+	$(TEST_FPC) src/tests/workspace_isolation_tests.pas -o$(BUILDDIR)/workspace_isolation_tests
 	@PASCLAW_HOME=$(BUILDDIR)/isolation-test-home $(BUILDDIR)/workspace_isolation_tests
 
 test-desktop-routes: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/desktop-routes-test-home
-	$(FPC) $(FPCFLAGS) src/tests/desktop_routes_tests.pas -o$(BUILDDIR)/desktop_routes_tests
+	$(TEST_FPC) src/tests/desktop_routes_tests.pas -o$(BUILDDIR)/desktop_routes_tests
 	@PASCLAW_HOME=$(BUILDDIR)/desktop-routes-test-home $(BUILDDIR)/desktop_routes_tests
 
 # The shared native-client library (studio/ + desktop/ drive the gateway
@@ -632,12 +647,12 @@ test-desktop-routes: | $(BUILDDIR)
 # against a throwaway home, and stops it again.
 test-client-markdown: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/client_markdown_tests.pas -o$(BUILDDIR)/client_markdown_tests
+	$(TEST_FPC) src/tests/client_markdown_tests.pas -o$(BUILDDIR)/client_markdown_tests
 	@$(BUILDDIR)/client_markdown_tests
 
 test-client-api: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/client_api_tests.pas -o$(BUILDDIR)/client_api_tests
+	$(TEST_FPC) src/tests/client_api_tests.pas -o$(BUILDDIR)/client_api_tests
 	@rm -rf $(BUILDDIR)/client-api-home
 	@PASCLAW_HOME=$(BUILDDIR)/client-api-home $(BIN) project seed >/dev/null 2>&1 || true
 	@PASCLAW_HOME=$(BUILDDIR)/client-api-home $(BIN) gateway --port 8791 \
@@ -654,25 +669,25 @@ test-desktop: lint-pascal-shape test-workspaces test-projects test-tool-schema t
 # Provider catalog rows + ChatPath override (Perplexity uses /chat/completions).
 test-provider-catalog: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/provider_catalog_tests.pas -o$(BUILDDIR)/provider_catalog_tests
+	$(TEST_FPC) src/tests/provider_catalog_tests.pas -o$(BUILDDIR)/provider_catalog_tests
 	@$(BUILDDIR)/provider_catalog_tests
 
 # PasClaw.Tools.OutputCache — truncation thresholds + handle round-trip.
 test-output-cache: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/output_cache_tests.pas -o$(BUILDDIR)/output_cache_tests
+	$(TEST_FPC) src/tests/output_cache_tests.pas -o$(BUILDDIR)/output_cache_tests
 	@$(BUILDDIR)/output_cache_tests
 
 # PasClaw.Session.Store — working-state extraction + format + round-trip.
 test-agents: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/agents-test-home
-	$(FPC) $(FPCFLAGS) src/tests/agents_tests.pas -o$(BUILDDIR)/agents_tests
+	$(TEST_FPC) src/tests/agents_tests.pas -o$(BUILDDIR)/agents_tests
 	@PASCLAW_HOME=$(BUILDDIR)/agents-test-home $(BUILDDIR)/agents_tests
 
 test-working-state: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/working_state_tests.pas -o$(BUILDDIR)/working_state_tests
+	$(TEST_FPC) src/tests/working_state_tests.pas -o$(BUILDDIR)/working_state_tests
 	@$(BUILDDIR)/working_state_tests
 
 # Conversation-history compaction: the rolling summary block, the
@@ -680,7 +695,7 @@ test-working-state: | $(BUILDDIR)
 # classifier, and the config defaults staying equal to the code's.
 test-compact: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/compact_tests.pas -o$(BUILDDIR)/compact_tests
+	$(TEST_FPC) src/tests/compact_tests.pas -o$(BUILDDIR)/compact_tests
 	@$(BUILDDIR)/compact_tests
 
 # LLM-guided pruning: the guarantees the pruner model is NOT trusted to
@@ -688,7 +703,7 @@ test-compact: | $(BUILDDIR)
 # recent turns, verbatim survivors.
 test-prune: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/prune_tests.pas -o$(BUILDDIR)/prune_tests
+	$(TEST_FPC) src/tests/prune_tests.pas -o$(BUILDDIR)/prune_tests
 	@# A fresh home: the archive assertions write real session files, and
 	@# they have no business landing in the operator's own sessions dir.
 	@PASCLAW_HOME=$$(mktemp -d) ; \
@@ -700,20 +715,20 @@ test-prune: | $(BUILDDIR)
 # without breaking the wrap math.
 test-ansi-width: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/ansi_width_tests.pas -o$(BUILDDIR)/ansi_width_tests
+	$(TEST_FPC) src/tests/ansi_width_tests.pas -o$(BUILDDIR)/ansi_width_tests
 	@$(BUILDDIR)/ansi_width_tests
 
 # PasClaw.Tools.Shell.Filters — per-command output condensers with tee-on-failure.
 test-shell-filters: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/shell_filters_tests.pas -o$(BUILDDIR)/shell_filters_tests
+	$(TEST_FPC) src/tests/shell_filters_tests.pas -o$(BUILDDIR)/shell_filters_tests
 	@$(BUILDDIR)/shell_filters_tests
 
 # PasClaw.Learn — session-failure normaliser, LooksLikeFailure pre-filter, misuse notes
 # (checked against grep_files' own output), tool attribution, SCARS.md writes.
 test-learn: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/learn_tests.pas -o$(BUILDDIR)/learn_tests
+	$(TEST_FPC) src/tests/learn_tests.pas -o$(BUILDDIR)/learn_tests
 	@$(BUILDDIR)/learn_tests
 
 # PasClaw.Cmd.Export — canonical body + format-specific framing for AGENTS.md /
@@ -722,7 +737,7 @@ test-learn: | $(BUILDDIR)
 # real ~/.pasclaw — see export_tests.pas FixtureHome for the contract.
 test-export: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/export_tests.pas -o$(BUILDDIR)/export_tests
+	$(TEST_FPC) src/tests/export_tests.pas -o$(BUILDDIR)/export_tests
 	@PASCLAW_HOME=$(BUILDDIR)/export-test-home $(BUILDDIR)/export_tests
 
 # PasClaw.Tools.ExecuteCode — bash / PowerShell script runner. End-to-end run
@@ -730,13 +745,13 @@ test-export: | $(BUILDDIR)
 # without needing pwsh installed.
 test-execute-code: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/execute_code_tests.pas -o$(BUILDDIR)/execute_code_tests
+	$(TEST_FPC) src/tests/execute_code_tests.pas -o$(BUILDDIR)/execute_code_tests
 	@PASCLAW_HOME=$(BUILDDIR)/execute-code-test-home $(BUILDDIR)/execute_code_tests
 
 # Auto-router heuristic + RouteProvider gating contract.
 test-auto-router: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/auto_router_tests.pas -o$(BUILDDIR)/auto_router_tests
+	$(TEST_FPC) src/tests/auto_router_tests.pas -o$(BUILDDIR)/auto_router_tests
 	@$(BUILDDIR)/auto_router_tests
 
 # Per-endpoint stats buckets the gateway writes for stateless requests.
@@ -744,7 +759,7 @@ test-auto-router: | $(BUILDDIR)
 # operator's real ~/.pasclaw.
 test-gateway-stats-buckets: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/gateway_stats_buckets_tests.pas -o$(BUILDDIR)/gateway_stats_buckets_tests
+	$(TEST_FPC) src/tests/gateway_stats_buckets_tests.pas -o$(BUILDDIR)/gateway_stats_buckets_tests
 	@PASCLAW_HOME=$(BUILDDIR)/gateway-stats-buckets-test-home $(BUILDDIR)/gateway_stats_buckets_tests
 
 # Per-session stats schema + accumulator + config flag round-trip.
@@ -754,24 +769,24 @@ test-gateway-stats-buckets: | $(BUILDDIR)
 # Drives the real binary against synthetic PASCLAW_HOMEs, so it needs $(BIN).
 test-doctor: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/doctor_tests.pas -o$(BUILDDIR)/doctor_tests
+	$(TEST_FPC) src/tests/doctor_tests.pas -o$(BUILDDIR)/doctor_tests
 	@$(BUILDDIR)/doctor_tests
 
 test-provider-retry: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/provider_retry_tests.pas -o$(BUILDDIR)/provider_retry_tests
+	$(TEST_FPC) src/tests/provider_retry_tests.pas -o$(BUILDDIR)/provider_retry_tests
 	@$(BUILDDIR)/provider_retry_tests
 
 test-session-stats: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/session_stats_tests.pas -o$(BUILDDIR)/session_stats_tests
+	$(TEST_FPC) src/tests/session_stats_tests.pas -o$(BUILDDIR)/session_stats_tests
 	@PASCLAW_HOME=$(BUILDDIR)/session-stats-test-home $(BUILDDIR)/session_stats_tests
 
 # ListSessions bucket-filter contract -- default call hides gateway
 # stats buckets; /v1/stats opts back in via ListSessions(True).
 test-session-list-filter: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/session_list_filter_tests.pas -o$(BUILDDIR)/session_list_filter_tests
+	$(TEST_FPC) src/tests/session_list_filter_tests.pas -o$(BUILDDIR)/session_list_filter_tests
 	@PASCLAW_HOME=$(BUILDDIR)/session-list-filter-test-home $(BUILDDIR)/session_list_filter_tests
 
 # Editable /v1/config secret-preservation merge (web UI Settings). Client
@@ -779,7 +794,7 @@ test-session-list-filter: | $(BUILDDIR)
 # current config on write.
 test-config-secret-merge: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/config_secret_merge_tests.pas -o$(BUILDDIR)/config_secret_merge_tests
+	$(TEST_FPC) src/tests/config_secret_merge_tests.pas -o$(BUILDDIR)/config_secret_merge_tests
 	@$(BUILDDIR)/config_secret_merge_tests
 
 # Durable /v1/sessions data layer -- ChatBodyToMessages parse + the
@@ -787,25 +802,25 @@ test-config-secret-merge: | $(BUILDDIR)
 # the fixtures don't touch the operator's real session store.
 test-session-endpoints: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/session_endpoint_tests.pas -o$(BUILDDIR)/session_endpoint_tests
+	$(TEST_FPC) src/tests/session_endpoint_tests.pas -o$(BUILDDIR)/session_endpoint_tests
 	@PASCLAW_HOME=$(BUILDDIR)/session-endpoints-test-home $(BUILDDIR)/session_endpoint_tests
 
 # Skill install target classification + safe-name guard (web UI manage).
 test-skills-install: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/skills_install_tests.pas -o$(BUILDDIR)/skills_install_tests
+	$(TEST_FPC) src/tests/skills_install_tests.pas -o$(BUILDDIR)/skills_install_tests
 	@$(BUILDDIR)/skills_install_tests
 
 # Self-improving skills: skill_manage staging/guard + pending approval flow.
 test-self-improving-skills: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/self_improving_skills_tests.pas -o$(BUILDDIR)/self_improving_skills_tests
+	$(TEST_FPC) src/tests/self_improving_skills_tests.pas -o$(BUILDDIR)/self_improving_skills_tests
 	@$(BUILDDIR)/self_improving_skills_tests
 
 # Loop-shaping defaults + JSON round-trip (PR #289).
 test-loop-shaping-defaults: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/loop_shaping_defaults_tests.pas -o$(BUILDDIR)/loop_shaping_defaults_tests
+	$(TEST_FPC) src/tests/loop_shaping_defaults_tests.pas -o$(BUILDDIR)/loop_shaping_defaults_tests
 	@$(BUILDDIR)/loop_shaping_defaults_tests
 
 # The prompt's parallel-batching rule vs the registry categories it asserts:
@@ -815,14 +830,14 @@ test-loop-shaping-defaults: | $(BUILDDIR)
 # prefix (the system block carries the cache_control breakpoint).
 test-turn-clock: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/turn_clock_tests.pas -o$(BUILDDIR)/turn_clock_tests
+	$(TEST_FPC) src/tests/turn_clock_tests.pas -o$(BUILDDIR)/turn_clock_tests
 	@$(BUILDDIR)/turn_clock_tests
 
 # The context breakdown (/v1/context, the web UI's Context panel): the
 # prompt split into sections, the report's sums, CompactMeasure.
 test-context-usage: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/context_usage_tests.pas -o$(BUILDDIR)/context_usage_tests
+	$(TEST_FPC) src/tests/context_usage_tests.pas -o$(BUILDDIR)/context_usage_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/context_usage_tests
@@ -844,7 +859,7 @@ test-provider-error-e2e: $(BIN)
 # leftover memory as its counts, and /v1/stats summed it into the billions.
 test-provider-usage: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/provider_usage_tests.pas -o$(BUILDDIR)/provider_usage_tests
+	$(TEST_FPC) src/tests/provider_usage_tests.pas -o$(BUILDDIR)/provider_usage_tests
 	@$(BUILDDIR)/provider_usage_tests
 
 # $(BIN) because it starts the real gateway, once per provider kind, against
@@ -924,7 +939,7 @@ $(BUILDDIR)/dos-host/pclaw: $(DOS_SRC) src/pkg/bridge/PasClaw.Bridge.Serial.pas
 # against a real gateway and a scripted model.
 test-dos: $(BIN) $(BUILDDIR)/dos-host/pclaw | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) -Fusrc/dos src/tests/bridge_wire_tests.pas -o$(BUILDDIR)/bridge_wire_tests
+	$(TEST_FPC) -Fusrc/dos src/tests/bridge_wire_tests.pas -o$(BUILDDIR)/bridge_wire_tests
 	@$(BUILDDIR)/bridge_wire_tests
 	@python3 -I src/tests/dos_bridge_e2e.py $(BIN) $(BUILDDIR)/dos-host/pclaw
 
@@ -988,6 +1003,17 @@ test-webui-settings-e2e: $(BIN)
 	@if command -v node >/dev/null 2>&1; then node src/tests/webui_settings_e2e.js $(BIN); \
 	else echo "  skip: test-webui-settings-e2e needs node"; fi
 
+# The web UI's Relay tab against $(BIN) in headless Chromium, with fake
+# workers holding /v1/relay/poll open: the provider line (and its Settings
+# link when no relay provider exists), the queue strip, worker rows with
+# model chips, online / stale and "seen 12 s ago", the empty state, HTML from
+# workers drawn as text, the snippets (URL override, token placeholder,
+# Reveal, Copy), the in-browser worker without WebGPU, light theme, phone
+# width. Needs node with Playwright; skips without them.
+test-webui-relay-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_relay_e2e.js $(BIN); \
+	else echo "  skip: test-webui-relay-e2e needs node"; fi
+
 # The web pages' markdown renderer (webui.html, desktop.html) must finish on
 # any text: CRLF once froze the browser tab. Needs node; skips without it.
 test-webui-markdown:
@@ -996,31 +1022,31 @@ test-webui-markdown:
 
 test-prompt-batching: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/prompt_batching_tests.pas -o$(BUILDDIR)/prompt_batching_tests
+	$(TEST_FPC) src/tests/prompt_batching_tests.pas -o$(BUILDDIR)/prompt_batching_tests
 	@$(BUILDDIR)/prompt_batching_tests
 
 # Max-iteration cutoff notice (FormatMaxIterNotice) surfaced in CLI/TUI/gateway.
 test-max-iter-notice: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/max_iter_notice_tests.pas -o$(BUILDDIR)/max_iter_notice_tests
+	$(TEST_FPC) src/tests/max_iter_notice_tests.pas -o$(BUILDDIR)/max_iter_notice_tests
 	@$(BUILDDIR)/max_iter_notice_tests
 
 # Interfaces must not lean on FPC-only RTL types (dcc64 is not in CI).
 test-delphi-iface-types: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/delphi_iface_types_tests.pas -o$(BUILDDIR)/delphi_iface_types_tests
+	$(TEST_FPC) src/tests/delphi_iface_types_tests.pas -o$(BUILDDIR)/delphi_iface_types_tests
 	@$(BUILDDIR)/delphi_iface_types_tests
 
 # Cooperative cancellation: the operator's pause actually stopping a turn.
 test-tool-cancel: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/tool_cancel_tests.pas -o$(BUILDDIR)/tool_cancel_tests
+	$(TEST_FPC) src/tests/tool_cancel_tests.pas -o$(BUILDDIR)/tool_cancel_tests
 	@$(BUILDDIR)/tool_cancel_tests
 
 # Plan / Build mode plumbing + dispatch gate (PR #290).
 test-plan-build-mode: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/plan_build_mode_tests.pas -o$(BUILDDIR)/plan_build_mode_tests
+	$(TEST_FPC) src/tests/plan_build_mode_tests.pas -o$(BUILDDIR)/plan_build_mode_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; export PASCLAW_HOME ; \
 	$(BUILDDIR)/plan_build_mode_tests ; rc=$$? ; \
 	rm -rf "$$PASCLAW_HOME" ; exit $$rc
@@ -1041,7 +1067,7 @@ test-plan-build-mode: | $(BUILDDIR)
 # Uses PASCLAW_HOME pointing at a temp dir so it never touches the user's real config.
 test-config-profile: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/config_profile_tests.pas -o$(BUILDDIR)/config_profile_tests
+	$(TEST_FPC) src/tests/config_profile_tests.pas -o$(BUILDDIR)/config_profile_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/config_profile_tests
@@ -1053,7 +1079,7 @@ test-config-profile: | $(BUILDDIR)
 # a skill" works), and keep teaching it when a catalog is present.
 test-skills-prompt: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/skills_prompt_tests.pas -o$(BUILDDIR)/skills_prompt_tests
+	$(TEST_FPC) src/tests/skills_prompt_tests.pas -o$(BUILDDIR)/skills_prompt_tests
 	@rm -rf $(BUILDDIR)/skills-prompt-home
 	@PASCLAW_HOME=$(BUILDDIR)/skills-prompt-home $(BUILDDIR)/skills_prompt_tests
 
@@ -1065,7 +1091,7 @@ test-verify-routes: $(BIN)
 
 test-verify: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/verify_tests.pas -o$(BUILDDIR)/verify_tests
+	$(TEST_FPC) src/tests/verify_tests.pas -o$(BUILDDIR)/verify_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/verify_tests
@@ -1074,7 +1100,7 @@ test-verify: | $(BUILDDIR)
 # response, the bench gate, config. No network.
 test-decision-models: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/decision_models_tests.pas -o$(BUILDDIR)/decision_models_tests
+	$(TEST_FPC) src/tests/decision_models_tests.pas -o$(BUILDDIR)/decision_models_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/decision_models_tests
@@ -1084,7 +1110,7 @@ test-decision-models: | $(BUILDDIR)
 # No network beyond one refused connect to 127.0.0.1:1.
 test-advisor: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/advisor_tests.pas -o$(BUILDDIR)/advisor_tests
+	$(TEST_FPC) src/tests/advisor_tests.pas -o$(BUILDDIR)/advisor_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/advisor_tests
@@ -1097,40 +1123,40 @@ test-advisor-e2e: $(BIN)
 
 test-steering-fastpath: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/steering_fastpath_tests.pas -o$(BUILDDIR)/steering_fastpath_tests
+	$(TEST_FPC) src/tests/steering_fastpath_tests.pas -o$(BUILDDIR)/steering_fastpath_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/steering_fastpath_tests
 
 test-workspace-listing: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/workspace_listing_tests.pas -o$(BUILDDIR)/workspace_listing_tests
+	$(TEST_FPC) src/tests/workspace_listing_tests.pas -o$(BUILDDIR)/workspace_listing_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/workspace_listing_tests
 
 test-maintain: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/maintain_tests.pas -o$(BUILDDIR)/maintain_tests
+	$(TEST_FPC) src/tests/maintain_tests.pas -o$(BUILDDIR)/maintain_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/maintain_tests
 
 test-backup: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/backup_tests.pas -o$(BUILDDIR)/backup_tests
+	$(TEST_FPC) src/tests/backup_tests.pas -o$(BUILDDIR)/backup_tests
 	@$(BUILDDIR)/backup_tests
 
 test-memory-tiers: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/memory_tiers_tests.pas -o$(BUILDDIR)/memory_tiers_tests
+	$(TEST_FPC) src/tests/memory_tiers_tests.pas -o$(BUILDDIR)/memory_tiers_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/memory_tiers_tests
 
 test-active-plan-section: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/active_plan_section_tests.pas -o$(BUILDDIR)/active_plan_section_tests
+	$(TEST_FPC) src/tests/active_plan_section_tests.pas -o$(BUILDDIR)/active_plan_section_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/active_plan_section_tests
@@ -1139,7 +1165,7 @@ test-active-plan-section: | $(BUILDDIR)
 # synchronisation only; no HTTP, no real workers.
 test-relay-queue: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/relay_queue_tests.pas -o$(BUILDDIR)/relay_queue_tests
+	$(TEST_FPC) src/tests/relay_queue_tests.pas -o$(BUILDDIR)/relay_queue_tests
 	@$(BUILDDIR)/relay_queue_tests
 
 # PasClaw.MCP.Disclosure -- Hermes-style progressive disclosure + Claude
@@ -1149,12 +1175,12 @@ test-relay-queue: | $(BUILDDIR)
 # /v1/desktop/events must reveal the deferred `desktop` tool.
 test-desktop-reveal: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/desktop_reveal_tests.pas -o$(BUILDDIR)/desktop_reveal_tests
+	$(TEST_FPC) src/tests/desktop_reveal_tests.pas -o$(BUILDDIR)/desktop_reveal_tests
 	@$(BUILDDIR)/desktop_reveal_tests
 
 test-mcp-disclosure: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/mcp_disclosure_tests.pas -o$(BUILDDIR)/mcp_disclosure_tests
+	$(TEST_FPC) src/tests/mcp_disclosure_tests.pas -o$(BUILDDIR)/mcp_disclosure_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/mcp_disclosure_tests
@@ -1164,12 +1190,12 @@ test-mcp-disclosure: | $(BUILDDIR)
 # the info file lands in a scratch dir.
 test-skill-args: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/skill_args_tests.pas -o$(BUILDDIR)/skill_args_tests
+	$(TEST_FPC) src/tests/skill_args_tests.pas -o$(BUILDDIR)/skill_args_tests
 	@$(BUILDDIR)/skill_args_tests
 
 test-instructions: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/instructions_tests.pas -o$(BUILDDIR)/instructions_tests
+	$(TEST_FPC) src/tests/instructions_tests.pas -o$(BUILDDIR)/instructions_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/instructions_tests
@@ -1178,21 +1204,21 @@ test-instructions: | $(BUILDDIR)
 # fake gateway -- the bug it guards was in what that command sent.
 test-runfile: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/runfile_tests.pas -o$(BUILDDIR)/runfile_tests
+	$(TEST_FPC) src/tests/runfile_tests.pas -o$(BUILDDIR)/runfile_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/runfile_tests
 
 test-worktree: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/worktree_tests.pas -o$(BUILDDIR)/worktree_tests
+	$(TEST_FPC) src/tests/worktree_tests.pas -o$(BUILDDIR)/worktree_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/worktree_tests
 
 test-permissions: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/permissions_tests.pas -o$(BUILDDIR)/permissions_tests
+	$(TEST_FPC) src/tests/permissions_tests.pas -o$(BUILDDIR)/permissions_tests
 	@PASCLAW_HOME=$$(mktemp -d) ; \
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/permissions_tests
@@ -1201,22 +1227,22 @@ test-permissions: | $(BUILDDIR)
 # guards was in what that command wrote to config.json.
 test-codemode: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/codemode_tests.pas -o$(BUILDDIR)/codemode_tests
+	$(TEST_FPC) src/tests/codemode_tests.pas -o$(BUILDDIR)/codemode_tests
 	@PASCLAW_HOME=$(BUILDDIR)/tool-rpc-test-home $(BUILDDIR)/codemode_tests
 
 test-rpc-gate: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/rpc_gate_tests.pas -o$(BUILDDIR)/rpc_gate_tests
+	$(TEST_FPC) src/tests/rpc_gate_tests.pas -o$(BUILDDIR)/rpc_gate_tests
 	@PASCLAW_HOME=$(BUILDDIR)/tool-rpc-test-home $(BUILDDIR)/rpc_gate_tests
 
 test-skills-shell-gate: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/skills_shell_gate_tests.pas -o$(BUILDDIR)/skills_shell_gate_tests
+	$(TEST_FPC) src/tests/skills_shell_gate_tests.pas -o$(BUILDDIR)/skills_shell_gate_tests
 	@$(BUILDDIR)/skills_shell_gate_tests
 
 test-shell-timeout: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/shell_timeout_tests.pas -o$(BUILDDIR)/shell_timeout_tests
+	$(TEST_FPC) src/tests/shell_timeout_tests.pas -o$(BUILDDIR)/shell_timeout_tests
 	@$(BUILDDIR)/shell_timeout_tests
 
 # $(BIN) because one case runs the real `pasclaw __tool` as a child
@@ -1224,7 +1250,7 @@ test-shell-timeout: | $(BUILDDIR)
 # since FPC snapshots envp at process start.
 test-tool-rpc: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/tool_rpc_tests.pas -o$(BUILDDIR)/tool_rpc_tests
+	$(TEST_FPC) src/tests/tool_rpc_tests.pas -o$(BUILDDIR)/tool_rpc_tests
 	@PASCLAW_HOME=$(BUILDDIR)/tool-rpc-test-home $(BUILDDIR)/tool_rpc_tests
 
 # session_search FTS5 index over saved transcripts. PASCLAW_HOME isolated so
@@ -1234,7 +1260,7 @@ test-tool-rpc: $(BIN) | $(BUILDDIR)
 # Uses a fake echo provider so the test doesn't need a real model.
 test-subagent-bg: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/subagent_bg_tests.pas -o$(BUILDDIR)/subagent_bg_tests
+	$(TEST_FPC) src/tests/subagent_bg_tests.pas -o$(BUILDDIR)/subagent_bg_tests
 	@$(BUILDDIR)/subagent_bg_tests
 
 # The background-work view: listing JSON, history cap, follow-up messages
@@ -1242,7 +1268,7 @@ test-subagent-bg: | $(BUILDDIR)
 # routes against the real gateway with a scripted model.
 test-background-view: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/background_view_tests.pas -o$(BUILDDIR)/background_view_tests
+	$(TEST_FPC) src/tests/background_view_tests.pas -o$(BUILDDIR)/background_view_tests
 	@$(BUILDDIR)/background_view_tests
 test-background-view-e2e: $(BIN)
 	@python3 -I src/tests/background_view_e2e.py $(BIN)
@@ -1250,27 +1276,27 @@ test-background-view-e2e: $(BIN)
 # Subagents on by default: built-in general-purpose agent + '*' tool inheritance.
 test-subagent-default: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/subagent_default_tests.pas -o$(BUILDDIR)/subagent_default_tests
+	$(TEST_FPC) src/tests/subagent_default_tests.pas -o$(BUILDDIR)/subagent_default_tests
 	@$(BUILDDIR)/subagent_default_tests
 
 # Per-call `model` override on spawn: arg > spec.Model > parent DefaultModel.
 test-subagent-model-arg: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/subagent_model_arg_tests.pas -o$(BUILDDIR)/subagent_model_arg_tests
+	$(TEST_FPC) src/tests/subagent_model_arg_tests.pas -o$(BUILDDIR)/subagent_model_arg_tests
 	@$(BUILDDIR)/subagent_model_arg_tests
 
 # PackDirToZip: empty dir -> valid (openable) empty zip, not a 0-byte file;
 # non-empty dir round-trips. Pins the cog workspace-handshake artifact fix.
 test-zip-pack: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/zip_pack_tests.pas -o$(BUILDDIR)/zip_pack_tests
+	$(TEST_FPC) src/tests/zip_pack_tests.pas -o$(BUILDDIR)/zip_pack_tests
 	@$(BUILDDIR)/zip_pack_tests
 
 # Env-proxy decision: HTTP(S)_PROXY honoured in normal builds; NO_PROXY +
 # loopback bypass (ExtractURLHost / HostBypassesProxy).
 test-http-proxy: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/http_proxy_tests.pas -o$(BUILDDIR)/http_proxy_tests
+	$(TEST_FPC) src/tests/http_proxy_tests.pas -o$(BUILDDIR)/http_proxy_tests
 	@$(BUILDDIR)/http_proxy_tests
 
 # Stream reliability: empty-turn retry, idle-timeout, tool-call repair.
@@ -1278,21 +1304,21 @@ test-http-proxy: | $(BUILDDIR)
 # the idle-timeout watcher.
 test-stream-reliability: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/stream_reliability_tests.pas -o$(BUILDDIR)/stream_reliability_tests
+	$(TEST_FPC) src/tests/stream_reliability_tests.pas -o$(BUILDDIR)/stream_reliability_tests
 	@$(BUILDDIR)/stream_reliability_tests
 
 # MCP server core: JSON-RPC dispatch over a synthetic TToolRegistry.
 # Covers tools/list filtering, tools/call dispatch, allowlist, error shapes.
 test-mcp-server: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/mcp_server_tests.pas -o$(BUILDDIR)/mcp_server_tests
+	$(TEST_FPC) src/tests/mcp_server_tests.pas -o$(BUILDDIR)/mcp_server_tests
 	@$(BUILDDIR)/mcp_server_tests
 
 # MCP tools/call result parser: structuredContent + non-text blocks survive
 # as ResultJSON so a workflow can chain one tool's output into the next.
 test-mcp-result: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/mcp_result_tests.pas -o$(BUILDDIR)/mcp_result_tests
+	$(TEST_FPC) src/tests/mcp_result_tests.pas -o$(BUILDDIR)/mcp_result_tests
 	@$(BUILDDIR)/mcp_result_tests
 
 # Tabular re-encoding of MCP tool results: pins the conversions, the escaping
@@ -1303,12 +1329,12 @@ test-mcp-result: | $(BUILDDIR)
 # next SaveConfig -- a load-side test cannot see it.
 test-config-mcp-flags: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/config_mcp_flags_tests.pas -o$(BUILDDIR)/config_mcp_flags_tests
+	$(TEST_FPC) src/tests/config_mcp_flags_tests.pas -o$(BUILDDIR)/config_mcp_flags_tests
 	@$(BUILDDIR)/config_mcp_flags_tests
 
 test-mcp-compact: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/mcp_compact_tests.pas -o$(BUILDDIR)/mcp_compact_tests
+	$(TEST_FPC) src/tests/mcp_compact_tests.pas -o$(BUILDDIR)/mcp_compact_tests
 	@$(BUILDDIR)/mcp_compact_tests
 
 # The MCP client against MCP 2026-07-28 and the revisions before it: version
@@ -1318,7 +1344,7 @@ test-mcp-compact: | $(BUILDDIR)
 # (src/tests/fake_mcp_server.py) and against `pasclaw mcp stdio`.
 test-mcp-client: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/mcp_client_tests.pas -o$(BUILDDIR)/mcp_client_tests
+	$(TEST_FPC) src/tests/mcp_client_tests.pas -o$(BUILDDIR)/mcp_client_tests
 	@D=$$(mktemp -d) ; trap "rm -rf $$D" EXIT ; mkdir -p $$D/home ; \
 	  PASCLAW_HOME=$$D/home NO_COLOR=1 FAKE_MCP=src/tests/fake_mcp_server.py \
 	  MCP_TEST_DIR=$$D PASCLAW_BIN=$(BIN) $(BUILDDIR)/mcp_client_tests
@@ -1336,11 +1362,11 @@ test-mcp-client-e2e: $(BIN)
 # tool caller (no live MCP needed) + dotted/[i] selector evaluation.
 test-workflow: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/workflow_tests.pas -o$(BUILDDIR)/workflow_tests
+	$(TEST_FPC) src/tests/workflow_tests.pas -o$(BUILDDIR)/workflow_tests
 	@rm -rf $(BUILDDIR)/workflow-test-home
 	@PASCLAW_HOME=$(BUILDDIR)/workflow-test-home $(BUILDDIR)/workflow_tests
 	@# Gates, wf_<name> tools (registry + MCP tools/list, no restart), approval.
-	$(FPC) $(FPCFLAGS) src/tests/workflow_gate_tests.pas -o$(BUILDDIR)/workflow_gate_tests
+	$(TEST_FPC) src/tests/workflow_gate_tests.pas -o$(BUILDDIR)/workflow_gate_tests
 	@rm -rf $(BUILDDIR)/workflow-gate-home
 	@PASCLAW_HOME=$(BUILDDIR)/workflow-gate-home $(BUILDDIR)/workflow_gate_tests
 
@@ -1348,7 +1374,7 @@ test-workflow: | $(BUILDDIR)
 # fs_edit_hashline. Pure on-disk snapshots; no model, no agent loop.
 test-checkpoints: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/checkpoints_tests.pas -o$(BUILDDIR)/checkpoints_tests
+	$(TEST_FPC) src/tests/checkpoints_tests.pas -o$(BUILDDIR)/checkpoints_tests
 	@$(BUILDDIR)/checkpoints_tests
 
 # Distilled-memory Phase 1: transcript -> normalised TFact[] via a
@@ -1356,7 +1382,7 @@ test-checkpoints: | $(BUILDDIR)
 # contract of PasClaw.Memory.Distill.
 test-memory-distill: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/memory_distill_tests.pas -o$(BUILDDIR)/memory_distill_tests
+	$(TEST_FPC) src/tests/memory_distill_tests.pas -o$(BUILDDIR)/memory_distill_tests
 	@$(BUILDDIR)/memory_distill_tests
 
 # Distilled-memory Phase 2: SQLite fact store. Real temp DB; pins the
@@ -1372,7 +1398,7 @@ test-memory-distill: | $(BUILDDIR)
 # browser-desktop/, not browser/: browser/ is the container2wasm build.
 test-browser-tools: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) -Fubrowser-desktop src/tests/browser_tools_tests.pas -o$(BUILDDIR)/browser_tools_tests
+	$(TEST_FPC) -Fubrowser-desktop src/tests/browser_tools_tests.pas -o$(BUILDDIR)/browser_tools_tests
 	@$(BUILDDIR)/browser_tools_tests
 
 # TWebBrowser.WindowsEngine must be assigned before Parent -- the engine is
@@ -1383,12 +1409,12 @@ lint-browser-shape:
 
 test-memory-static-embed: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/memory_static_embed_tests.pas -o$(BUILDDIR)/memory_static_embed_tests
+	$(TEST_FPC) src/tests/memory_static_embed_tests.pas -o$(BUILDDIR)/memory_static_embed_tests
 	@$(BUILDDIR)/memory_static_embed_tests
 
 test-memory-facts: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/memory_facts_tests.pas -o$(BUILDDIR)/memory_facts_tests
+	$(TEST_FPC) src/tests/memory_facts_tests.pas -o$(BUILDDIR)/memory_facts_tests
 	@$(BUILDDIR)/memory_facts_tests
 
 # Distilled-memory Phase 3: per-turn auto-distill windowing
@@ -1396,7 +1422,7 @@ test-memory-facts: | $(BUILDDIR)
 # by the distill + facts suites.
 test-memory-autodistill: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/memory_autodistill_tests.pas -o$(BUILDDIR)/memory_autodistill_tests
+	$(TEST_FPC) src/tests/memory_autodistill_tests.pas -o$(BUILDDIR)/memory_autodistill_tests
 	@$(BUILDDIR)/memory_autodistill_tests
 
 # JSON-aware condenser: pure string-in / string-out, no model. Pins
@@ -1405,7 +1431,7 @@ test-memory-autodistill: | $(BUILDDIR)
 # byte-budget truncate stage.
 test-condense-json: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/condense_json_tests.pas -o$(BUILDDIR)/condense_json_tests
+	$(TEST_FPC) src/tests/condense_json_tests.pas -o$(BUILDDIR)/condense_json_tests
 	@$(BUILDDIR)/condense_json_tests
 
 # Promptware defense: injection-pattern scan at the three indirect-
@@ -1413,14 +1439,14 @@ test-condense-json: | $(BUILDDIR)
 # descriptions). Pure string scan, no model.
 test-promptware: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/promptware_tests.pas -o$(BUILDDIR)/promptware_tests
+	$(TEST_FPC) src/tests/promptware_tests.pas -o$(BUILDDIR)/promptware_tests
 	@$(BUILDDIR)/promptware_tests
 
 # Task-aware orientation: MEMORY.md section slicing/scoring against a
 # task hint (PasClaw.Agent.Orient). Pure string functions, no model.
 test-orient: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/orient_tests.pas -o$(BUILDDIR)/orient_tests
+	$(TEST_FPC) src/tests/orient_tests.pas -o$(BUILDDIR)/orient_tests
 	@$(BUILDDIR)/orient_tests
 
 # Code-driven component config surface (TPasClawAgent.Config / LoadConfigFromDisk).
@@ -1430,66 +1456,66 @@ test-orient: | $(BUILDDIR)
 # build/lib makes FPC half-recompile and hit the cycle.
 test-component-config: $(BIN) | $(BUILDDIR) $(INDY_DIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) \
+	$(TEST_FPC) \
 	  src/tests/component_config_tests.pas -o$(BUILDDIR)/component_config_tests
 	@$(BUILDDIR)/component_config_tests
 
 # Auto-router application helper (centralised across CLI/TUI/gateway/component).
 test-autoroute-apply: $(BIN) | $(BUILDDIR) $(INDY_DIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) \
+	$(TEST_FPC) \
 	  src/tests/autoroute_apply_tests.pas -o$(BUILDDIR)/autoroute_apply_tests
 	@$(BUILDDIR)/autoroute_apply_tests
 
 # Per-fallback model override (config round-trip + lockstep ResolveFallbacks).
 test-fallback-models: $(BIN) | $(BUILDDIR) $(INDY_DIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) \
+	$(TEST_FPC) \
 	  src/tests/fallback_models_tests.pas -o$(BUILDDIR)/fallback_models_tests
 	@$(BUILDDIR)/fallback_models_tests
 
 # Orient launch-preamble section (opt-in "announce a plan before tools").
 test-orient-preamble: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/orient_preamble_tests.pas -o$(BUILDDIR)/orient_preamble_tests
+	$(TEST_FPC) src/tests/orient_preamble_tests.pas -o$(BUILDDIR)/orient_preamble_tests
 	@$(BUILDDIR)/orient_preamble_tests
 
 # Reversible condensation (CCR): when JSON/shell condensers shrink output,
 # stash the original under a tool_output_get handle. PasClaw.Tools.OutputCache.
 test-condense-reversible: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/condense_reversible_tests.pas -o$(BUILDDIR)/condense_reversible_tests
+	$(TEST_FPC) src/tests/condense_reversible_tests.pas -o$(BUILDDIR)/condense_reversible_tests
 	@$(BUILDDIR)/condense_reversible_tests
 
 # Heartbeat daemon: proactive periodic wake-up. Scripted provider fakes the model.
 test-heartbeat: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/heartbeat_tests.pas -o$(BUILDDIR)/heartbeat_tests
+	$(TEST_FPC) src/tests/heartbeat_tests.pas -o$(BUILDDIR)/heartbeat_tests
 	@$(BUILDDIR)/heartbeat_tests
 
 # Shell backend abstraction (PasClaw.Shell.Backend + local impl + recording mock).
 # Docker is exercised by a separate harness that requires Docker on the box.
 test-shell-backend: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/shell_backend_tests.pas -o$(BUILDDIR)/shell_backend_tests
+	$(TEST_FPC) src/tests/shell_backend_tests.pas -o$(BUILDDIR)/shell_backend_tests
 	@PASCLAW_HOME=$(BUILDDIR)/shell-backend-test-home $(BUILDDIR)/shell_backend_tests
 
 # Env-var injection into spawned children (RunOneShotWithEnv / Spawn ExtraEnv).
 test-env-inject: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/env_inject_tests.pas -o$(BUILDDIR)/env_inject_tests
+	$(TEST_FPC) src/tests/env_inject_tests.pas -o$(BUILDDIR)/env_inject_tests
 	@$(BUILDDIR)/env_inject_tests
 
 # RunArgvCapture TimeoutMs cap -- proves a wedged child (e.g. a hung
 # `docker info`) is killed at the deadline instead of hanging the caller.
 test-run-timeout: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/run_timeout_tests.pas -o$(BUILDDIR)/run_timeout_tests
+	$(TEST_FPC) src/tests/run_timeout_tests.pas -o$(BUILDDIR)/run_timeout_tests
 	@$(BUILDDIR)/run_timeout_tests
 
 test-delphi-build: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/delphi_build_tests.pas -o$(BUILDDIR)/delphi_build_tests
+	$(TEST_FPC) src/tests/delphi_build_tests.pas -o$(BUILDDIR)/delphi_build_tests
 	@$(BUILDDIR)/delphi_build_tests
 
 # Shell output decode (PasClaw.Platform.DecodeShellOutputBytes) -- the OEM
@@ -1497,7 +1523,7 @@ test-delphi-build: | $(BUILDDIR)
 # tests pin Windows behaviour without needing Windows itself.
 test-shell-output-decode: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/shell_output_decode_tests.pas -o$(BUILDDIR)/shell_output_decode_tests
+	$(TEST_FPC) src/tests/shell_output_decode_tests.pas -o$(BUILDDIR)/shell_output_decode_tests
 	@$(BUILDDIR)/shell_output_decode_tests
 
 # Goals runner: the auto-continue Ralph loop. Scripted fake provider
@@ -1505,7 +1531,7 @@ test-shell-output-decode: | $(BUILDDIR)
 # abort + judge-outage semantics. No real model.
 test-goals-runner: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/goals_runner_tests.pas -o$(BUILDDIR)/goals_runner_tests
+	$(TEST_FPC) src/tests/goals_runner_tests.pas -o$(BUILDDIR)/goals_runner_tests
 	@$(BUILDDIR)/goals_runner_tests
 
 # MCP hub projection: transport routing for pasclaw.dev catalog entries
@@ -1515,26 +1541,26 @@ test-goals-runner: | $(BUILDDIR)
 # endpoints our client already speaks were being dropped".
 test-mcp-hub-projection: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/mcp_hub_projection_tests.pas -o$(BUILDDIR)/mcp_hub_projection_tests
+	$(TEST_FPC) src/tests/mcp_hub_projection_tests.pas -o$(BUILDDIR)/mcp_hub_projection_tests
 	@$(BUILDDIR)/mcp_hub_projection_tests
 
 test-session-search: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/session_search_tests.pas -o$(BUILDDIR)/session_search_tests
+	$(TEST_FPC) src/tests/session_search_tests.pas -o$(BUILDDIR)/session_search_tests
 	@PASCLAW_HOME=$(BUILDDIR)/session-search-test-home $(BUILDDIR)/session_search_tests
 
 # Session import/export: ChatGPT conversations.json (mapping-tree walk),
 # Claude Code .jsonl, native round-trip, Markdown export.
 test-session-port: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/session_port_tests.pas -o$(BUILDDIR)/session_port_tests
+	$(TEST_FPC) src/tests/session_port_tests.pas -o$(BUILDDIR)/session_port_tests
 	@PASCLAW_HOME=$(BUILDDIR)/session-port-test-home $(BUILDDIR)/session_port_tests
 
 # Knowledgebase — pure helpers (chunker, extension filter, binary sniff,
 # HTML strip). The SQLite paths are covered by `kb status` in smoke.
 test-kb-index: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/kb_index_tests.pas -o$(BUILDDIR)/kb_index_tests
+	$(TEST_FPC) src/tests/kb_index_tests.pas -o$(BUILDDIR)/kb_index_tests
 	@$(BUILDDIR)/kb_index_tests
 
 # PDF text extraction: builds a minimal uncompressed PDF in a temp file,
@@ -1543,7 +1569,7 @@ test-kb-index: | $(BUILDDIR)
 # The Flate / /ToUnicode paths are covered by real-world PDFs in smoke.
 test-kb-pdf: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/kb_pdf_extract_tests.pas -o$(BUILDDIR)/kb_pdf_extract_tests
+	$(TEST_FPC) src/tests/kb_pdf_extract_tests.pas -o$(BUILDDIR)/kb_pdf_extract_tests
 	@$(BUILDDIR)/kb_pdf_extract_tests
 
 # AGENTS.md project rules ingest: FindProjectAgentsMd walks up to git
@@ -1552,7 +1578,7 @@ test-kb-pdf: | $(BUILDDIR)
 # network.
 test-agents-md: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/agents_md_tests.pas -o$(BUILDDIR)/agents_md_tests
+	$(TEST_FPC) src/tests/agents_md_tests.pas -o$(BUILDDIR)/agents_md_tests
 	@$(BUILDDIR)/agents_md_tests
 
 # Checkpoints zpaq backend: round-trip Append/List/Extract via the
@@ -1561,7 +1587,7 @@ test-agents-md: | $(BUILDDIR)
 # enable the assertions.
 test-checkpoints-zpaq: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/checkpoints_zpaq_tests.pas -o$(BUILDDIR)/checkpoints_zpaq_tests
+	$(TEST_FPC) src/tests/checkpoints_zpaq_tests.pas -o$(BUILDDIR)/checkpoints_zpaq_tests
 	@$(BUILDDIR)/checkpoints_zpaq_tests
 
 # `pasclaw build` workspace.zip handshake: round-trips PackDirToZip +
@@ -1570,7 +1596,7 @@ test-checkpoints-zpaq: | $(BUILDDIR)
 # by the smoke target on a temp PASCLAW_HOME with a real provider.
 test-build-roundtrip: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/build_workspace_roundtrip_tests.pas -o$(BUILDDIR)/build_workspace_roundtrip_tests
+	$(TEST_FPC) src/tests/build_workspace_roundtrip_tests.pas -o$(BUILDDIR)/build_workspace_roundtrip_tests
 	@$(BUILDDIR)/build_workspace_roundtrip_tests
 
 # End-to-end undo/redo via the zpaq backend: spins a temp PASCLAW_HOME,
@@ -1579,7 +1605,7 @@ test-build-roundtrip: | $(BUILDDIR)
 # happy path + the "new-write invalidates redo" branch.
 test-checkpoints-redo: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/checkpoints_redo_tests.pas -o$(BUILDDIR)/checkpoints_redo_tests
+	$(TEST_FPC) src/tests/checkpoints_redo_tests.pas -o$(BUILDDIR)/checkpoints_redo_tests
 	@$(BUILDDIR)/checkpoints_redo_tests
 
 # fs_grep ripgrep-tier1-4 optimisations: defer ComputeFileHash until first
@@ -1590,26 +1616,26 @@ test-checkpoints-redo: | $(BUILDDIR)
 # through the registered handler, asserts on observable output.
 test-fs-grep-tier1-4: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier1_4_tests.pas -o$(BUILDDIR)/fs_grep_tier1_4_tests
+	$(TEST_FPC) src/tests/fs_grep_tier1_4_tests.pas -o$(BUILDDIR)/fs_grep_tier1_4_tests
 	@$(BUILDDIR)/fs_grep_tier1_4_tests
 
 # Verb_noun file-tool rename + hidden aliases + append_file + edit_file
 # string-replacement mode.
 test-code-outline: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/code_outline_tests.pas -o$(BUILDDIR)/code_outline_tests
+	$(TEST_FPC) src/tests/code_outline_tests.pas -o$(BUILDDIR)/code_outline_tests
 	@$(BUILDDIR)/code_outline_tests
 
 test-fs-tool-naming: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/fs_tool_naming_tests.pas -o$(BUILDDIR)/fs_tool_naming_tests
+	$(TEST_FPC) src/tests/fs_tool_naming_tests.pas -o$(BUILDDIR)/fs_tool_naming_tests
 	@$(BUILDDIR)/fs_tool_naming_tests
 
 # Workspace-relative path resolution: fs tools resolve relative paths against
 # the configured workspace, not the launch CWD.
 test-workspace-paths: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/workspace_paths_tests.pas -o$(BUILDDIR)/workspace_paths_tests
+	$(TEST_FPC) src/tests/workspace_paths_tests.pas -o$(BUILDDIR)/workspace_paths_tests
 	@$(BUILDDIR)/workspace_paths_tests
 
 # GuardFall regression: ShellAllowed blocks the Adversa AI bash-obfuscation
@@ -1617,14 +1643,14 @@ test-workspace-paths: | $(BUILDDIR)
 # pipelines, rm-equivalent flags) without refusing ordinary dev commands.
 test-guardfall: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/guardfall_tests.pas -o$(BUILDDIR)/guardfall_tests
+	$(TEST_FPC) src/tests/guardfall_tests.pas -o$(BUILDDIR)/guardfall_tests
 	@$(BUILDDIR)/guardfall_tests
 
 # Progress ledger: goal anchor + todo checklist fold, nothing-written nudge,
 # max-iter resume summary (A1/A2).
 test-progress-ledger: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/progress_ledger_tests.pas -o$(BUILDDIR)/progress_ledger_tests
+	$(TEST_FPC) src/tests/progress_ledger_tests.pas -o$(BUILDDIR)/progress_ledger_tests
 	@$(BUILDDIR)/progress_ledger_tests
 
 # A recorded team run, replayed through the real gateway (bench/teamboard):
@@ -1643,12 +1669,12 @@ bench-teamboard: $(BIN)
 # the gateway loop paths.
 bench-codenav: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) bench/codenav/codenav_bench.pas -o$(BUILDDIR)/codenav_bench
+	$(TEST_FPC) bench/codenav/codenav_bench.pas -o$(BUILDDIR)/codenav_bench
 	@$(BUILDDIR)/codenav_bench
 
 bench-agentloop: $(BIN)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) bench/agentloop/agentloop_bench.pas -o$(BUILDDIR)/agentloop_bench
+	$(TEST_FPC) bench/agentloop/agentloop_bench.pas -o$(BUILDDIR)/agentloop_bench
 	@$(BUILDDIR)/agentloop_bench
 
 # Logger level suppression: pins the contract PasClaw.dpr's
@@ -1658,7 +1684,7 @@ bench-agentloop: $(BIN)
 # silently re-enable [info] noise under `pasclaw agent --quiet`.
 test-logger-level-quiet: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/logger_level_quiet_tests.pas -o$(BUILDDIR)/logger_level_quiet_tests
+	$(TEST_FPC) src/tests/logger_level_quiet_tests.pas -o$(BUILDDIR)/logger_level_quiet_tests
 	@$(BUILDDIR)/logger_level_quiet_tests
 
 # Gateway bearer-token middleware: pins the decision function the
@@ -1669,7 +1695,7 @@ test-logger-level-quiet: | $(BUILDDIR)
 # is locked in even if OnCommandGet's wiring is refactored.
 test-gateway-token: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/gateway_token_tests.pas -o$(BUILDDIR)/gateway_token_tests
+	$(TEST_FPC) src/tests/gateway_token_tests.pas -o$(BUILDDIR)/gateway_token_tests
 	@$(BUILDDIR)/gateway_token_tests
 	@PASCLAW_GATEWAY_TOKEN=sk-pasclaw-env-test-aaaaaaaa $(BUILDDIR)/gateway_token_tests --env-mode
 	@OPENCLAW_GATEWAY_TOKEN=sk-openclaw-env-test-bbbbbb $(BUILDDIR)/gateway_token_tests --env-mode
@@ -1712,7 +1738,7 @@ test-gateway-listen-fail: $(BIN)
 # over stdio against a fake OpenAI-compatible model.
 test-acp: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/acp_tests.pas -o$(BUILDDIR)/acp_tests
+	$(TEST_FPC) src/tests/acp_tests.pas -o$(BUILDDIR)/acp_tests
 	@$(BUILDDIR)/acp_tests
 
 # FPC alone keeps a unit whose source was rewritten with its unit's timestamp;
@@ -1724,7 +1750,7 @@ test-stale-units:
 # OpenAI-compatible stream put back together, the loop's OnTextDelta.
 test-streaming: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/streaming_tests.pas -o$(BUILDDIR)/streaming_tests
+	$(TEST_FPC) src/tests/streaming_tests.pas -o$(BUILDDIR)/streaming_tests
 	@$(BUILDDIR)/streaming_tests
 
 test-acp-e2e: $(BIN) | $(BUILDDIR)
@@ -1735,7 +1761,7 @@ test-acp-e2e: $(BIN) | $(BUILDDIR)
 # points at a non-config.json name so the exact-resolved-path branch runs.
 test-fs-secret-gate: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/fs_secret_gate_tests.pas -o$(BUILDDIR)/fs_secret_gate_tests
+	$(TEST_FPC) src/tests/fs_secret_gate_tests.pas -o$(BUILDDIR)/fs_secret_gate_tests
 	@PASCLAW_CONFIG=$(BUILDDIR)/fs-gate-test.cfg $(BUILDDIR)/fs_secret_gate_tests
 
 # ${VAR_NAME} env-substitution in config.json. Pins the pattern
@@ -1747,7 +1773,7 @@ test-fs-secret-gate: | $(BUILDDIR)
 # envp would otherwise block.
 test-config-env-subst: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/config_env_subst_tests.pas -o$(BUILDDIR)/config_env_subst_tests
+	$(TEST_FPC) src/tests/config_env_subst_tests.pas -o$(BUILDDIR)/config_env_subst_tests
 	@$(BUILDDIR)/config_env_subst_tests
 	@PASCLAW_CONFIG_TEST_VAR_A4F9='hello-from-env-aaaaaaaa' \
 	 PASCLAW_CONFIG_TRICKY_VAR_A4F9='hello"world\backslash' \
@@ -1761,7 +1787,7 @@ test-config-env-subst: | $(BUILDDIR)
 # on its shape.
 test-otel: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/otel_tests.pas -o$(BUILDDIR)/otel_tests
+	$(TEST_FPC) src/tests/otel_tests.pas -o$(BUILDDIR)/otel_tests
 	@$(BUILDDIR)/otel_tests
 	@OTEL_EXPORTER_OTLP_ENDPOINT=http://env-host:4318 $(BUILDDIR)/otel_tests --env-mode
 
@@ -1773,16 +1799,33 @@ test-otel: | $(BUILDDIR)
 # overlapping/partial/embedded patterns, m=1 and m>n edge cases.
 test-fs-grep-tier5-6: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
+	$(TEST_FPC) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-updater-versions test-advisor test-advisor-e2e test-mcp-client test-mcp-client-e2e test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-verify-routes test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-code-outline test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-gateway-local-only test-gateway-listen-fail test-config-save-env-markers test-provider-models-e2e test-webui-model-picker-e2e test-acp test-streaming test-stale-units test-context-usage test-context-usage-e2e test-provider-error-e2e test-provider-usage test-usage-stats-e2e test-stats-reset-e2e test-oneshot-session-e2e test-fs-relative-path-e2e test-webui-sessions-e2e test-decision-models test-decision-models-e2e test-workflows-e2e test-dos test-dos-dosbox test-xp test-webui-markdown test-acp-e2e test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version test-background-view test-background-view-e2e test-webui-background-e2e test-webui-settings-e2e
+# Every test. `make test` builds $(BIN) first, which brings the shared
+# units up to date, then runs the tests TEST_JOBS at a time (one per core),
+# each one's output kept together and printed when it ends. They run with a
+# PASCLAW_HOME of their own ($(BUILDDIR)/test-home, emptied first), so a test
+# that falls back to the default home never writes to ~/.pasclaw.
+# `make test TEST_JOBS=1` runs them one at a time; `make test-all` runs
+# them with whatever -j you give it, without those steps.
+TEST_TARGETS = smoke test-updater-versions test-advisor test-advisor-e2e test-mcp-client test-mcp-client-e2e test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-verify-routes test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-code-outline test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-gateway-local-only test-gateway-listen-fail test-config-save-env-markers test-provider-models-e2e test-webui-model-picker-e2e test-acp test-streaming test-stale-units test-context-usage test-context-usage-e2e test-provider-error-e2e test-provider-usage test-usage-stats-e2e test-stats-reset-e2e test-oneshot-session-e2e test-fs-relative-path-e2e test-webui-sessions-e2e test-decision-models test-decision-models-e2e test-workflows-e2e test-dos test-dos-dosbox test-xp test-webui-markdown test-acp-e2e test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version test-background-view test-background-view-e2e test-webui-background-e2e test-webui-settings-e2e test-webui-relay-e2e
+TEST_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+# --output-sync is GNU make 4's; make 3.81 (macOS) interleaves instead.
+TEST_SYNC = $(if $(filter 3.%,$(MAKE_VERSION)),,--output-sync=target)
+
+test: $(BIN)
+	@rm -rf $(BUILDDIR)/test-home $(BUILDDIR)/lib/t && mkdir -p $(BUILDDIR)/test-home
+	@PASCLAW_HOME=$(abspath $(BUILDDIR))/test-home $(MAKE) --no-print-directory \
+		SWEPT_LIB=$(BUILDDIR)/lib -j$(TEST_JOBS) $(TEST_SYNC) test-all
+
+test-all: $(TEST_TARGETS)
 
 # Benchmark harness for the /v1/stats aggregation path. Prints timings,
 # not pass/fail -- cited by docs/stats-collection-plan.md. Not in `test`.
 bench-stats: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
-	$(FPC) $(FPCFLAGS) src/tests/stats_bench.pas -o$(BUILDDIR)/stats_bench
+	$(TEST_FPC) src/tests/stats_bench.pas -o$(BUILDDIR)/stats_bench
 	@for n in 10 100 500 2000 ; do \
 	  PASCLAW_HOME=$$(mktemp -d) ; export PASCLAW_HOME ; \
 	  $(BUILDDIR)/stats_bench $$n 20 ; \

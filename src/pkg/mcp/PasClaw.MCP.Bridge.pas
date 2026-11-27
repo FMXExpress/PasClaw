@@ -10,9 +10,10 @@
        boot lives at <home>/mcp-cache/<server>.json. ConnectMCPServers
        reads each cache and registers the tools with a "still loading"
        dispatch (server state = lsLoading). The model sees the tools
-       immediately on the first chat completion; attempts to *call*
-       them before the live connect finishes return
-       "mcp loading, retry" rather than crashing.
+       immediately on the first chat completion; a *call* to one before
+       the live connect finishes waits for that connect to settle (up
+       to LoadingCallWaitMs) and then goes through, or reports the
+       connect's error.
 
     2. Network pass (one TThread per server, parallel).
        Each TMCPLoader creates the real client, runs Connect + ListTools,
@@ -118,6 +119,12 @@ uses
   PasClaw.MCP.Compact,
   PasClaw.MCP.Disclosure;
 
+const
+  { The loader's connect timeout, and so how long a tool call waits for
+    its server's connect to settle. }
+  MCPConnectTimeoutMs = 30 * 1000;
+  LoadingCallWaitMs   = MCPConnectTimeoutMs;
+
 type
   TMCPLoadState = (lsLoading, lsReady, lsFailed);
 
@@ -151,6 +158,7 @@ type
     FDispatches:  TList;              { TList of TMCPToolDispatch -- owned }
     FCompact:     Boolean;            { snapshot of Cfg.MCPCompactResults }
     FInfo:        TMCPServerInfo;     { what the live client negotiated }
+    FSettled:     TEvent;             { set once the connect is ready or failed }
   public
     constructor Create(const AName: string; ACompact: Boolean = False);
     destructor  Destroy; override;
@@ -216,6 +224,7 @@ begin
   FClient := nil;
   FState  := lsLoading;
   FError  := '';
+  FSettled := TEvent.Create(nil, True, False, '');
 end;
 
 destructor TMCPServerState.Destroy;
@@ -228,6 +237,7 @@ begin
   FDispatches.Free;
   FDispatchLock.Free;
   FLock.Free;
+  FSettled.Free;
   inherited Destroy;
 end;
 
@@ -242,6 +252,7 @@ begin
   finally
     FLock.Release;
   end;
+  FSettled.SetEvent;
 end;
 
 function TMCPServerState.Status: TMCPServerStatus;
@@ -289,6 +300,7 @@ begin
   finally
     FLock.Release;
   end;
+  FSettled.SetEvent;
 end;
 
 function TMCPServerState.CallTool(const ToolName, ArgsJSON: string;
@@ -319,6 +331,24 @@ begin
     E := FError;
   finally
     FLock.Release;
+  end;
+  if S = lsLoading then
+  begin
+    { A tool listed from the cache can be called before the live connect
+      has finished: a one-shot run's first reply comes in a second, an npx
+      server takes several to start. Answering "retry in a moment" left
+      the model to guess when; wait for the connect to settle instead --
+      no longer than the connect itself may take -- and go on with
+      whatever it settled to. }
+    FSettled.WaitFor(LoadingCallWaitMs);
+    FLock.Acquire;
+    try
+      C := FClient;
+      S := FState;
+      E := FError;
+    finally
+      FLock.Release;
+    end;
   end;
   case S of
     lsLoading:
@@ -569,7 +599,7 @@ begin
     else
       FClient := TMCPStdioClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args);
     if Terminated then Exit;
-    if not FClient.Connect(30 * 1000, Err) then
+    if not FClient.Connect(MCPConnectTimeoutMs, Err) then
     begin
       LogWarn('mcp[%s] connect failed: %s', [FCfg.Name, Err]);
       FState.SetFailed(Err);

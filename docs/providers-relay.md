@@ -143,13 +143,58 @@ silently — the waiting caller already got the first response.
   "total_completed":    144,
   "total_failed":       1,
   "workers": [
-    { "id":"web-tab-abc",  "caps":["llama-3.2-3b"], "requests_seen": 52, "last_seen": "..." },
-    { "id":"phone-xyz",    "caps":["phi-3-mini"],   "requests_seen": 89, "last_seen": "..." }
+    { "id":"web-tab-abc", "caps":["llama-3.2-3b"], "requests_seen": 52,
+      "last_seen": "2026-11-27T15:13:40", "last_seen_age_ms": 812 },
+    { "id":"phone-xyz",   "caps":["phi-3-mini"],   "requests_seen": 89,
+      "last_seen": "2026-11-27T15:13:39", "last_seen_age_ms": 1630 }
   ]
 }
 ```
 
-Used by the TUI panel and `pasclaw status`.
+`last_seen` is the gateway's local time, with no zone. `last_seen_age_ms`
+is how long ago that was, measured by the gateway, so a client in another
+time zone (or talking to a gateway in a UTC container) can still say "12 s
+ago". A connected worker's poll loop touches `last_seen` about once a
+second.
+
+Used by the TUI panel, `pasclaw status` and the web UI's Relay tab.
+
+## The web UI's Relay tab
+
+The gateway's web UI (`/`, the **Relay** tab) is the operator's view of all
+this:
+
+- **Header.** What the relay is, and whether a provider of kind `relay`
+  is configured and is the default (from `GET /v1/providers`). With none,
+  it says connected workers get no requests and links to Settings →
+  Models & providers, where one can be added.
+- **Queue strip.** Workers online, queued and in flight, completed and
+  failed, from `GET /v1/relay/status`, refreshed every 3 s while the tab is
+  open and the page is visible. Failed turns red only above zero.
+- **Workers.** One row per connected worker: its id, its models as chips
+  ("Any model" when it advertises none), online or stale (stale when the
+  gateway has not heard from it for 30 s), the requests it has taken, and
+  when it was last seen ("12 s ago", the exact time on hover). Worker ids and
+  models come from the workers and are drawn as text, never as HTML. With
+  none connected, an empty state points to the options below.
+- **Add a worker.** The gateway URL (this page's address, editable for a
+  tunnel or proxy) and the relay worker token once, then one option at a
+  time: **This browser** (the in-browser worker below), **pasclaw relay**
+  (flags or environment variables), **Python** (a llama.cpp worker, as below)
+  and **Replicate** (`cog-relay/`). Each snippet has a Copy button. The token
+  is masked: until Reveal, the snippets carry the placeholder
+  `<PASCLAW_RELAY_TOKEN>`, so the tab can be screen-shared; its own Copy
+  button copies the real token without showing it.
+- **This browser.** A worker that runs in the tab with WebGPU: pick a model
+  (the list marks the ones WebLLM gives tool calls), name the worker, and
+  Connect. Nothing is fetched from `esm.run` before Connect; the model's
+  weights download once, with a progress bar and a percentage, and the
+  browser keeps them. WebLLM runs in a dedicated Web Worker that holds only
+  the relay-scoped token (from `GET /v1/relay/worker-token`), never the
+  page's gateway token. A status line, a served count and a collapsible
+  Activity list (timestamped, coloured by level) say what it is doing.
+  Where WebGPU is missing (an http page that is not localhost, a browser
+  without it, no usable GPU), Connect is off and the tab says why.
 
 ## Request envelope
 

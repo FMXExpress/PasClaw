@@ -48,7 +48,11 @@ uses
   PasClaw.MCP.HttpClient,
   PasClaw.MCP.Elicit,
   PasClaw.MCP.Headers,
-  PasClaw.MCP.OAuth;
+  PasClaw.MCP.OAuth,
+  PasClaw.Config,
+  PasClaw.Tools.Registry,
+  PasClaw.MCP.Cache,
+  PasClaw.MCP.Bridge;      { ConnectMCPServerList -- a call while connecting }
 
 var
   Failures: Integer = 0;
@@ -555,6 +559,7 @@ begin
   Check(PickLegacyVersion('["1999-01-01"]') = '', 'versions: none in common');
 end;
 
+
 procedure TestOAuthChecks;
 var
   Cb: TAuthCallbackParams;
@@ -949,6 +954,61 @@ begin
         Tag + ': no elicitation declared over HTTP');
 end;
 
+procedure TestCallWhileConnectingWaitsForTheConnect;
+(* The bridge registers a server's tools from its cache at once and
+   connects in the background, so the model can call one before the live
+   connect has ended. That call answered "still connecting -- retry in a
+   moment" straight away: a one-shot run whose model called an MCP tool in
+   its first reply failed whenever the server was slower to start than the
+   model was to answer (mcp_client_e2e did, under load). It now waits for
+   the connect to settle and then goes through. Here the server takes 1.5 s
+   to start and the tool is called the moment it is registered. *)
+const
+  Srv = 'slowfake-q4';
+var
+  Cfg: TConfig;
+  Reg: TToolRegistry;
+  Clients: TMCPClientList;
+  Servers: array of TMCPServer;
+  Cached: TMCPToolArray;
+  Res, Err: string;
+  T0: QWord;
+begin
+  SetLength(Cached, 1);
+  Cached[0].Name := 'echo';
+  Cached[0].Description := 'echo text';
+  Cached[0].Schema := '{"type":"object","properties":{"text":{"type":"string"}}}';
+  Cached[0].Server := Srv;
+  SaveCachedTools(Srv, Cached);
+  SetLength(Servers, 1);
+  Servers[0].Name := Srv;
+  Servers[0].Cmd := Python;
+  Servers[0].Args := '"' + FakeMCP + '" --era modern --start-delay 1.5 --log "' + NewLog('slow') + '"';
+  Servers[0].Enabled := True;
+  Servers[0].CodeMode := False;
+  Cfg := TConfig.Create;
+  Reg := TToolRegistry.Create;
+  try
+    Cfg.MCPProgressiveDisclosure := False;
+    Clients := ConnectMCPServerList(Servers, Cfg, Reg);
+    try
+      T0 := GetTickCount64;
+      Res := Reg.RunTool(Srv + '__echo', '{"text":"hi"}', Err);
+      Check(Pos('still connecting', Err) = 0,
+            'a call while the server connects waits for it: ' + Err);
+      Check(Pos('echo:hi', Res) > 0, 'and goes through once it has: ' + Res + ' / ' + Err);
+      Check(GetTickCount64 - T0 >= 1000, 'the call waited for the server to start');
+    finally
+      FreeMCPClients(Clients);
+    end;
+  finally
+    Reg.Free;
+    Cfg.Free;
+    DeleteFile(CachePath(Srv));
+  end;
+  WriteLn('  ok: a call while the server connects waits for the connect');
+end;
+
 procedure TestInterop;
 var
   C: TMCPStdioClient;
@@ -1008,6 +1068,7 @@ begin
     TestHttpLegacy('--era both --discover-unsupported --legacy-version 2025-06-18', '2025-06-18',
                    'http unsupported-version');
     TestInterop;
+    TestCallWhileConnectingWaitsForTheConnect;
   end;
 
   if Failures = 0 then WriteLn('mcp_client_tests: OK')
