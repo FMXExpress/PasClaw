@@ -3539,6 +3539,7 @@ var
   Item: TJsonObject;
   Dir: string;
   SR: TSearchRec;
+  Mt: TDateTime;
 begin
   Root := TJsonObject.Create;
   try
@@ -3553,6 +3554,14 @@ begin
           Item := TJsonObject.Create;
           Item.PutStr('name', SR.Name);
           Item.PutInt('size', SR.Size);
+          { Last modified, Unix seconds UTC -- the Memory tab's list shows it
+            and sorts by it. Same FPC / Delphi split as /v1/fs. }
+          {$IFDEF FPC}
+          Mt := FileDateToDateTime(SR.Time);
+          {$ELSE}
+          Mt := SR.TimeStamp;
+          {$ENDIF}
+          Item.PutInt('mtime', DateTimeToUnix(Mt, False));
           Arr.AddObject(Item);
         until FindNext(SR) <> 0;
       finally

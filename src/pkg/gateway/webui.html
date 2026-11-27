@@ -480,19 +480,181 @@
      contents and (with .subpane overflow:hidden) the lower part gets clipped
      instead of letting .col-list / .col-view scroll. */
   .subpane .two-col{min-height:0}
-  #tab-memory{flex-direction:column}
-  #subpane-setup{padding:1.1rem 1.25rem;overflow:auto}
-  #facts-box{flex:1;min-height:0;display:flex;flex-direction:column;
-    padding:1.1rem 1.25rem;overflow:hidden;max-width:60rem}
-  #facts-list{flex:1;overflow:auto;min-height:0}
-  #facts-list .item{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;
-    padding:.5rem .65rem;font-size:13px;border-bottom:1px solid var(--border)}
-  #facts-list .item:hover{background:var(--surface)}
-  #facts-list .item .sub{display:block;color:var(--text-3);font-size:12px;margin-top:.15rem}
-  #facts-list .item button{background:transparent;border:0;color:var(--text-3);
-    font-size:13px;line-height:1;padding:.15rem .35rem;border-radius:4px;flex:0 0 auto}
-  #facts-list .item button:hover{color:var(--danger);background:var(--surface-2)}
   .crumb{font-size:12px;color:var(--text-3);margin-bottom:.5rem}
+
+  /* ===== Memory tab =====
+     A header (what memory is, Refresh) over three tabs with counts. Notes
+     is the Files tab's frame: the notes on the left (search, then name,
+     size and modified, or a search's matches with their snippets), the
+     open note on the right with its size and age, Preview / Source and
+     Copy. Facts and Search setup are one readable column: rows with pills,
+     fields in a panel. Below 760px the list sits above the note, with a
+     close button to give the height back. Everything is scoped to mem-. */
+  #tab-memory{flex-direction:column}
+  .mem-head{flex:none;padding:1rem 1.25rem 0;background:var(--surface);border-bottom:1px solid var(--border)}
+  .mem-head-row{display:flex;align-items:center;gap:.6rem}
+  .mem-head h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .mem-head-row .mem-ibtn{margin-left:auto}
+  .mem-ibtn{justify-content:center;width:28px;height:28px;padding:0;flex:none}
+  .mem-ibtn svg.ic{vertical-align:0}
+  .mem-ibtn.busy svg.ic{animation:memSpin .8s linear infinite}
+  @keyframes memSpin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.mem-ibtn.busy svg.ic{animation:none}}
+  .mem-lead{margin:.25rem 0 0;max-width:50rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .mem-lead code,.mem-sub code{background:var(--surface-2);border-radius:4px;padding:.03rem .3rem;font-size:.9em}
+  .mem-tabs{display:flex;gap:.25rem;margin:.6rem 0 0 -.6rem;overflow-x:auto;scrollbar-width:none}
+  .mem-tabs::-webkit-scrollbar{display:none}
+  .mem-tabs button{display:inline-flex;align-items:center;gap:.4rem;flex:none;background:none;border:0;border-radius:0;
+    padding:.45rem .6rem .55rem;font-size:13px;color:var(--text-2);white-space:nowrap;
+    box-shadow:inset 0 -2px 0 transparent;transition:color .12s,box-shadow .12s}
+  .mem-tabs button:hover{background:none;color:var(--text)}
+  .mem-tabs button[aria-selected=true]{color:var(--text);font-weight:550;box-shadow:inset 0 -2px 0 var(--accent)}
+  .mem-tabs button:focus-visible{outline-offset:-2px}
+  .mem-count{min-width:1.35rem;padding:0 .4rem;border-radius:999px;font-size:11px;font-weight:500;line-height:1.65;
+    text-align:center;background:var(--surface-3);color:var(--text-2);font-variant-numeric:tabular-nums}
+  .mem-count:empty{display:none}
+  .mem-pane{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+  .mem-pane[hidden]{display:none}
+  #subpane-facts,#subpane-setup{overflow:auto}
+
+  /* Notes: the list. */
+  .mem-shell{flex:1;min-width:0;min-height:0;display:flex}
+  .mem-side{flex:0 0 22rem;min-width:0;display:flex;flex-direction:column;
+    border-right:1px solid var(--border);background:var(--surface)}
+  .mem-search{position:relative;margin:.75rem .75rem .65rem}
+  .mem-search svg.ic{position:absolute;left:.6rem;top:50%;transform:translateY(-50%);color:var(--text-3);
+    pointer-events:none;vertical-align:0}
+  .mem-search input{width:100%;padding-left:2rem}
+  .mem-cols,.mem-row{display:grid;grid-template-columns:minmax(0,1fr) 4.4rem 5.4rem;align-items:center;gap:.6rem}
+  .mem-cols{padding:.35rem 1.1rem .35rem 1.15rem;border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+    font-size:11.5px;font-weight:500;color:var(--text-3)}
+  .mem-cols[hidden]{display:none}
+  .mem-cols>span+span,.mem-row>.mem-size,.mem-row>.mem-mod{text-align:right}
+  .mem-hits-head{display:flex;align-items:center;gap:.5rem;padding:.3rem .75rem .3rem 1.15rem;
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border);font-size:12px;color:var(--text-3)}
+  .mem-hits-head[hidden]{display:none}
+  .mem-hits-head>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mem-hits-head .icon-btn{padding:.08rem .5rem;font-size:12px}
+  .mem-list{flex:1;min-height:0;overflow:auto;padding:.35rem .4rem}
+  .mem-row{width:100%;padding:.38rem .7rem .38rem .75rem;border:0;border-radius:var(--radius);background:transparent;
+    text-align:left;font-size:13px;line-height:1.5;color:var(--text)}
+  .mem-row:hover{background:var(--surface-2)}
+  .mem-row[aria-current=true]{background:var(--accent-soft)}
+  .mem-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .mem-name{display:flex;align-items:center;gap:.5rem;min-width:0}
+  .mem-name>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mem-name svg.ic{color:var(--text-3);vertical-align:0}
+  .mem-size,.mem-mod{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .mem-row.hit{display:flex;flex-direction:column;align-items:stretch;gap:.1rem;padding-top:.45rem;padding-bottom:.45rem}
+  .mem-snip{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;padding-left:1.5rem;
+    font-size:12.5px;line-height:1.5;color:var(--text-2);overflow-wrap:anywhere}
+  .mem-snip mark{background:var(--accent-soft);color:var(--text);font-weight:600;border-radius:2px;padding:0 .1em}
+  .mem-foot{padding:.45rem 1.15rem;border-top:1px solid var(--border);font-size:12px;color:var(--text-3);
+    font-variant-numeric:tabular-nums}
+  .mem-foot:empty{display:none}
+  .mem-skel{height:.8rem;margin:.72rem .75rem;border-radius:4px;background:var(--surface-2)}
+  .mem-skel:nth-child(2n){width:70%}
+  .mem-skel:nth-child(3n){width:55%}
+
+  /* Empty, error and nothing-open states: the Files tab's pattern. */
+  .mem-state{display:flex;gap:.8rem;align-items:flex-start;padding:1.1rem .8rem;max-width:30rem}
+  .mem-body>.mem-state{margin:16vh auto 0;padding:1.2rem 1.5rem}
+  .mem-facts>.mem-state{max-width:none;padding:1.2rem 1.25rem}
+  .mem-state-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:34px;height:34px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .mem-side .mem-state-ic{background:var(--surface-3)}
+  .mem-state-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .mem-state.err .mem-state-ic{background:var(--danger-soft);color:var(--danger)}
+  .mem-state b{display:block;margin-bottom:.15rem;font-size:13.5px;font-weight:600;color:var(--text)}
+  .mem-state p{margin:0;font-size:13px;line-height:1.55;color:var(--text-2);overflow-wrap:anywhere}
+  .mem-state .icon-btn{margin-top:.6rem}
+
+  /* Notes: the open note. */
+  .mem-view{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
+  .mem-vhead{display:flex;align-items:center;flex-wrap:wrap;gap:.5rem .75rem;min-width:0;
+    padding:.6rem 1rem;border-bottom:1px solid var(--border);background:var(--surface)}
+  .mem-vhead[hidden]{display:none}
+  .mem-vic{display:inline-flex;color:var(--text-3)}
+  .mem-vic svg.ic{vertical-align:0}
+  .mem-vtitle{display:flex;flex-direction:column;flex:1 1 12rem;min-width:0}
+  .mem-vtitle b{font-size:13.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mem-vtitle span{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .mem-vact{display:flex;align-items:center;gap:.35rem}
+  #mem-close{display:none}
+  .mem-seg{display:flex;gap:2px;padding:2px;background:var(--surface-2);border:1px solid var(--border);border-radius:7px}
+  .mem-seg[hidden]{display:none}
+  .mem-seg button{background:transparent;border:0;border-radius:5px;padding:.14rem .6rem;font-size:12px;color:var(--text-2)}
+  .mem-seg button:hover{background:var(--surface-3);color:var(--text)}
+  .mem-seg button[aria-pressed=true]{background:var(--surface-3);color:var(--text);font-weight:550}
+  html.lite .mem-seg button[aria-pressed=true]{background:var(--surface);box-shadow:0 0 0 1px var(--border)}
+  .mem-body{flex:1;min-height:0;overflow:auto}
+  .mem-md{padding:1.25rem 1.6rem 2rem;font-size:14px;line-height:1.6}
+  .mem-md>*{max-width:52rem}
+  .mem-src{margin:0;padding:1rem 1.4rem 1.5rem;font:12.5px/1.6 var(--mono);color:var(--text);
+    white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4}
+  .mem-loading,.mem-empty-file{padding:1rem 1.2rem;font-size:13px;color:var(--text-3)}
+
+  /* Facts and Search setup: one column. */
+  .mem-col{max-width:52rem;padding:1.25rem 1.25rem 3rem;display:flex;flex-direction:column;gap:.9rem;min-width:0}
+  .mem-sec-head{display:flex;align-items:center;gap:.5rem;min-width:0;min-height:28px}
+  .mem-sec-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text)}
+  .mem-sec-head .n,.mem-setup-status{font-size:12.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .mem-sec-head .icon-btn{margin-left:auto}
+  .mem-sub{margin:-.45rem 0 0;max-width:44rem;font-size:13px;line-height:1.55;color:var(--text-2)}
+  .mem-banner{display:flex;align-items:flex-start;gap:.5rem;padding:.6rem .85rem;border:1px solid var(--border);
+    border-radius:8px;background:var(--surface);font-size:13px;line-height:1.5;color:var(--text)}
+  .mem-banner[hidden]{display:none}
+  .mem-banner svg.ic{flex:none;margin-top:2px;color:var(--accent)}
+  .mem-banner b{font-weight:600}
+  .mem-add{display:flex;gap:.5rem;min-width:0}
+  .mem-add input{flex:1;min-width:0}
+  .mem-add button.primary{display:inline-flex;align-items:center;gap:.35rem}
+  .mem-msg{margin-top:-.45rem;font-size:13px;line-height:1.5;color:var(--ok);overflow-wrap:anywhere}
+  .mem-msg:empty{display:none}
+  .mem-msg.err{color:var(--danger)}
+  .mem-facts,.mem-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .mem-fact{display:flex;align-items:flex-start;gap:.75rem;padding:.7rem .7rem .7rem 1rem}
+  .mem-fact+.mem-fact{border-top:1px solid var(--border)}
+  .mem-fact-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:.3rem}
+  .mem-fact-text{font-size:13.5px;line-height:1.5;color:var(--text);overflow-wrap:anywhere;white-space:pre-wrap}
+  .mem-fact-meta{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem .45rem;font-size:12px;color:var(--text-3)}
+  .mem-fact-id{font:11.5px/1.5 var(--mono)}
+  .mem-tag{display:inline-flex;align-items:center;padding:0 .45rem;border-radius:999px;font-size:11px;font-weight:500;
+    line-height:1.65;white-space:nowrap;background:var(--surface-3);color:var(--text-2)}
+  .mem-tag.accent{background:var(--accent-soft);color:var(--accent)}
+  .mem-tag.plain{background:transparent;color:var(--text-3);box-shadow:inset 0 0 0 1px var(--border-strong)}
+  .mem-forget{flex:none;justify-content:center;width:28px;height:28px;padding:0;border-color:transparent;color:var(--text-3)}
+  .mem-forget svg.ic{vertical-align:0}
+  .mem-forget:hover{color:var(--danger);background:var(--danger-soft)}
+  .mem-forget:disabled{opacity:.5;cursor:wait}
+  .mem-panel.mem-setup{padding:1rem 1.1rem .9rem}
+  .mem-setup .cfg-input{max-width:26rem}
+  .mem-setup-act{display:flex;gap:.5rem;margin-top:.3rem}
+  @media (max-width:760px){
+    .mem-head{padding:.8rem 1rem 0}
+    .mem-lead{font-size:13px}
+    .mem-tabs{margin-left:-.5rem}
+    .mem-tabs button{padding-left:.5rem;padding-right:.5rem}
+    .mem-shell{flex-direction:column}
+    .mem-side{flex:1 1 auto;min-height:0;border-right:0;overflow:hidden}
+    .mem-shell:not(.open) .mem-view{display:none}
+    .mem-shell.open .mem-side{flex:0 0 auto;max-height:40%;border-bottom:1px solid var(--border)}
+    .mem-cols,.mem-row{grid-template-columns:minmax(0,1fr) 4rem 4.6rem;gap:.45rem}
+    .mem-vhead{flex-wrap:nowrap;gap:.5rem;padding:.5rem .75rem}
+    .mem-vic{display:none}
+    .mem-vtitle{flex:1 1 auto}
+    .mem-seg button{padding:.14rem .45rem}
+    .mem-vact{gap:.25rem}
+    .mem-vact .lbl{display:none}
+    #mem-copy{justify-content:center;width:28px;height:28px;padding:0}
+    #mem-close{display:inline-flex}
+    .mem-md{padding:1rem .9rem 1.5rem}
+    .mem-src{padding:.9rem .9rem 1.5rem}
+    .mem-col{padding:1rem 1rem 2rem}
+    .mem-fact{padding-left:.85rem}
+  }
 
   /* ===== Generic two-column tabs ===== */
   .two-col{display:flex;flex:1;min-width:0}
@@ -2323,63 +2485,105 @@
   </div>
 
   <div id="tab-memory" class="tab">
-    <div class="subtabs" id="mem-subtabs">
-      <button type="button" data-sub="notes" class="active">Notes &amp; files</button>
-      <button type="button" data-sub="facts">Distilled facts</button>
-      <button type="button" data-sub="setup">Setup</button>
-    </div>
-    <div class="subpane" id="subpane-setup">
-      <div id="mem-setup-box" style="max-width:560px">
-        <div class="crumb">Memory &amp; reranking setup <span id="mem-setup-status"></span></div>
-        <p class="ob-sub">Local semantic search + optional cross-encoder reranking.
-          Runs on-device; nothing leaves the host. Model downloads happen here.</p>
-        <div class="ob-field">
-          <label><input type="checkbox" id="ms-vector"> Semantic memory search (local embeddings)</label>
-          <div class="ob-note" id="ms-embed-note"></div>
-        </div>
-        <div class="ob-field">
-          <label for="ms-backend">Reranking (2nd-stage, sharper ordering)</label>
-          <select id="ms-backend" class="cfg-input">
-            <option value="off">Off</option>
-            <option value="local">Local cross-encoder</option>
-            <option value="llm">Use my chat model (LLM)</option>
-            <option value="auto">Auto (local if downloaded, else LLM)</option>
-          </select>
-        </div>
-        <div class="ob-field" id="ms-model-field" hidden>
-          <label for="ms-model">Local reranker model</label>
-          <select id="ms-model" class="cfg-input"></select>
-          <div class="ob-note" id="ms-rerank-note"></div>
-        </div>
-        <div id="ms-job" class="ob-note" hidden></div>
-        <div id="ms-err" class="ob-err" hidden></div>
-        <div style="margin-top:.7rem;display:flex;gap:.5rem">
-          <button type="button" id="ms-save" class="ob-btn">Save &amp; download</button>
+    <!-- Memory: the notes in workspace/memory/*.md (GET /v1/memory lists
+         name, size, mtime; GET /v1/memory/<name> reads one; GET
+         /v1/memory/search?q= runs the memory_search index), the distilled
+         facts (GET/POST /v1/memory/facts, DELETE /v1/memory/facts/<id>,
+         GET /v1/memory/facts/export) and the local search setup (GET/POST
+         /v1/memory/provision). Names, snippets and facts are drawn as text. -->
+    <header class="mem-head">
+      <div class="mem-head-row">
+        <h2>Memory</h2>
+        <button type="button" class="icon-btn mem-ibtn" id="mem-refresh" title="Refresh" aria-label="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+      </div>
+      <p class="mem-lead">What the agent keeps between chats: Markdown notes in <code>workspace/memory/</code> that it reads and writes with its memory tools, and short facts distilled from conversations.</p>
+      <div class="mem-tabs" id="mem-subtabs" role="tablist" aria-label="Memory">
+        <button type="button" role="tab" id="mem-tab-notes" data-sub="notes" aria-selected="true" aria-controls="subpane-notes">Notes <span class="mem-count" id="mem-n-notes"></span></button>
+        <button type="button" role="tab" id="mem-tab-facts" data-sub="facts" aria-selected="false" aria-controls="subpane-facts" tabindex="-1">Facts <span class="mem-count" id="mem-n-facts"></span></button>
+        <button type="button" role="tab" id="mem-tab-setup" data-sub="setup" aria-selected="false" aria-controls="subpane-setup" tabindex="-1">Search setup</button>
+      </div>
+    </header>
+    <div class="mem-pane" id="subpane-setup" role="tabpanel" aria-labelledby="mem-tab-setup" hidden>
+      <div class="mem-col" id="mem-setup-box">
+        <div class="mem-sec-head"><h3>Search setup</h3><span class="mem-setup-status" id="mem-setup-status"></span></div>
+        <p class="mem-sub">How <code>memory_search</code> finds notes: keyword search always, plus semantic search with local embeddings and an optional reranker for sharper ordering. Models run on this machine and download from here.</p>
+        <div class="mem-panel mem-setup">
+          <div class="ob-field">
+            <label><input type="checkbox" id="ms-vector"> Semantic memory search (local embeddings)</label>
+            <div class="ob-note" id="ms-embed-note"></div>
+          </div>
+          <div class="ob-field">
+            <label for="ms-backend">Reranking (2nd-stage, sharper ordering)</label>
+            <select id="ms-backend" class="cfg-input">
+              <option value="off">Off</option>
+              <option value="local">Local cross-encoder</option>
+              <option value="llm">Use my chat model (LLM)</option>
+              <option value="auto">Auto (local if downloaded, else LLM)</option>
+            </select>
+          </div>
+          <div class="ob-field" id="ms-model-field" hidden>
+            <label for="ms-model">Local reranker model</label>
+            <select id="ms-model" class="cfg-input"></select>
+            <div class="ob-note" id="ms-rerank-note"></div>
+          </div>
+          <div id="ms-job" class="ob-note" hidden></div>
+          <div id="ms-err" class="ob-err" hidden></div>
+          <div class="mem-setup-act">
+            <button type="button" id="ms-save" class="primary">Save &amp; download</button>
+          </div>
         </div>
       </div>
     </div>
-    <div class="subpane" id="subpane-facts">
-      <div id="facts-box">
-        <div class="crumb">Distilled facts <span id="facts-status"></span>
-          <a href="#" id="facts-export" style="float:right">Export .md</a></div>
-        <form id="facts-add" class="vault-search-row">
-          <input id="facts-text" type="text" autocomplete="off"
-                 placeholder="Remember a fact…  Enter to add">
+    <div class="mem-pane" id="subpane-facts" role="tabpanel" aria-labelledby="mem-tab-facts" hidden>
+      <div class="mem-col" id="facts-box">
+        <div class="mem-sec-head">
+          <h3>Distilled facts</h3><span class="n" id="facts-status"></span>
+          <button type="button" class="icon-btn" id="facts-export" title="Download the active facts as Markdown"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg><span class="lbl">Export .md</span></button>
+        </div>
+        <p class="mem-sub">Short facts the agent distils from conversations and puts in its prompt while distillation is on. You can add your own; Forget removes one for good.</p>
+        <div class="mem-banner" id="facts-off" hidden><svg class="ic" aria-hidden="true"><use href="#i-info"/></svg>
+          <span><b>Distillation is off,</b> so the agent neither collects facts nor puts these in its prompt. <a href="#settings" data-mem-settings>Turn it on in Settings › Memory &amp; knowledge</a></span></div>
+        <form id="facts-add" class="mem-add">
+          <input id="facts-text" type="text" autocomplete="off" maxlength="2000" aria-label="A fact to remember"
+                 placeholder="Remember a fact, e.g. “Deploys go out on Thursdays”">
+          <button type="submit" class="primary" id="facts-add-btn"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg><span class="lbl">Remember</span></button>
         </form>
-        <div id="facts-list"></div>
+        <div class="mem-msg" id="facts-msg" role="status" aria-live="polite"></div>
+        <div class="mem-facts" id="facts-list"></div>
       </div>
     </div>
-    <div class="subpane active" id="subpane-notes">
-      <div class="two-col">
-        <div class="col-list">
-          <form id="mem-search" class="vault-search-row">
-            <input id="mem-q" type="text" autocomplete="off"
-                   placeholder="Search memory">
+    <div class="mem-pane" id="subpane-notes" role="tabpanel" aria-labelledby="mem-tab-notes">
+      <div class="mem-shell" id="mem-shell">
+        <section class="mem-side" aria-label="Notes">
+          <form id="mem-search" class="mem-search" role="search">
+            <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+            <input id="mem-q" type="search" autocomplete="off" aria-label="Search notes"
+                   placeholder="Search notes, Enter to run">
           </form>
-          <div class="crumb">workspace/memory/</div>
-          <div id="mem-list"></div>
-        </div>
-        <pre class="col-view" id="mem-view"><div class="empty-pane">Pick a file to view, or search memory.</div></pre>
+          <div class="mem-cols" id="mem-cols" aria-hidden="true"><span>Name</span><span>Size</span><span>Modified</span></div>
+          <div class="mem-hits-head" id="mem-hits-head" hidden><span id="mem-hits-n"></span>
+            <button type="button" class="icon-btn" id="mem-clear">Clear</button></div>
+          <div class="mem-list" id="mem-list" aria-label="Notes"></div>
+          <div class="mem-foot" id="mem-foot" aria-live="polite"></div>
+        </section>
+        <section class="mem-view" aria-label="Note">
+          <header class="mem-vhead" id="mem-vhead" hidden>
+            <span class="mem-vic"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg></span>
+            <div class="mem-vtitle">
+              <b id="mem-vname"></b>
+              <span id="mem-vmeta"></span>
+            </div>
+            <div class="mem-seg" id="mem-mdseg" role="group" aria-label="Markdown view" hidden>
+              <button type="button" data-md="preview" aria-pressed="true">Preview</button>
+              <button type="button" data-md="source" aria-pressed="false">Source</button>
+            </div>
+            <div class="mem-vact">
+              <button type="button" class="icon-btn" id="mem-copy" title="Copy the note's text"><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg><span class="lbl">Copy</span></button>
+              <button type="button" class="icon-btn mem-ibtn" id="mem-close" title="Close the note" aria-label="Close the note"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
+            </div>
+          </header>
+          <div class="mem-body" id="mem-view"></div>
+        </section>
       </div>
     </div>
   </div>
@@ -5501,11 +5705,460 @@ async function memSetupSave() {
   }
 }
 document.addEventListener("DOMContentLoaded", () => {
-  const b = document.querySelector('#mem-subtabs [data-sub="setup"]');
-  if (b) b.addEventListener("click", memSetupLoad);
+  /* The Search setup tab loads itself when shown: see memShowSub. */
   const bk = $("#ms-backend"); if (bk) bk.addEventListener("change", msToggleModelField);
   const sv = $("#ms-save"); if (sv) sv.addEventListener("click", memSetupSave);
 });
+
+/* ===== Memory tab: notes and facts =====
+   Notes: GET /v1/memory lists workspace/memory/*.md (name, size, mtime),
+   GET /v1/memory/<name> reads one, GET /v1/memory/search?q= runs the index
+   the memory_search tool uses (its snippets mark matches with « »).
+   Facts: GET /v1/memory/facts, POST to remember one, DELETE .../<id> to
+   forget one, GET .../export as Markdown. Every name, snippet and fact
+   goes in as text; a note's Markdown goes through renderMarkdown, which
+   escapes first. Reuses the Files tab's fsbError and fsbAgo. */
+const memTab = { files: [], filesErr: "", hits: null, hitsErr: "", term: "", searching: false,
+                 open: null, text: null, md: "preview", facts: [], enabled: false, factsErr: "",
+                 sub: "notes", seq: 0, sseq: 0, vseq: 0, fseq: 0 };
+const memBase = p => (p || "").replace(/^.*[\\/]/, "");
+const memPlural = (n, one, many) => n + " " + (n === 1 ? one : many);
+
+/* An empty / error / nothing-open panel. title and text are set as text. */
+function memState(kind, ic, title, text, action) {
+  const box = document.createElement("div");
+  box.className = "mem-state" + (kind ? " " + kind : "");
+  box.innerHTML = '<span class="mem-state-ic">' + icon(ic) + '</span><div><b></b><p></p></div>';
+  box.querySelector("b").textContent = title;
+  box.querySelector("p").textContent = text;
+  if (action) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "icon-btn"; b.textContent = action.label;
+    b.addEventListener("click", action.run);
+    box.querySelector("div").appendChild(b);
+  }
+  return box;
+}
+function memSkeleton(list) {
+  list.textContent = "";
+  for (let i = 0; i < 5; i++) { const s = document.createElement("div"); s.className = "mem-skel"; list.appendChild(s); }
+  list.setAttribute("aria-busy", "true");
+}
+/* A search snippet, with the «matched» words in <mark>, built as text. */
+function memSnippet(el, s) {
+  String(s || "").replace(/\s+/g, " ").trim().split(/(«[^»]*»)/).forEach(part => {
+    if (!part) return;
+    if (part[0] === "«" && part.slice(-1) === "»") {
+      const m = document.createElement("mark"); m.textContent = part.slice(1, -1); el.appendChild(m);
+    } else el.appendChild(document.createTextNode(part));
+  });
+}
+
+async function memLoadFiles(opts) {
+  opts = opts || {};
+  const seq = ++memTab.seq, list = $("#mem-list");
+  if (!opts.quiet && memTab.hits === null && !memTab.searching) memSkeleton(list);
+  try {
+    const r = await gwFetch("/v1/memory");
+    if (!r.ok) throw new Error(await fsbError(r));
+    const j = await r.json();
+    if (seq !== memTab.seq) return;
+    memTab.files = (j.files || []).slice().sort((a, b) => (b.mtime || 0) - (a.mtime || 0) ||
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+    memTab.filesErr = "";
+    $("#mem-n-notes").textContent = String(memTab.files.length);
+  } catch (e) {
+    if (seq !== memTab.seq) return;
+    memTab.filesErr = String(e.message || e);
+    $("#mem-n-notes").textContent = "";
+  }
+  if (memTab.hits === null && !memTab.searching) memRenderList();
+  /* The open note's header reads its size and age from the list. */
+  if (memTab.open) memRenderMeta();
+}
+
+function memRenderList() {
+  const list = $("#mem-list"), foot = $("#mem-foot");
+  list.textContent = "";
+  list.removeAttribute("aria-busy");
+  const searching = memTab.hits !== null || memTab.searching;
+  $("#mem-cols").hidden = searching;
+  $("#mem-hits-head").hidden = !searching;
+  if (searching) {
+    foot.textContent = "";
+    const hits = memTab.hits || [], term = memTab.term;
+    if (memTab.searching) { $("#mem-hits-n").textContent = "Searching for “" + term + "”…"; memSkeleton(list); return; }
+    if (memTab.hitsErr) {
+      $("#mem-hits-n").textContent = "Search failed";
+      list.appendChild(memState("err", "alert", "Search failed", memTab.hitsErr,
+        { label: "Try again", run: () => memSearch(term) }));
+      return;
+    }
+    $("#mem-hits-n").textContent = (hits.length ? memPlural(hits.length, "match", "matches") : "No matches") + " for “" + term + "”";
+    $("#mem-hits-n").title = $("#mem-hits-n").textContent;
+    if (!hits.length) {
+      list.appendChild(memState("", "search", "No matches", "No note mentions “" + term + "”. Try other words, or clear the search to see every note."));
+      return;
+    }
+    hits.forEach(h => {
+      const name = memBase(h.path);
+      const row = document.createElement("button");
+      row.type = "button"; row.className = "mem-row hit"; row.dataset.name = name;
+      const nm = document.createElement("span"); nm.className = "mem-name"; nm.innerHTML = icon("file");
+      const t = document.createElement("span"); t.textContent = name; t.title = name; nm.appendChild(t);
+      const sn = document.createElement("span"); sn.className = "mem-snip";
+      memSnippet(sn, h.snippet);
+      row.append(nm, sn);
+      list.appendChild(row);
+    });
+  } else {
+    const fs = memTab.files;
+    if (memTab.filesErr) {
+      foot.textContent = "";
+      list.appendChild(memState("err", "alert", "Can't list the notes", memTab.filesErr,
+        { label: "Try again", run: () => memLoadFiles() }));
+      return;
+    }
+    const total = fs.reduce((s, f) => s + (Number(f.size) || 0), 0);
+    foot.textContent = fs.length ? memPlural(fs.length, "note", "notes") + " · " + humanBytes(total) : "";
+    if (!fs.length) {
+      list.appendChild(memState("", "file", "No notes yet",
+        "The agent keeps its notes here as Markdown: MEMORY.md, which it reads at the start of every chat, and a note for each day. Ask it to remember something and the note shows up here."));
+      return;
+    }
+    fs.forEach(f => {
+      const row = document.createElement("button");
+      row.type = "button"; row.className = "mem-row"; row.dataset.name = f.name;
+      const nm = document.createElement("span"); nm.className = "mem-name"; nm.innerHTML = icon("file");
+      const t = document.createElement("span"); t.textContent = f.name; t.title = f.name; nm.appendChild(t);
+      const sz = document.createElement("span"); sz.className = "mem-size";
+      sz.textContent = humanBytes(f.size); sz.title = Number(f.size).toLocaleString() + " bytes";
+      const md = document.createElement("time"); md.className = "mem-mod";
+      if (f.mtime > 0) {
+        const d = new Date(f.mtime * 1000);
+        md.textContent = fsbAgo(f.mtime); md.dateTime = d.toISOString(); md.title = "Modified " + d.toLocaleString();
+      } else md.textContent = "—";
+      row.append(nm, sz, md);
+      list.appendChild(row);
+    });
+  }
+  memMarkOpen();
+}
+function memMarkOpen() {
+  const name = memTab.open ? memTab.open.name : null;
+  $$("#mem-list .mem-row").forEach(r => r.setAttribute("aria-current", String(r.dataset.name === name)));
+}
+
+async function memSearch(term) {
+  term = String(term || "").trim();
+  if (!term) { memClearSearch(); return; }
+  const seq = ++memTab.sseq;
+  memTab.term = term; memTab.searching = true; memTab.hits = null; memTab.hitsErr = "";
+  memRenderList();
+  let hits = [], err = "";
+  try {
+    const r = await gwFetch("/v1/memory/search?q=" + encodeURIComponent(term));
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) throw new Error(j.error || ("HTTP " + r.status));
+    hits = j.hits || [];
+  } catch (e) { err = String(e.message || e); }
+  if (seq !== memTab.sseq) return;
+  memTab.searching = false; memTab.hits = hits; memTab.hitsErr = err;
+  memRenderList();
+}
+function memClearSearch() {
+  memTab.sseq++;
+  memTab.searching = false; memTab.hits = null; memTab.hitsErr = ""; memTab.term = "";
+  $("#mem-q").value = "";
+  memRenderList();
+}
+
+/* ---- the open note ---- */
+function memClose() {
+  memTab.vseq++; memTab.open = null; memTab.text = null;
+  $("#mem-vhead").hidden = true;
+  $("#mem-shell").classList.remove("open");
+  const v = $("#mem-view");
+  v.textContent = "";
+  v.appendChild(memState("", "file", "No note open",
+    "Pick a note to read it here, or search across all of them. Markdown renders; Source shows the text as saved."));
+  memMarkOpen();
+}
+function memRenderMeta() {
+  const o = memTab.open, el = $("#mem-vmeta");
+  if (!o) return;
+  const f = memTab.files.find(x => x.name === o.name);
+  const parts = ["workspace/memory"];
+  el.title = "";
+  if (f) {
+    parts.push(humanBytes(f.size));
+    if (f.mtime > 0) { parts.push("modified " + fsbAgo(f.mtime)); el.title = "Modified " + new Date(f.mtime * 1000).toLocaleString(); }
+  }
+  el.textContent = parts.join(" · ");
+}
+function memRenderText() {
+  const v = $("#mem-view"), o = memTab.open;
+  if (!o || memTab.text == null) return;
+  v.textContent = "";
+  if (memTab.text === "") {
+    const e = document.createElement("div"); e.className = "mem-empty-file"; e.textContent = "This note is empty.";
+    v.appendChild(e);
+  } else if (o.md && memTab.md === "preview") {
+    const m = document.createElement("div");
+    m.className = "mem-md md";
+    m.innerHTML = renderMarkdown(memTab.text);
+    wireCopyButtons(m);
+    v.appendChild(m);
+  } else {
+    const pre = document.createElement("pre");
+    pre.className = "mem-src";
+    pre.textContent = memTab.text;
+    v.appendChild(pre);
+  }
+}
+async function memOpen(name, opts) {
+  opts = opts || {};
+  const vseq = ++memTab.vseq, v = $("#mem-view");
+  memTab.open = { name, md: /\.(md|markdown)$/i.test(name) };
+  $("#mem-shell").classList.add("open");
+  $("#mem-vhead").hidden = false;
+  $("#mem-vname").textContent = name;
+  $("#mem-vname").title = name;
+  memRenderMeta();
+  $("#mem-mdseg").hidden = !memTab.open.md;
+  $("#mem-mdseg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.md === memTab.md)));
+  memMarkOpen();
+  if (!opts.quiet) {
+    memTab.text = null;
+    $("#mem-copy").disabled = true;
+    v.textContent = "";
+    const l = document.createElement("div"); l.className = "mem-loading"; l.textContent = "Loading…";
+    v.appendChild(l);
+  }
+  let r;
+  try {
+    const resp = await gwFetch("/v1/memory/" + encodeURIComponent(name));
+    if (!resp.ok) throw new Error(await fsbError(resp));
+    r = await resp.json();
+  } catch (e) {
+    if (vseq !== memTab.vseq) return;
+    memTab.text = null;
+    $("#mem-copy").disabled = true;
+    v.textContent = "";
+    v.appendChild(memState("err", "alert", "Can't open this note", String(e.message || e)));
+    return;
+  }
+  if (vseq !== memTab.vseq) return;
+  memTab.text = r.content || "";
+  $("#mem-copy").disabled = memTab.text === "";
+  memRenderText();
+}
+
+/* ---- facts ---- */
+function memFactMsg(text, err) {
+  const el = $("#facts-msg");
+  el.className = "mem-msg" + (err ? " err" : "");
+  el.textContent = text || "";
+}
+async function memLoadFacts(opts) {
+  opts = opts || {};
+  const seq = ++memTab.fseq, list = $("#facts-list");
+  if (!opts.quiet) { list.textContent = ""; const l = document.createElement("div"); l.className = "mem-loading"; l.textContent = "Loading facts…"; list.appendChild(l); }
+  try {
+    const r = await gwFetch("/v1/memory/facts");
+    if (!r.ok) throw new Error(await fsbError(r));
+    const j = await r.json();
+    if (seq !== memTab.fseq) return;
+    memTab.facts = j.facts || []; memTab.enabled = !!j.enabled; memTab.factsErr = "";
+  } catch (e) {
+    if (seq !== memTab.fseq) return;
+    memTab.factsErr = String(e.message || e);
+  }
+  memRenderFacts();
+}
+function memRenderFacts() {
+  const list = $("#facts-list"), fs = memTab.facts;
+  list.textContent = "";
+  $("#facts-off").hidden = !!memTab.factsErr || memTab.enabled;
+  if (memTab.factsErr) {
+    $("#facts-status").textContent = ""; $("#mem-n-facts").textContent = "";
+    list.appendChild(memState("err", "alert", "Can't read the facts", memTab.factsErr,
+      { label: "Try again", run: () => memLoadFacts() }));
+    return;
+  }
+  $("#facts-status").textContent = String(fs.length);
+  $("#mem-n-facts").textContent = String(fs.length);
+  $("#facts-export").disabled = !fs.length;
+  if (!fs.length) {
+    list.appendChild(memState("", "list", "No facts yet", memTab.enabled
+      ? "The agent adds a fact when a conversation turns up something lasting. You can also add one above."
+      : "Add one above. The agent collects facts, and uses them, only while distillation is on."));
+    return;
+  }
+  const KIND = { static: "A stable trait, preference or decision", dynamic: "Current focus; may change" };
+  fs.forEach(f => {
+    const row = document.createElement("div");
+    row.className = "mem-fact"; row.dataset.id = f.id;
+    const main = document.createElement("div"); main.className = "mem-fact-main";
+    const text = document.createElement("div"); text.className = "mem-fact-text"; text.textContent = f.text;
+    const meta = document.createElement("div"); meta.className = "mem-fact-meta";
+    const tag = (label, cls, title) => {
+      const s = document.createElement("span"); s.className = "mem-tag" + (cls ? " " + cls : "");
+      s.textContent = label; if (title) s.title = title; meta.appendChild(s);
+    };
+    if (f.kind) tag(f.kind, f.kind === "static" ? "accent" : "", KIND[f.kind] || "");
+    if (f.scope) tag(f.scope, "plain", "Scope: " + f.scope);
+    const id = document.createElement("span"); id.className = "mem-fact-id"; id.textContent = "#" + f.id;
+    meta.appendChild(id);
+    const add = s => { const e = document.createElement("span"); e.textContent = s; meta.appendChild(e); };
+    if (f.event_date) add("· event " + f.event_date);
+    if (f.expires) add("· until " + f.expires);
+    main.append(text, meta);
+    const x = document.createElement("button");
+    x.type = "button"; x.className = "icon-btn mem-forget"; x.innerHTML = icon("trash");
+    x.title = "Forget this fact"; x.setAttribute("aria-label", "Forget fact #" + f.id);
+    x.addEventListener("click", () => memForget(f.id, x));
+    row.append(main, x);
+    list.appendChild(row);
+  });
+}
+async function memForget(id, btn) {
+  btn.disabled = true;
+  memFactMsg("");
+  try {
+    const r = await gwFetch("/v1/memory/facts/" + encodeURIComponent(String(id)), { method: "DELETE" });
+    if (!r.ok) throw new Error(await fsbError(r));
+    memTab.facts = memTab.facts.filter(f => f.id !== id);
+    memRenderFacts();
+    memFactMsg("Forgot fact #" + id + ".");
+  } catch (e) {
+    btn.disabled = false;
+    memFactMsg("Couldn't forget fact #" + id + ": " + (e.message || e), true);
+  }
+}
+
+function memShowSub(sub, focus) {
+  memTab.sub = sub;
+  $$("#mem-subtabs [data-sub]").forEach(b => {
+    const on = b.dataset.sub === sub;
+    b.setAttribute("aria-selected", String(on));
+    b.tabIndex = on ? 0 : -1;
+    if (on && focus) b.focus();
+  });
+  ["notes", "facts", "setup"].forEach(s => { $("#subpane-" + s).hidden = s !== sub; });
+  if (sub === "setup") memSetupLoad();
+}
+async function memRefresh(btn) {
+  if (btn) btn.classList.add("busy");
+  const jobs = [memLoadFiles({ quiet: true }), memLoadFacts({ quiet: true })];
+  if (memTab.hits !== null && memTab.term) jobs.push(memSearch(memTab.term));
+  if (memTab.sub === "setup") jobs.push(memSetupLoad());
+  try { await Promise.all(jobs); } catch {}
+  if (memTab.open) {
+    if (memTab.files.some(f => f.name === memTab.open.name)) memOpen(memTab.open.name, { quiet: true });
+    else if (!memTab.filesErr) memClose();
+  }
+  if (btn) btn.classList.remove("busy");
+}
+
+/* Wire the tab's controls once, on its first show. */
+function memInit() {
+  const list = $("#mem-list");
+  list.addEventListener("click", ev => {
+    const row = ev.target.closest(".mem-row");
+    if (row) memOpen(row.dataset.name);
+  });
+  list.addEventListener("keydown", ev => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(ev.key)) return;
+    const rows = [...list.querySelectorAll(".mem-row")];
+    if (!rows.length) return;
+    const i = rows.indexOf(ev.target.closest(".mem-row"));
+    const k = ev.key === "ArrowDown" ? i + 1 : ev.key === "ArrowUp" ? i - 1 : ev.key === "Home" ? 0 : rows.length - 1;
+    ev.preventDefault();
+    if (k < 0) { $("#mem-q").focus(); return; }
+    rows[Math.min(k, rows.length - 1)].focus();
+  });
+  const q = $("#mem-q");
+  $("#mem-search").addEventListener("submit", e => { e.preventDefault(); memSearch(q.value); });
+  q.addEventListener("input", () => { if (!q.value.trim() && (memTab.hits !== null || memTab.searching)) memClearSearch(); });
+  q.addEventListener("keydown", e => {
+    if (e.key === "Escape" && q.value) { e.preventDefault(); memClearSearch(); }
+    else if (e.key === "ArrowDown") { const r = list.querySelector(".mem-row"); if (r) { e.preventDefault(); r.focus(); } }
+  });
+  $("#mem-clear").addEventListener("click", () => { memClearSearch(); q.focus(); });
+  $("#mem-close").addEventListener("click", memClose);
+  $("#mem-mdseg").addEventListener("click", ev => {
+    const b = ev.target.closest("button[data-md]");
+    if (!b) return;
+    memTab.md = b.dataset.md;
+    $("#mem-mdseg").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    memRenderText();
+  });
+  $("#mem-copy").addEventListener("click", () => {
+    const btn = $("#mem-copy"), lbl = btn.querySelector(".lbl"), text = memTab.text;
+    if (text == null) return;
+    const done = () => {
+      lbl.textContent = "Copied"; btn.classList.add("ok");
+      setTimeout(() => { lbl.textContent = "Copy"; btn.classList.remove("ok"); }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+    else fallbackCopy(text, done);
+  });
+  const tabs = $("#mem-subtabs");
+  tabs.addEventListener("click", ev => { const b = ev.target.closest("[data-sub]"); if (b) memShowSub(b.dataset.sub); });
+  tabs.addEventListener("keydown", ev => {
+    const order = ["notes", "facts", "setup"], i = order.indexOf(memTab.sub);
+    const k = ev.key === "ArrowRight" ? i + 1 : ev.key === "ArrowLeft" ? i - 1 : ev.key === "Home" ? 0 : ev.key === "End" ? order.length - 1 : null;
+    if (k == null) return;
+    ev.preventDefault();
+    memShowSub(order[(k + order.length) % order.length], true);
+  });
+  $("#mem-refresh").addEventListener("click", e => memRefresh(e.currentTarget));
+
+  $("#facts-add").addEventListener("submit", async e => {
+    e.preventDefault();
+    const input = $("#facts-text"), btn = $("#facts-add-btn"), text = input.value.trim();
+    if (!text) { input.focus(); return; }
+    btn.disabled = true;
+    memFactMsg("");
+    try {
+      const r = await gwFetch("/v1/memory/facts", { method: "POST",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+      if (!r.ok) throw new Error(await fsbError(r));
+      input.value = "";
+      memFactMsg("Remembered.");
+      await memLoadFacts({ quiet: true });
+    } catch (err) {
+      memFactMsg("Couldn't add the fact: " + (err.message || err), true);
+    } finally { btn.disabled = false; }
+  });
+  $("#facts-export").addEventListener("click", async () => {
+    /* gwFetch (carries the auth token) + a blob download -- window.open
+       wouldn't send the bearer on a token-protected gateway. */
+    try {
+      const r = await gwFetch("/v1/memory/facts/export");
+      if (!r.ok) throw new Error(await fsbError(r));
+      const url = URL.createObjectURL(new Blob([await r.text()], { type: "text/markdown" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = "memory-facts.md"; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) { memFactMsg("Couldn't export the facts: " + (err.message || err), true); }
+  });
+  $("#tab-memory").addEventListener("click", ev => {
+    if (!ev.target.closest("[data-mem-settings]")) return;
+    ev.preventDefault();
+    try { localStorage.setItem("pasclaw.settings.section", "memory"); } catch {}
+    showTab("settings");
+    const b = document.querySelector('#set-nav button[data-sec="memory"]');
+    if (b && $("#tab-settings").classList.contains("active")) b.click();
+  });
+  /* Back on the tab: re-read the notes and facts in place. */
+  tabHooks.memory = { show() { memRefresh(); } };
+  memShowSub("notes");
+  memClose();
+  return Promise.all([memLoadFiles(), memLoadFacts()]);
+}
 
 /* Returns true if the typed text was handled as a slash command. */
 function handleSlash(typed) {
@@ -7534,128 +8187,10 @@ const tabLoaders = {
 
   /* Memory: the workspace/memory/*.md files ARE the memory; the SQLite
      index is a rebuildable FTS5 (+ optional vector) cache over them. The
-     list browses the files; the search box runs the same index the
-     memory_search tool uses and opens the matched file on click. */
-  async memory() {
-    const list = $("#mem-list"), view = $("#mem-view");
-    const sForm = $("#mem-search"), q = $("#mem-q");
-    const baseName = p => (p || "").replace(/^.*[\\/]/, "");
-
-    async function openFile(name, el) {
-      $$("#mem-list .item").forEach(x => x.classList.remove("active"));
-      if (el) el.classList.add("active");
-      try {
-        const r = await (await gwFetch("/v1/memory/" + encodeURIComponent(name))).json();
-        renderDocInto(view, name, r.content || "");
-      } catch (e) { view.classList.remove("md"); view.textContent = String(e); }
-    }
-    async function loadFiles() {
-      list.innerHTML = "loading…";
-      try {
-        const j = await (await gwFetch("/v1/memory")).json();
-        list.innerHTML = "";
-        if (!j.files || !j.files.length) { list.innerHTML = `<div class="empty-pane">No memory files yet.</div>`; return; }
-        for (const f of j.files) {
-          const el = document.createElement("div");
-          el.className = "item";
-          el.innerHTML = `<span>${escapeHtml(f.name)}</span><span class="size">${humanBytes(f.size)}</span>`;
-          el.addEventListener("click", () => openFile(f.name, el));
-          list.appendChild(el);
-        }
-      } catch (e) { list.textContent = String(e); }
-    }
-    async function search() {
-      const term = q.value.trim();
-      if (!term) { await loadFiles(); return; }
-      list.innerHTML = "searching…";
-      try {
-        const r = await gwFetch("/v1/memory/search?q=" + encodeURIComponent(term));
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok || j.error) { list.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(j.error || ("http " + r.status))}</div>`; return; }
-        const hits = j.hits || [];
-        if (!hits.length) { list.innerHTML = `<div class="empty-pane">No matches for “${escapeHtml(term)}”.</div>`; return; }
-        list.innerHTML = "";
-        for (const h of hits) {
-          const name = baseName(h.path);
-          const el = document.createElement("div");
-          el.className = "item";
-          el.innerHTML = `<div><span>${escapeHtml(name)}</span>`
-                       + `<span class="sub">${escapeHtml((h.snippet || "").slice(0, 160))}</span></div>`;
-          el.addEventListener("click", () => openFile(name, el));
-          list.appendChild(el);
-        }
-      } catch (e) { list.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(String(e))}</div>`; }
-    }
-
-    if (!sForm.dataset.wired) {
-      sForm.dataset.wired = "1";
-      sForm.addEventListener("submit", e => { e.preventDefault(); search(); });
-      q.addEventListener("input", () => { if (!q.value.trim()) loadFiles(); });
-    }
-
-    /* ----- distilled facts panel (Phase 5b) ----- */
-    const fList = $("#facts-list"), fAddForm = $("#facts-add"),
-          fText = $("#facts-text"), fStatus = $("#facts-status");
-    async function loadFacts() {
-      fList.innerHTML = "loading…";
-      try {
-        const j = await (await gwFetch("/v1/memory/facts")).json();
-        const facts = j.facts || [];
-        fStatus.textContent = j.enabled
-          ? "(" + facts.length + ")"
-          : "(" + facts.length + " — distilled memory is OFF; enable memory_distill_enabled)";
-        fList.innerHTML = "";
-        if (!facts.length) { fList.innerHTML = `<div class="empty-pane">No facts yet.</div>`; return; }
-        for (const f of facts) {
-          const el = document.createElement("div");
-          el.className = "item";
-          let meta = `${f.kind}/${f.scope}`;
-          if (f.event_date) meta += " · event " + f.event_date;
-          if (f.expires) meta += " · until " + f.expires;
-          el.innerHTML = `<div style="flex:1"><span>${escapeHtml(f.text)}</span>`
-                       + `<span class="sub">#${f.id} · ${escapeHtml(meta)}</span></div>`;
-          const x = document.createElement("button");
-          x.type = "button"; x.textContent = "×"; x.title = "Forget";
-          x.addEventListener("click", async () => {
-            try {
-              const r = await gwFetch("/v1/memory/facts/" + f.id, { method: "DELETE" });
-              if (r.ok) loadFacts();
-            } catch (_) {}
-          });
-          el.appendChild(x);
-          fList.appendChild(el);
-        }
-      } catch (e) { fList.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
-    }
-    if (fAddForm && !fAddForm.dataset.wired) {
-      fAddForm.dataset.wired = "1";
-      fAddForm.addEventListener("submit", async e => {
-        e.preventDefault();
-        const text = fText.value.trim();
-        if (!text) return;
-        try {
-          const r = await gwFetch("/v1/memory/facts", { method: "POST",
-            headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
-          if (r.ok) { fText.value = ""; loadFacts(); }
-        } catch (_) {}
-      });
-      $("#facts-export").addEventListener("click", async e => {
-        e.preventDefault();
-        /* gwFetch (carries the auth token) + a blob download -- window.open
-           wouldn't send the bearer on a token-protected gateway. */
-        try {
-          const txt = await (await gwFetch("/v1/memory/facts/export")).text();
-          const url = URL.createObjectURL(new Blob([txt], { type: "text/markdown" }));
-          const a = document.createElement("a");
-          a.href = url; a.download = "memory-facts.md"; a.click();
-          URL.revokeObjectURL(url);
-        } catch (_) {}
-      });
-    }
-
-    await loadFacts();
-    await loadFiles();
-  },
+     list browses the notes; the search box runs the same index the
+     memory_search tool uses and opens the matched note on click. Facts
+     and the search setup are the other two tabs. See memInit. */
+  memory() { return memInit(); },
 
   async files() {
     /* Back on the tab: re-read the folder in place, keeping the selection. */
