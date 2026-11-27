@@ -101,7 +101,7 @@ class AS(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def run_auth(binary, env, home, iss_of=None, error=None):
+def run_auth(binary, env, home, iss_of=None, error=None, error_code="access_denied", forge_state=False):
     """Run `pasclaw mcp auth srv`, answer the redirect, return (exit, output,
     authorize-url params). iss_of(params) gives the iss to send back (None
     = leave it out)."""
@@ -131,9 +131,9 @@ def run_auth(binary, env, home, iss_of=None, error=None):
             params = {k: v[0] for k, v in urllib.parse.parse_qs(q.query).items()}
             break
     if params is not None:
-        cb = {"state": params["state"]}
+        cb = {"state": "forged-" + params["state"] if forge_state else params["state"]}
         if error:
-            cb["error"] = "access_denied"
+            cb["error"] = error_code
             cb["error_description"] = error
         else:
             cb["code"] = "the-code"
@@ -221,6 +221,27 @@ def main():
         if json.load(open(token_file)).get("client_issuer") != AS.base + "/as2":
             fail("the new registration is not bound to the new issuer")
         print("  ok: a new authorization server gets a new registration")
+
+        # 5b. a forged callback (wrong state) saying invalid_client: refused,
+        # and the stored registration is kept. Anything on this machine can
+        # call the loopback callback; it must not wipe a working client.
+        client_as2 = json.load(open(token_file)).get("client_id")
+        code, out, prm = run_auth(binary, env, home, iss_of=right, error="client gone",
+                                  error_code="invalid_client", forge_state=True)
+        if code == 0 or "state mismatch" not in out:
+            fail("a forged callback was not refused (exit %d):\n%s" % (code, out))
+        if "dropped the stored client registration" in out or \
+                json.load(open(token_file)).get("client_id") != client_as2:
+            fail("a forged invalid_client callback dropped the registration:\n" + out)
+        print("  ok: a forged invalid_client callback keeps the registration")
+
+        # 5c. the real authorization server saying invalid_client: forgotten.
+        code, out, prm = run_auth(binary, env, home, iss_of=right, error="client gone",
+                                  error_code="invalid_client")
+        if code == 0 or "dropped the stored client registration" not in out or \
+                json.load(open(token_file)).get("client_id"):
+            fail("an authentic invalid_client did not drop the registration (exit %d):\n%s" % (code, out))
+        print("  ok: an authentic invalid_client forgets the registration")
 
         # 6. CIMD: the configured URL is the client_id; nothing is registered.
         AS.cimd = True
