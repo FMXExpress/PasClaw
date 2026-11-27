@@ -84,7 +84,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | **Skills** | List installed skills. |
 | **Logs** | Live tail via SSE from the gateway's in-process ring buffer. |
 | **Settings** | An editor for `config.json`, in sections (Models & providers, Agent, Tools & sandbox, Memory & knowledge, MCP servers, Gateway & security, Channels, Scheduling, Diagnostics, Backup & transfer, Advanced) with a search over names, keys and descriptions. Each setting shows its name, a line on what it does and its config key, with a switch, a select, a number with its unit or a list editor. Every model field (the default model, each provider card's, the fallback rows, the model tiers, the router's easy model, the advisor's, a subagent's) is a picker: the caret or the down arrow opens the models of the provider that field belongs to (from `/v1/providers/<name>/models`, with display names where the provider gives them and a **Refresh**), typing filters them, and any model id can still be typed in; providers, MCP servers, channels, cron jobs, subagents and skills are cards. Secrets are write-only: a field says whether a value is saved, and left empty keeps it. A bar along the bottom counts unsaved changes and holds **Save** and **Discard**; invalid values are refused inline, and leaving the tab with unsaved changes asks first. After a save, the changes that wait for a restart are listed at the top of the tab. A key the page does not describe is shown under **Other** and saved as it came. **Edit as JSON** edits the whole file, checked before it is saved. **Backup & transfer** holds workspace export and import. |
-| **Stats** | Auto-refreshing token + tool-call + truncation-savings cards + `by_provider` / `by_model` rollups (when `stats_collection_enabled`). **Reset totals** puts every counter back to zero. |
+| **Stats** | Totals from `/v1/stats`, every 10 s while the tab is open, with the time of the last refresh and a refresh button. A strip of input and output tokens, turns, tool calls and sessions; a panel of cache read and created tokens, bytes saved by truncating tool output and cache keep-alive requests since the gateway started; then tokens by provider and by model, largest first, each with its share. With nothing counted an empty state stands in for the tables; with `stats_collection_enabled` off a banner says so and links to Settings › Diagnostics. **Reset totals** asks in the page first, then puts every counter back to zero; conversations are kept. |
 | **Relay** | Workers that run models on their own hardware and pull this gateway's requests ([providers-relay.md](./providers-relay.md)). A line says whether a provider of kind `relay` is configured and is the default, with a link to Settings when none is. Below it the queue (workers online, queued, in flight, completed, failed) and a row per connected worker: its models as chips, online or stale, the requests it took and when it was last seen (`/v1/relay/status`, every 3 s while the tab is open and the page is visible). **Add a worker** holds the gateway URL and the masked relay worker token once, then snippets for `pasclaw relay`, Python and Replicate with Copy buttons (the token stays a placeholder in them until **Reveal**), and a worker that runs in the browser tab with WebGPU. |
 
 ## OpenAI-compatible client
@@ -328,6 +328,8 @@ Returns a 5-second-cached aggregate of per-session counters when `stats_collecti
 
 ```json
 {
+  "stats_collection_enabled": true,
+  "sessions":               42,
   "input_tokens":           1234567,
   "output_tokens":          234567,
   "cache_read_tokens":      890000,
@@ -337,14 +339,16 @@ Returns a 5-second-cached aggregate of per-session counters when `stats_collecti
   "truncation_bytes_saved": 12345678,
   "prompt_cache_warm_pings": 0,
   "by_provider": [
-    { "provider": "anthropic", "input_tokens": 800000, "output_tokens": 150000 },
-    { "provider": "openai",    "input_tokens": 434567, "output_tokens":  84567 }
+    { "provider": "anthropic", "tokens": 950000 },
+    { "provider": "openai",    "tokens": 519134 }
   ],
   "by_model": [
-    { "model": "claude-opus-4-7", "input_tokens": 800000, "output_tokens": 150000 }
+    { "model": "claude-opus-4-7", "tokens": 950000 }
   ]
 }
 ```
+
+`sessions` counts the saved conversations and endpoint buckets read; a `by_provider` / `by_model` row's `tokens` is input plus output.
 
 Gateway-side stateless API calls (`/v1/chat`, `/v1/chat/completions`, `/v1/responses`) accumulate into per-endpoint synthetic session files (`_gateway_v1_chat.json`, `_gateway_v1_chat_completions.json`, `_gateway_v1_responses.json`) so calls driven through the web UI chat or any other OpenAI/Anthropic-compatible client also show up. Each endpoint gets one bucket regardless of model — `Meta.Model` tracks the most recent request's model. Concurrent gateway requests serialise the bucket update through a single critical section.
 

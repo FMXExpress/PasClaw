@@ -643,23 +643,133 @@
     overflow-wrap:anywhere}
   table.data tbody tr:last-child td{border-bottom:0}
   table.data tbody tr:hover td{background:var(--surface-2)}
-  .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
-    gap:.75rem;padding:0 0 1rem}
-  .stat-card{background:var(--surface);border:1px solid var(--border);
-    border-radius:8px;padding:.75rem .9rem}
-  .stat-label{font-size:12px;color:var(--text-3);margin-bottom:.2rem}
-  .stat-value{font-size:20px;font-weight:600;line-height:1.3;color:var(--text);
-    font-variant-numeric:tabular-nums}
-  .stats-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
-  .stats-table-wrap h3{margin:.2rem 0 .5rem;font-size:13px;font-weight:600;color:var(--text)}
-  /* The hint, then what the last reset did, then Reset at the far end. */
-  .stats-bar{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.4rem .9rem;padding:0 0 .9rem}
-  #stats-hint{flex:1 1 18rem;font-size:13px;line-height:1.5;padding-top:.2rem}
-  #stats-hint:empty{display:none}
-  #stats-note{font-size:13px;line-height:1.5;padding-top:.2rem;color:var(--text)}
-  #stats-note.err{color:var(--danger)}
-  #stats-note:empty{display:none}
-  #stats-reset{margin-left:auto}
+
+  /* ===== Stats tab =====
+     The Relay tab's frame: one readable column, a header, a strip of the
+     headline numbers (input and output tokens wider), then sections in
+     panels. Numbers are tabular and right-aligned so columns line up and
+     the strip does not jitter on each poll. Reset is the one destructive
+     control: danger-coloured, and it asks inline before it acts. */
+  #stats-pane{padding:1.5rem 2rem 3rem}
+  .st-wrap{max-width:58rem;margin:0 auto;display:flex;flex-direction:column;gap:1.5rem;min-width:0}
+  .st-head{display:flex;align-items:flex-start;flex-wrap:wrap;gap:.75rem 1.5rem}
+  .st-title{flex:1 1 20rem;min-width:0}
+  .st-title h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .st-lead{margin:.3rem 0 0;max-width:44rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .st-tools{display:flex;align-items:center;gap:.45rem;margin-left:auto}
+  .st-updated{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .st-updated.stale{color:var(--warn)}
+  #stats-refresh{padding:.24rem .42rem}
+  #stats-refresh svg.ic{margin:0}
+  #stats-refresh.spin svg.ic{animation:st-spin .7s linear infinite}
+  @keyframes st-spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){#stats-refresh.spin svg.ic{animation:none}}
+  .icon-btn.st-danger{color:var(--danger);border-color:var(--danger-line)}
+  .icon-btn.st-danger:hover,.icon-btn.st-danger[aria-expanded=true]{background:var(--danger-soft);color:var(--danger)}
+  .icon-btn.st-danger:disabled{opacity:.55;cursor:wait}
+  .st-confirm{display:flex;align-items:flex-start;flex-wrap:wrap;gap:.6rem .75rem;padding:.8rem 1rem;
+    border:1px solid var(--danger-line);border-radius:var(--radius-lg);background:var(--danger-soft)}
+  .st-confirm[hidden]{display:none}
+  .st-confirm>svg.ic{flex:none;margin-top:2px;color:var(--danger)}
+  .st-confirm-text{flex:1 1 18rem;min-width:0}
+  .st-confirm-text b{display:block;font-size:13.5px;font-weight:600;color:var(--text)}
+  .st-confirm-text p{margin:.15rem 0 0;font-size:13px;line-height:1.5;color:var(--text-2)}
+  .st-confirm-actions{display:flex;gap:.45rem;align-self:center;margin-left:auto}
+  .st-btn-danger{background:var(--danger);color:var(--bg);border:1px solid transparent;border-radius:var(--radius);
+    padding:.24rem .8rem;font-size:12.5px;font-weight:600;line-height:1.4;white-space:nowrap}
+  .st-btn-danger:hover{filter:brightness(1.08)}
+  .st-btn-danger:disabled{opacity:.55;cursor:wait}
+  /* Collection off (warn) or the last fetch failed (err). */
+  .st-banner{display:flex;align-items:flex-start;gap:.5rem;padding:.6rem .85rem;border:1px solid var(--border);
+    border-radius:8px;background:var(--surface);font-size:13px;line-height:1.5;color:var(--text)}
+  .st-banner[hidden]{display:none}
+  .st-banner svg.ic{flex:none;margin-top:2px}
+  .st-banner[data-state=warn]{border-color:var(--warn);background:var(--warn-soft)}
+  .st-banner[data-state=warn] svg.ic{color:var(--warn)}
+  .st-banner[data-state=err]{border-color:var(--danger-line);background:var(--danger-soft)}
+  .st-banner[data-state=err] svg.ic{color:var(--danger)}
+  .st-banner b{font-weight:600}
+  .st-banner code{background:var(--surface-2);border-radius:4px;padding:.03rem .3rem;font-size:.92em}
+  .st-note{display:flex;align-items:center;gap:.4rem;margin-top:-.6rem;font-size:13px;line-height:1.5;color:var(--ok)}
+  .st-note:empty{display:none}
+  .st-note.err{color:var(--danger)}
+  .st-note svg.ic{flex:none}
+
+  .st-strip{display:grid;grid-template-columns:repeat(2,minmax(0,1.3fr)) repeat(3,minmax(0,1fr));
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg)}
+  .st-stat{display:flex;flex-direction:column;gap:.05rem;padding:.85rem 1rem;min-width:0}
+  .st-stat+.st-stat{border-left:1px solid var(--border)}
+  .st-num{font-size:20px;font-weight:600;line-height:1.3;color:var(--text);font-variant-numeric:tabular-nums;
+    overflow-wrap:anywhere}
+  .st-hero .st-num{font-size:24px;letter-spacing:-.01em}
+  .st-lbl{font-size:12px;color:var(--text-3)}
+  .st-wrap.zero .st-num,.st-wrap.zero .st-kv dd{color:var(--text-3)}
+
+  .st-sec{display:flex;flex-direction:column;gap:.7rem;min-width:0}
+  .st-sec-head{display:flex;align-items:baseline;gap:.5rem;min-width:0}
+  .st-sec-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text)}
+  .st-sec-head .n{font-size:12.5px;color:var(--text-3)}
+  .st-kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin:0;background:var(--surface);
+    border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+  .st-kv>div{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;padding:.6rem 1rem;min-width:0;
+    border-top:1px solid var(--border)}
+  .st-kv>div:nth-child(-n+2){border-top:0}
+  .st-kv>div:nth-child(2n){border-left:1px solid var(--border)}
+  .st-kv dt{min-width:0;font-size:13px;color:var(--text-2)}
+  .st-sub{display:block;font-size:11.5px;color:var(--text-3)}
+  .st-kv dd{margin:0;font-size:14px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  .st-tables{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;align-items:start}
+  .st-tables[hidden]{display:none}
+  .st-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;min-width:0}
+  .st-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}
+  .st-table th{padding:.5rem .9rem;border-bottom:1px solid var(--border);text-align:left;font-size:12px;font-weight:600;
+    color:var(--text-3)}
+  .st-table td{padding:.5rem .9rem;border-top:1px solid var(--border);color:var(--text);vertical-align:middle}
+  .st-table tbody tr:first-child td{border-top:0}
+  .st-table .num{width:7.5rem;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .st-table .share{width:9rem}
+  .st-table td.name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #stats-by-model td.name{font:12.5px/1.5 var(--mono)}
+  .st-table td.name.unknown{font-family:var(--sans);font-style:italic;color:var(--text-3)}
+  .st-share{display:flex;align-items:center;gap:.45rem;font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .st-share>span:last-child{flex:none;width:2.6rem;text-align:right}
+  .st-bar{flex:1 1 auto;height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden}
+  .st-bar>i{display:block;height:100%;border-radius:3px;background:var(--accent)}
+  .st-row-msg td{color:var(--text-3);text-align:center;padding:1rem .9rem}
+  .st-empty{display:flex;gap:.9rem;align-items:flex-start;padding:1.2rem 1.25rem;background:var(--surface);
+    border:1px solid var(--border);border-radius:var(--radius-lg)}
+  .st-empty[hidden]{display:none}
+  .st-empty-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .st-empty-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .st-empty b{display:block;margin-bottom:.2rem;font-size:13.5px;font-weight:600;color:var(--text)}
+  .st-empty p{margin:0;max-width:40rem;font-size:13px;line-height:1.55;color:var(--text-2)}
+  @media (max-width:760px){
+    #stats-pane{padding:1rem 1rem 2rem}
+    .st-wrap{gap:1.25rem}
+    .st-tools{margin-left:0;width:100%}
+    .st-updated{margin-right:auto}
+    /* Six columns: the token pair on one row, the three counts on the next. */
+    .st-strip{grid-template-columns:repeat(6,minmax(0,1fr))}
+    .st-stat{grid-column:span 2;padding:.7rem .8rem}
+    .st-stat.st-hero{grid-column:span 3}
+    .st-stat+.st-stat{border-left:0}
+    .st-stat:nth-child(2),.st-stat:nth-child(n+4){border-left:1px solid var(--border)}
+    .st-stat:nth-child(n+3){border-top:1px solid var(--border)}
+    .st-hero .st-num{font-size:20px}
+    .st-num{font-size:18px}
+    .st-kv{grid-template-columns:minmax(0,1fr)}
+    .st-kv>div:nth-child(2){border-top:1px solid var(--border)}
+    .st-kv>div:nth-child(2n){border-left:0}
+    .st-tables{grid-template-columns:minmax(0,1fr)}
+    /* No room for the bar: the percentage alone. */
+    .st-table .num{width:6.25rem}
+    .st-table .share{width:3.6rem}
+    .st-bar{display:none}
+    .st-share>span:last-child{width:auto;flex:1 1 auto}
+    .st-table th,.st-table td{padding-left:.75rem;padding-right:.75rem}
+  }
 
   /* ===== Relay tab =====
      One column at a readable width, top to bottom: what the relay is and
@@ -1938,69 +2048,84 @@
   </div>
 
   <div id="tab-stats" class="tab">
+    <!-- Stats: per-session counters summed across the session store and
+         the gateway's endpoint buckets (GET /v1/stats; the TUI /stats
+         overlay shows the same numbers for one session). One column like
+         Relay: a header with the refresh time and Reset, a strip of the
+         headline numbers, caching and savings, then where the tokens went.
+         It polls every 10 s while the tab is open. Before any usage, an
+         empty state stands where the breakdown would be; with collection
+         off, a banner says so and links to the setting. -->
     <div class="pane" id="stats-pane">
-      <!-- Stats overview. Aggregates per-session counters across the
-           session store (the same numbers the TUI /stats overlay shows
-           for one session, but summed). Auto-refreshes every 10s while
-           the tab is active so the operator can watch live during an
-           agent loop. Empty / "stats collection off" state is rendered
-           inline so a fresh-onboarded operator sees actionable
-           guidance instead of zeros. -->
-      <div class="stats-bar">
-        <div id="stats-hint" class="meta"></div>
-        <span id="stats-note" role="status"></span>
-        <button class="icon-btn" id="stats-reset" type="button"
-                title="Set every saved total back to zero. Conversations are kept.">Reset totals</button>
-      </div>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Sessions</div>
-          <div class="stat-value" id="stats-sessions">—</div>
+      <div class="st-wrap">
+        <header class="st-head">
+          <div class="st-title">
+            <h2>Usage</h2>
+            <p class="st-lead">Tokens, turns and tool calls added up across every saved conversation and the gateway's API endpoints.</p>
+          </div>
+          <div class="st-tools">
+            <span class="st-updated" id="stats-updated" aria-live="off">Loading…</span>
+            <button class="icon-btn" id="stats-refresh" type="button" aria-label="Refresh now" title="Refresh now"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+            <button class="icon-btn st-danger" id="stats-reset" type="button" aria-controls="stats-confirm" aria-expanded="false"
+                    title="Set every saved total back to zero. Conversations are kept."><svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg>Reset totals</button>
+          </div>
+        </header>
+
+        <div class="st-confirm" id="stats-confirm" role="alertdialog" aria-labelledby="stats-confirm-h" aria-describedby="stats-confirm-p" hidden>
+          <svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>
+          <div class="st-confirm-text">
+            <b id="stats-confirm-h">Reset all saved totals to zero?</b>
+            <p id="stats-confirm-p">Tokens, turns, tool calls and bytes saved go back to 0 for every conversation and endpoint. Conversations themselves are kept. This cannot be undone.</p>
+          </div>
+          <div class="st-confirm-actions">
+            <button class="icon-btn" id="stats-reset-cancel" type="button">Cancel</button>
+            <button class="st-btn-danger" id="stats-reset-go" type="button">Reset totals</button>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="stat-label">Turns</div>
-          <div class="stat-value" id="stats-turns">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Tool calls</div>
-          <div class="stat-value" id="stats-tool-calls">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Input tokens</div>
-          <div class="stat-value" id="stats-in">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Output tokens</div>
-          <div class="stat-value" id="stats-out">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Cache read tokens</div>
-          <div class="stat-value" id="stats-cache-r">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Cache created tokens</div>
-          <div class="stat-value" id="stats-cache-w">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Truncation bytes saved</div>
-          <div class="stat-value" id="stats-bytes-saved">—</div>
-        </div>
-      </div>
-      <div class="stats-tables">
-        <div class="stats-table-wrap">
-          <h3>Tokens by provider</h3>
-          <table class="data" id="stats-by-provider">
-            <thead><tr><th>Provider</th><th>Tokens</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div class="stats-table-wrap">
-          <h3>Tokens by model</h3>
-          <table class="data" id="stats-by-model">
-            <thead><tr><th>Model</th><th>Tokens</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
+
+        <div class="st-banner" id="stats-hint" role="status" hidden></div>
+        <div class="st-note" id="stats-note" role="status"></div>
+
+        <section class="st-strip" aria-label="Totals">
+          <div class="st-stat st-hero"><span class="st-num" id="stats-in">—</span><span class="st-lbl">input tokens</span></div>
+          <div class="st-stat st-hero"><span class="st-num" id="stats-out">—</span><span class="st-lbl">output tokens</span></div>
+          <div class="st-stat"><span class="st-num" id="stats-turns">—</span><span class="st-lbl">turns</span></div>
+          <div class="st-stat"><span class="st-num" id="stats-tool-calls">—</span><span class="st-lbl">tool calls</span></div>
+          <div class="st-stat"><span class="st-num" id="stats-sessions">—</span><span class="st-lbl">sessions</span></div>
+        </section>
+
+        <section class="st-sec" aria-labelledby="stats-cache-h">
+          <div class="st-sec-head"><h3 id="stats-cache-h">Caching and savings</h3></div>
+          <dl class="st-kv">
+            <div><dt>Cache read tokens</dt><dd id="stats-cache-r">—</dd></div>
+            <div><dt>Cache created tokens</dt><dd id="stats-cache-w">—</dd></div>
+            <div><dt>Saved by truncating tool output</dt><dd id="stats-bytes-saved">—</dd></div>
+            <div><dt>Cache keep-alive requests <span class="st-sub">since the gateway started</span></dt><dd id="stats-warm-pings">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="st-sec" aria-labelledby="stats-break-h">
+          <div class="st-sec-head"><h3 id="stats-break-h">Where the tokens went</h3><span class="n">input + output</span></div>
+          <div class="st-empty" id="stats-empty" hidden>
+            <span class="st-empty-ic"><svg class="ic" aria-hidden="true"><use href="#i-context"/></svg></span>
+            <div><b>No usage recorded yet</b>
+              <p id="stats-empty-p">Totals appear here after the first turn: from the Chat tab, the command line, or any client of this gateway's API.</p></div>
+          </div>
+          <div class="st-tables" id="stats-tables">
+            <div class="st-panel">
+              <table class="st-table" id="stats-by-provider">
+                <thead><tr><th scope="col">Provider</th><th scope="col" class="num">Tokens</th><th scope="col" class="share">Share</th></tr></thead>
+                <tbody><tr class="st-row-msg"><td colspan="3">Loading…</td></tr></tbody>
+              </table>
+            </div>
+            <div class="st-panel">
+              <table class="st-table" id="stats-by-model">
+                <thead><tr><th scope="col">Model</th><th scope="col" class="num">Tokens</th><th scope="col" class="share">Share</th></tr></thead>
+                <tbody><tr class="st-row-msg"><td colspan="3">Loading…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   </div>
@@ -7032,9 +7157,9 @@ const tabLoaders = {
      an agent loop. We deliberately don't render until the first fetch comes
      back so a slow first read doesn't flash "0 / 0 / 0" in the cards. */
   async stats() {
-    await refreshStats();
+    await refreshStats(true);
     if (statsTimer) clearInterval(statsTimer);
-    statsTimer = setInterval(refreshStats, 10000);
+    statsTimer = setInterval(() => refreshStats(), 10000);
   },
 
   /* Relay tab: whether a provider sends work to the relay, the queue
@@ -7069,26 +7194,84 @@ function fmtBytes(n) {
    answer after that, with the totals from before it, and would put them
    back on screen until the next poll. */
 let statsSeq = 0;
+let statsLoadedAt = 0;
 
-async function refreshStats() {
+/* The banner: collection off (warn), the last fetch failed (err), or
+   nothing. Built from nodes; the error text is the browser's, as text. */
+function statsBanner(state, build) {
+  const el = $("#stats-hint");
+  el.replaceChildren();
+  el.hidden = !state;
+  if (!state) { delete el.dataset.state; return; }
+  el.dataset.state = state;
+  el.insertAdjacentHTML("beforeend", icon(state === "err" ? "alert" : "info"));
+  const span = document.createElement("span");
+  build(span);
+  el.append(span);
+}
+
+/* One breakdown table: name, tokens, and its share of the table's total
+   as a bar. Names come from session files and model ids, so they are
+   set as text, never parsed as HTML. */
+function statsTable(sel, rows, key) {
+  const tbody = $(sel + " tbody");
+  tbody.replaceChildren();
+  const list = (rows || []).slice().sort((a, b) => (b.tokens || 0) - (a.tokens || 0));
+  const total = list.reduce((s, r) => s + (Number(r.tokens) || 0), 0);
+  if (!list.length) {
+    const tr = document.createElement("tr"), td = document.createElement("td");
+    tr.className = "st-row-msg"; td.colSpan = 3; td.textContent = "Nothing counted yet";
+    tr.append(td); tbody.append(tr);
+    return;
+  }
+  for (const row of list) {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    name.className = "name";
+    name.textContent = row[key] || "(unknown)";
+    name.title = name.textContent;
+    if (!row[key]) name.classList.add("unknown");
+    const n = document.createElement("td");
+    n.className = "num";
+    n.textContent = fmtInt(row.tokens);
+    const sh = document.createElement("td");
+    const pct = total ? (Number(row.tokens) || 0) / total * 100 : 0;
+    const wrap = document.createElement("div"), bar = document.createElement("span"),
+          fill = document.createElement("i"), lbl = document.createElement("span");
+    wrap.className = "st-share"; bar.className = "st-bar";
+    fill.style.width = pct.toFixed(1) + "%";
+    lbl.textContent = (pct > 0 && pct < 1 ? "<1" : Math.round(pct)) + "%";
+    bar.append(fill); wrap.append(bar, lbl); sh.append(wrap);
+    tr.append(name, n, sh);
+    tbody.append(tr);
+  }
+}
+
+function statsUpdatedText() {
+  const el = $("#stats-updated");
+  if (!statsLoadedAt) return;
+  el.textContent = "Updated " + new Date(statsLoadedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  el.title = "Refreshes every 10 s while this tab is open";
+}
+
+async function refreshStats(force) {
+  /* The poll keeps running after the tab is left; only an open tab fetches. */
+  if (!force && !$("#tab-stats").classList.contains("active")) return;
   const seq = ++statsSeq;
+  const btn = $("#stats-refresh");
+  btn.classList.add("spin");
   try {
-    const j = await (await gwFetch("/v1/stats")).json();
+    const r = await gwFetch("/v1/stats");
+    if (!r.ok) throw new Error("the gateway answered " + r.status);
+    const j = await r.json();
     if (seq !== statsSeq) return;
-    const hint = $("#stats-hint");
     if (!j.stats_collection_enabled) {
-      hint.innerHTML =
-        '<strong>Stats collection is off.</strong> ' +
-        'Flip <code>stats_collection_enabled</code> in <code>config.json</code> ' +
-        'or re-run <code>pasclaw onboard</code> to enable. ' +
-        'Existing sessions stay at zero -- new turns from now on will accumulate.';
-      hint.style.color = "var(--warn)";
-    } else {
-      hint.innerHTML =
-        'Aggregating ' + fmtInt(j.sessions) + ' session(s). ' +
-        'Refreshes every 10s.';
-      hint.style.color = "var(--mut)";
-    }
+      statsBanner("warn", s => {
+        s.innerHTML = '<b>Usage counters are off.</b> New turns are not counted, so these totals stay where they are. ' +
+          'Turn them on in <a href="#settings" data-stats-settings>Settings › Diagnostics</a>.';
+      });
+    } else statsBanner(null);
+
     $("#stats-sessions").textContent     = fmtInt(j.sessions);
     $("#stats-turns").textContent        = fmtInt(j.turns);
     $("#stats-tool-calls").textContent   = fmtInt(j.tool_calls);
@@ -7097,35 +7280,48 @@ async function refreshStats() {
     $("#stats-cache-r").textContent      = fmtInt(j.cache_read_tokens);
     $("#stats-cache-w").textContent      = fmtInt(j.cache_created_tokens);
     $("#stats-bytes-saved").textContent  = fmtBytes(j.truncation_bytes_saved);
+    $("#stats-warm-pings").textContent   = fmtInt(j.prompt_cache_warm_pings || 0);
 
-    const pTbody = $("#stats-by-provider tbody");
-    pTbody.innerHTML = "";
-    (j.by_provider || [])
-      .slice()
-      .sort((a, b) => b.tokens - a.tokens)
-      .forEach(row => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + escapeHtml(row.provider || "(unknown)") +
-                       "</td><td>" + fmtInt(row.tokens) + "</td>";
-        pTbody.appendChild(tr);
-      });
+    /* Nothing counted anywhere: an empty state where the breakdown goes. */
+    const used = ["input_tokens", "output_tokens", "cache_read_tokens", "cache_created_tokens",
+                  "turns", "tool_calls", "truncation_bytes_saved"].some(k => Number(j[k]) > 0) ||
+                 (j.by_provider || []).some(r => r.tokens > 0) || (j.by_model || []).some(r => r.tokens > 0);
+    $("#stats-empty").hidden = used;
+    $("#stats-tables").hidden = !used;
+    $("#tab-stats .st-wrap").classList.toggle("zero", !used);
+    $("#stats-empty-p").textContent = j.stats_collection_enabled
+      ? "Totals appear here after the first turn: from the Chat tab, the command line, or any client of this gateway's API."
+      : "Nothing is being counted. Turn usage counters on, and totals appear here after the next turn.";
+    statsTable("#stats-by-provider", j.by_provider, "provider");
+    statsTable("#stats-by-model", j.by_model, "model");
 
-    const mTbody = $("#stats-by-model tbody");
-    mTbody.innerHTML = "";
-    (j.by_model || [])
-      .slice()
-      .sort((a, b) => b.tokens - a.tokens)
-      .forEach(row => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + escapeHtml(row.model || "(unknown)") +
-                       "</td><td>" + fmtInt(row.tokens) + "</td>";
-        mTbody.appendChild(tr);
-      });
+    statsLoadedAt = Date.now();
+    $("#stats-updated").classList.remove("stale");
+    statsUpdatedText();
   } catch (e) {
     if (seq !== statsSeq) return;
-    $("#stats-hint").textContent = "stats fetch failed: " + e;
+    const msg = e && e.message ? e.message : String(e);
+    statsBanner("err", s => {
+      const b = document.createElement("b");
+      b.textContent = "Couldn't load the totals. ";
+      s.append(b, document.createTextNode(msg + (statsLoadedAt ? ". The numbers below are from the last refresh." : ".")));
+    });
+    if (statsLoadedAt) $("#stats-updated").classList.add("stale");
+    else $("#stats-updated").textContent = "Not loaded";
+  } finally {
+    if (seq === statsSeq) btn.classList.remove("spin");
   }
 }
+
+$("#stats-refresh").addEventListener("click", () => refreshStats(true));
+$("#stats-hint").addEventListener("click", e => {
+  if (!e.target.closest("a[data-stats-settings]")) return;
+  e.preventDefault();
+  try { localStorage.setItem("pasclaw.settings.section", "diagnostics"); } catch {}
+  showTab("settings");
+  const b = document.querySelector('#set-nav button[data-sec="diagnostics"]');
+  if (b && $("#tab-settings").classList.contains("active")) b.click();
+});
 
 /* Reset: every saved counter back to zero (POST /v1/stats/reset). Totals
    only ever grow, so wrong ones stay wrong and a fresh measurement has
@@ -7137,36 +7333,54 @@ let statsNoteTimer = null;
 
 function statsNote(text, isError) {
   const el = $("#stats-note");
-  el.textContent = text;
+  el.replaceChildren();
+  if (text) {
+    el.insertAdjacentHTML("beforeend", icon(isError ? "alert" : "check"));
+    el.append(document.createTextNode(text));
+  }
   el.classList.toggle("err", !!isError);
   if (statsNoteTimer) clearTimeout(statsNoteTimer);
-  statsNoteTimer = text ? setTimeout(() => { el.textContent = ""; }, 12000) : null;
+  statsNoteTimer = text ? setTimeout(() => { el.replaceChildren(); }, 12000) : null;
+}
+
+/* Reset asks first, in place: a panel under the header says what goes
+   and what stays, with Cancel focused so Enter does not wipe the totals. */
+function statsConfirm(open) {
+  const box = $("#stats-confirm"), btn = $("#stats-reset");
+  box.hidden = !open;
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (open) $("#stats-reset-cancel").focus();
 }
 
 async function resetStats() {
-  if (!confirm("Reset all saved totals to zero?\n\n" +
-               "Tokens, turns, tool calls and bytes saved go back to 0 for every session. " +
-               "Conversations are kept. This cannot be undone.")) return;
-  const btn = $("#stats-reset");
-  btn.disabled = true;
+  const btn = $("#stats-reset"), go = $("#stats-reset-go");
+  btn.disabled = go.disabled = true;
   try {
     const r = await gwFetch("/v1/stats/reset", { method: "POST" });
     if (!r.ok) throw new Error("the gateway answered " + r.status);
     const j = await r.json();
     const skipped = Number(j.sessions_skipped) || 0;
+    statsConfirm(false);
     statsNote(skipped
       ? "Totals reset, except " + skipped + (skipped === 1 ? " session that is" : " sessions that are") +
         " in use right now. Reset again once " + (skipped === 1 ? "it is" : "they are") + " idle."
       : "Totals reset.");
-    await refreshStats();
+    await refreshStats(true);
   } catch (e) {
+    statsConfirm(false);
     statsNote("Reset failed: " + (e && e.message ? e.message : e), true);
   } finally {
-    btn.disabled = false;
+    btn.disabled = go.disabled = false;
   }
 }
 
-$("#stats-reset").addEventListener("click", resetStats);
+$("#stats-reset").addEventListener("click", () => statsConfirm($("#stats-confirm").hidden));
+$("#stats-reset-cancel").addEventListener("click", () => { statsConfirm(false); $("#stats-reset").focus(); });
+$("#stats-reset-go").addEventListener("click", resetStats);
+$("#stats-confirm").addEventListener("keydown", e => {
+  if (e.key === "Escape") { statsConfirm(false); $("#stats-reset").focus(); }
+});
+tabHooks.stats = { show: () => refreshStats(true) };
 
 /* ===== Background tab =====
    The jobs the agent started with spawn_background (a subagent) and
