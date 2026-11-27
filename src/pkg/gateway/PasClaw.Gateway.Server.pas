@@ -11513,12 +11513,7 @@ begin
     begin
       { Cache first (instant, no network on every page load); fall back to
         a single live fetch and persist it for next time. }
-      if not LoadCachedModels(ProvName, Disc) then
-      begin
-        Disc := DiscoverModels(Spec, Base, Key);
-        if Disc.Ok and (Length(Disc.Models) > 0) then
-          SaveCachedModels(ProvName, Disc);
-      end;
+      Disc := CachedOrDiscoverModels(ProvName, Spec, Base, Key);
       if Disc.Ok then
         for i := 0 to High(Disc.Models) do
           AddModel(Disc.Models[i].Id, ProvName, Disc.Models[i].CreatedAt);
@@ -11591,7 +11586,7 @@ procedure TGatewayServer.HandleProviderModels(const Name: string;
     "fetched_at", "default_model", "models": [{"id", "name"}], "error"} *)
 var
   Cfg: TConfig;
-  OwnCfg, Refresh, Found: Boolean;
+  OwnCfg, Refresh: Boolean;
   Spec: TProviderSpec;
   Base, Key, Err, Kind, DefModel, LiveErr: string;
   Disc, Stale: TModelDiscoveryResult;
@@ -11655,7 +11650,6 @@ begin
     Kind := Cfg.Providers[Idx].Kind;
     DefModel := Cfg.Providers[Idx].Model;
     Refresh := ARequest.Params.Values['refresh'] = '1';
-    Found := False;
     LiveErr := '';
     Root := TJsonObject.Create;
     try
@@ -11677,19 +11671,14 @@ begin
       else if ResolveProviderSpecForName(Cfg, Cfg.Providers[Idx].Name, Spec, Base, Key, Err) then
       begin
         if DefModel = '' then DefModel := Spec.DefaultModel;
-        Found := (not Refresh) and LoadCachedModels(Cfg.Providers[Idx].Name, Disc);
-        if not Found then
+        Disc := CachedOrDiscoverModels(Cfg.Providers[Idx].Name, Spec, Base, Key, Refresh);
+        if (Disc.Source <> 'cache') and not (Disc.Ok and (Length(Disc.Models) > 0)) and
+           LoadCachedModels(Cfg.Providers[Idx].Name, Stale) then
         begin
-          Disc := DiscoverModels(Spec, Base, Key);
-          if Disc.Ok and (Length(Disc.Models) > 0) then
-            SaveCachedModels(Cfg.Providers[Idx].Name, Disc)
-          else if LoadCachedModels(Cfg.Providers[Idx].Name, Stale) then
-          begin
-            { The fetch failed or came back empty: an older list beats none. }
-            LiveErr := Disc.ErrMsg;
-            if LiveErr = '' then LiveErr := 'the provider listed no models';
-            Disc := Stale;
-          end;
+          { The fetch failed or came back empty: an older list beats none. }
+          LiveErr := Disc.ErrMsg;
+          if LiveErr = '' then LiveErr := 'the provider listed no models';
+          Disc := Stale;
         end;
         if Disc.Ok then
         begin

@@ -12,6 +12,7 @@ Against a real gateway:
     and no models; an unknown name is a 404;
   - a provider saved through PUT /v1/config, or added to config.json by
     hand, is listed before any restart;
+  - two requests at once for a provider not yet cached make one call;
   - when a refresh fails, the cached list still comes back, with the error;
   - a provider an active profile supplies (config.json has no providers
     block of its own) is listed, and so is one added to that profile's
@@ -44,6 +45,9 @@ STATE = {"fail": False}
 class Provider(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         HITS.append((self.path, self.headers.get("Authorization", "")))
+        if self.path == "/slow/v1/models":
+            time.sleep(1)           # long enough for two requests to overlap
+            self.path = "/v1/models"
         if self.path != "/v1/models" or STATE["fail"]:
             self.send_response(500)
             self.end_headers()
@@ -177,7 +181,8 @@ def main():
     with open(os.path.join(home, "config.json"), "w") as f:
         json.dump({"providers": [
             {"name": "fa", "kind": "openai", "api_base": fake, "api_key": "${PM_TEST_KEY_Q4}", "model": "alpha-1"},
-            {"name": "broken", "kind": "openai", "api_base": fake + "/broken", "api_key": "sk-broken"}],
+            {"name": "broken", "kind": "openai", "api_base": fake + "/broken", "api_key": "sk-broken"},
+            {"name": "slow", "kind": "openai", "api_base": fake + "/slow", "api_key": "sk-broken"}],
             "default_provider": "fa", "default_model": "alpha-1",
             "gateway": {"port": gport, "bind_addr": "127.0.0.1"}}, f)
     try:
@@ -201,6 +206,23 @@ def main():
             if j.get("source") != "live" or len(HITS) != n + 1:
                 fail("?refresh=1 did not fetch again: %r" % j, log)
             print("  ok: the cache answers next; ?refresh=1 fetches again")
+
+            # Two requests at once for a provider with no cache yet (the
+            # chat's roster and a Settings picker on one page load): one
+            # call to the provider; the second waits and takes the list.
+            got = []
+            ts = [threading.Thread(target=lambda: got.append(models("slow"))) for _ in range(2)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(30)
+            slow_hits = [h for h in HITS if h[0].startswith("/slow/")]
+            if len(slow_hits) != 1:
+                fail("two requests at once fetched %d times" % len(slow_hits), log)
+            if sorted(j.get("source") for _, j in got) != ["cache", "live"] or \
+                    any(c != 200 or len(j.get("models", [])) != 2 for c, j in got):
+                fail("two requests at once: %r" % got, log)
+            print("  ok: two requests at once cost the provider one call")
 
             code, j = models("broken")
             if code != 200 or j.get("source") != "none" or not j.get("error") or j.get("models"):
