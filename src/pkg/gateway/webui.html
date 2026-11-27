@@ -1307,14 +1307,108 @@
   .bg-msg-bar{display:flex;align-items:center;justify-content:flex-end;gap:.6rem}
   .bg-msg-hint{flex:1;font-size:12px;color:var(--text-3)}
 
-  /* ===== Logs tab ===== */
-  #tab-logs{display:none;flex-direction:column}
+  /* ===== Logs tab =====
+     A live tail of GET /v1/logs: a heading with the stream's state on the
+     right, a toolbar (level chips with counts, a text filter, Pause, Copy,
+     Download, Clear), then the lines in a mono panel that fills the rest
+     of the tab. A line is the time this page received it (blank for lines
+     already in the gateway's buffer when it connected), a level pill and
+     the message, wrapped. Below 640px the message goes under its time and
+     level. Every rule here is lg- or #tab-logs scoped. */
+  #tab-logs{display:none;flex-direction:column;gap:.9rem;padding:1.5rem 2rem 1.25rem;min-height:0}
   #tab-logs.active{display:flex}
-  .logs-bar{display:flex;gap:.5rem;align-items:center;padding:.5rem 1.25rem;
-    border-bottom:1px solid var(--border);background:var(--surface)}
-  .logs-bar .spacer{flex:1}
-  #logs-view{flex:1;overflow:auto;margin:0;padding:.9rem 1.25rem;
-    font:12px/1.55 var(--mono);white-space:pre-wrap;color:var(--text-2)}
+  .lg-head{display:flex;align-items:flex-start;gap:1rem;min-width:0}
+  .lg-head>div{flex:1;min-width:0}
+  .lg-head h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .lg-lead{margin:.3rem 0 0;max-width:46rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .lg-state{flex:none;display:inline-flex;align-items:center;gap:.45rem;margin-top:.15rem;padding:.16rem .7rem;
+    border:1px solid var(--border-strong);border-radius:999px;font-size:12px;font-weight:500;line-height:1.5;
+    color:var(--text-2);background:var(--surface);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .lg-dot{width:7px;height:7px;border-radius:50%;background:var(--text-3);flex:none}
+  .lg-state[data-state=live]{color:var(--ok);border-color:var(--ok-soft);background:var(--ok-soft)}
+  .lg-state[data-state=live] .lg-dot{background:var(--ok);animation:lg-pulse 2s ease-in-out infinite}
+  .lg-state[data-state=paused],.lg-state[data-state=reconnecting]{color:var(--warn);border-color:var(--warn-soft);background:var(--warn-soft)}
+  .lg-state[data-state=paused] .lg-dot,.lg-state[data-state=reconnecting] .lg-dot{background:var(--warn)}
+  .lg-state[data-state=down]{color:var(--danger);border-color:var(--danger-line);background:var(--danger-soft)}
+  .lg-state[data-state=down] .lg-dot{background:var(--danger)}
+  @keyframes lg-pulse{0%,100%{box-shadow:0 0 0 0 var(--ok-soft)}50%{box-shadow:0 0 0 4px var(--ok-soft)}}
+  @media (prefers-reduced-motion:reduce){.lg-state[data-state=live] .lg-dot{animation:none}}
+  .lg-bar{display:flex;align-items:center;flex-wrap:wrap;gap:.5rem .75rem;min-width:0}
+  .lg-levels{display:flex;flex-wrap:wrap;gap:.35rem}
+  .lg-chip{display:inline-flex;align-items:center;gap:.4rem;padding:.2rem .6rem .2rem .5rem;border-radius:999px;
+    font-size:12.5px;line-height:1.4;color:var(--text-3);background:transparent;border:1px solid var(--border-strong)}
+  .lg-chip:hover{background:var(--surface-2);color:var(--text)}
+  .lg-chip .n{font-size:11.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .lg-chip::before{content:"";width:7px;height:7px;border-radius:50%;border:1.5px solid currentColor;flex:none}
+  .lg-chip[aria-pressed=true]{color:var(--text);background:var(--surface-2)}
+  .lg-chip[aria-pressed=true]::before{border-color:transparent;background:var(--lg-c,var(--text-3))}
+  .lg-chip[data-lv=error]{--lg-c:var(--danger)} .lg-chip[data-lv=warn]{--lg-c:var(--warn)}
+  .lg-chip[data-lv=info]{--lg-c:var(--accent)} .lg-chip[data-lv=debug]{--lg-c:var(--text-3)}
+  .lg-find{position:relative;flex:1 1 14rem;min-width:0;max-width:24rem;display:flex}
+  .lg-find svg.ic{position:absolute;left:.55rem;top:50%;transform:translateY(-50%);color:var(--text-3);pointer-events:none}
+  .lg-find input{flex:1;min-width:0;padding-left:1.9rem}
+  .lg-acts{display:flex;flex-wrap:wrap;gap:.35rem;margin-left:auto}
+  .lg-acts .icon-btn:disabled{opacity:.5;cursor:default;background:transparent}
+  #lg-pause.on{background:var(--warn-soft);border-color:transparent;color:var(--warn)}
+  .lg-body{position:relative;flex:1;min-height:12rem;display:flex;flex-direction:column;
+    background:var(--code);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+  .lg-view{flex:1;min-height:0;overflow:auto;padding:.5rem 0;font:12px/1.6 var(--mono);color:var(--text)}
+  .lg-view:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .lg-line{display:grid;grid-template-columns:4.6rem 3.7rem minmax(0,1fr);gap:.75rem;align-items:start;
+    padding:.08rem 1rem;border-left:2px solid transparent}
+  .lg-line:hover{background:var(--surface-2)}
+  .lg-line[hidden]{display:none}
+  .lg-line time{color:var(--text-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .lg-lv{justify-self:start;min-width:3.7rem;margin-top:1px;padding:0 .35rem;border-radius:999px;text-align:center;
+    font:600 10px/17px var(--sans);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap;
+    color:var(--text-2);background:var(--surface-3)}
+  .lg-msg{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+  .lg-line.error{background:var(--danger-soft);border-left-color:var(--danger)}
+  .lg-line.error .lg-lv{color:var(--danger);background:var(--danger-soft)}
+  .lg-line.warn .lg-lv{color:var(--warn);background:var(--warn-soft)}
+  .lg-line.info .lg-lv{color:var(--accent);background:var(--accent-soft)}
+  .lg-line.debug .lg-msg{color:var(--text-2)}
+  .lg-line.debug .lg-lv{color:var(--text-3)}
+  .lg-mark{display:flex;align-items:center;gap:.6rem;margin:.35rem 0;padding:0 1rem;
+    font:12px/1.5 var(--sans);color:var(--text-3)}
+  .lg-mark::before,.lg-mark::after{content:"";flex:1;min-width:1rem;height:1px;background:var(--border)}
+  .lg-mark.err{color:var(--danger)}
+  .lg-mark[hidden]{display:none}
+  .lg-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:1.5rem}
+  .lg-empty[hidden]{display:none}
+  .lg-empty-in{display:flex;gap:.9rem;align-items:flex-start;max-width:32rem}
+  .lg-empty-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .lg-empty-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .lg-empty.err .lg-empty-ic{background:var(--danger-soft);color:var(--danger)}
+  .lg-empty b{display:block;margin-bottom:.2rem;font-size:13.5px;font-weight:600;color:var(--text)}
+  .lg-empty p{margin:0;font-size:13px;line-height:1.55;color:var(--text-2)}
+  .lg-empty code{background:var(--surface-2);border-radius:4px;padding:.03rem .3rem;font-size:.92em}
+  .lg-empty .icon-btn{margin-top:.7rem}
+  .lg-empty .icon-btn[hidden]{display:none}
+  .lg-jump{position:absolute;left:50%;bottom:.9rem;z-index:2;transform:translateX(-50%);
+    display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .8rem .3rem .6rem;border-radius:999px;
+    font-size:12.5px;color:var(--text);background:var(--surface);border:1px solid var(--border-strong);
+    box-shadow:var(--shadow-pop)}
+  .lg-jump:hover{background:var(--surface-2)}
+  .lg-jump .n{color:var(--text-3);font-variant-numeric:tabular-nums}
+  .lg-jump[hidden]{display:none}
+  .lg-foot{display:flex;flex-wrap:wrap;gap:.2rem 1rem;margin:-.3rem 0 0;font-size:12px;color:var(--text-3)}
+  .lg-foot span{font-variant-numeric:tabular-nums}
+  @media (max-width:760px){
+    #tab-logs{padding:1rem 1rem 1rem;gap:.75rem}
+    .lg-head{gap:.75rem}
+    .lg-find{flex-basis:100%;max-width:none;order:-1}
+    .lg-acts{margin-left:0}
+  }
+  @media (max-width:640px){
+    .lg-acts .icon-btn>span{display:none}
+    .lg-acts .icon-btn{padding:.3rem .5rem}
+    .lg-line{grid-template-columns:auto minmax(0,1fr);gap:0 .6rem;padding:.2rem .75rem}
+    .lg-line time:empty{display:none}
+    .lg-msg{grid-column:1/-1}
+    .lg-mark{padding:0 .75rem}
+  }
 
   /* Status line shared by the KB and Skills tabs. */
   .settings-status{font-size:12.5px;color:var(--text-3)}
@@ -1846,6 +1940,8 @@
   <symbol id="i-cron-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="M8 4.75V8l2.25 1.5"/></symbol>
   <symbol id="i-vlt-box" viewBox="0 0 16 16"><path d="M2.5 5.25 8 2.5l5.5 2.75v5.5L8 13.5l-5.5-2.75z"/><path d="M2.5 5.25 8 8l5.5-2.75M8 8v5.5"/></symbol>
   <symbol id="i-vlt-link" viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5"/><path d="M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/></symbol>
+  <symbol id="i-lg-pause" viewBox="0 0 16 16"><path d="M5.75 3.5v9M10.25 3.5v9"/></symbol>
+  <symbol id="i-lg-clear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="m3.95 12.05 8.1-8.1"/></symbol>
 </defs></svg>
 <header>
   <span class="logo"><span class="blue">Pas</span><span class="red">Claw</span></span>
@@ -2214,12 +2310,44 @@
   </div>
 
   <div id="tab-logs" class="tab">
-    <div class="logs-bar">
-      <span class="meta" id="logs-status">Disconnected</span>
-      <span class="spacer"></span>
-      <button class="icon-btn" id="logs-clear">Clear</button>
+    <!-- Logs: a live tail of GET /v1/logs (SSE). On connect the gateway
+         replays its in-memory buffer, then sends each new line. Every
+         line is drawn as text. Clear, Pause and the filters change this
+         view only. -->
+    <header class="lg-head">
+      <div>
+        <h2>Logs</h2>
+        <p class="lg-lead">What the gateway writes as it works, live: the lines it still holds, then each new one as it happens. Filtering, pausing and clearing change this view only.</p>
+      </div>
+      <span class="lg-state" id="lg-state" data-state="connecting" role="status"><span class="lg-dot" aria-hidden="true"></span><span id="lg-state-text">Connecting…</span></span>
+    </header>
+    <div class="lg-bar">
+      <div class="lg-levels" role="group" aria-label="Levels to show">
+        <button type="button" class="lg-chip" data-lv="error" aria-pressed="true">Error <span class="n">0</span></button>
+        <button type="button" class="lg-chip" data-lv="warn" aria-pressed="true">Warn <span class="n">0</span></button>
+        <button type="button" class="lg-chip" data-lv="info" aria-pressed="true">Info <span class="n">0</span></button>
+        <button type="button" class="lg-chip" data-lv="debug" aria-pressed="true">Debug <span class="n">0</span></button>
+      </div>
+      <label class="lg-find"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg><input type="search" id="lg-q" placeholder="Filter lines" aria-label="Filter lines" autocomplete="off" spellcheck="false"></label>
+      <div class="lg-acts">
+        <button type="button" class="icon-btn" id="lg-pause" aria-pressed="false" title="Stop new lines from appearing; they wait until you resume"><svg class="ic" aria-hidden="true"><use href="#i-lg-pause"/></svg><span>Pause</span></button>
+        <button type="button" class="icon-btn" id="lg-copy" title="Copy the lines shown"><svg class="ic" aria-hidden="true"><use href="#i-copy"/></svg><span>Copy</span></button>
+        <button type="button" class="icon-btn" id="lg-download" title="Download the lines shown as a text file"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg><span>Download</span></button>
+        <button type="button" class="icon-btn" id="lg-clear" title="Clear this view (the gateway keeps its log)"><svg class="ic" aria-hidden="true"><use href="#i-lg-clear"/></svg><span>Clear</span></button>
+      </div>
     </div>
-    <pre id="logs-view"></pre>
+    <div class="lg-body">
+      <div class="lg-view" id="lg-view" role="log" aria-label="Gateway log" tabindex="0"></div>
+      <div class="lg-empty" id="lg-empty">
+        <div class="lg-empty-in">
+          <span class="lg-empty-ic"><svg class="ic" aria-hidden="true"><use href="#i-terminal"/></svg></span>
+          <div><b id="lg-empty-h">Connecting to the gateway's log…</b><p id="lg-empty-p"></p>
+            <button type="button" class="icon-btn" id="lg-empty-btn" hidden></button></div>
+        </div>
+      </div>
+      <button type="button" class="lg-jump" id="lg-jump" hidden><svg class="ic" aria-hidden="true"><use href="#i-chat-down"/></svg>Latest<span class="n" id="lg-jump-n"></span></button>
+    </div>
+    <p class="lg-foot" id="lg-foot"><span id="lg-count"></span><span id="lg-note">Times are when this page received a line. Lines without one were already in the gateway's buffer.</span></p>
   </div>
 
   <div id="tab-stats" class="tab">
@@ -7472,22 +7600,8 @@ const tabLoaders = {
     vltInit();
   },
 
-  logs() {
-    const view = $("#logs-view"); const status = $("#logs-status");
-    view.textContent = "";
-    let es;
-    try {
-      es = new EventSource(gwSseUrl("/v1/logs"));
-      es.onopen = () => status.textContent = "live";
-      es.onerror = () => status.textContent = "disconnected";
-      es.onmessage = e => {
-        let s; try { s = JSON.parse(e.data); } catch { s = e.data; }
-        view.textContent += s + "\n";
-        view.scrollTop = view.scrollHeight;
-      };
-    } catch (err) { status.textContent = "error: " + err; }
-    $("#logs-clear").addEventListener("click", () => { view.textContent = ""; });
-  },
+  /* Logs: see logsInit() below the loaders. */
+  logs() { logsInit(); },
 
   /* Settings: see settingsInit() above the loaders. */
   settings() { settingsInit(); },
@@ -7722,6 +7836,381 @@ $("#stats-confirm").addEventListener("keydown", e => {
   if (e.key === "Escape") { statsConfirm(false); $("#stats-reset").focus(); }
 });
 tabHooks.stats = { show: () => refreshStats(true) };
+
+/* ===== Logs tab =====
+   A live tail of GET /v1/logs. Each SSE event is "[level] message",
+   JSON-escaped without the quotes; on every (re)connect the gateway first replays its
+   in-memory buffer (the last 1000 lines), then sends new lines as they
+   are written. The route carries no timestamps, so a line's time is when
+   this page received it, and lines from a replay have none.
+
+   - A replay is told apart by timing: it arrives in one burst right after
+     the stream opens, so lines until the stream has been quiet for 300 ms
+     (3 s at most) count as replayed. After a reconnect the replay is
+     matched against the last lines already shown and only what came
+     after them is added, so nothing shows twice.
+   - The browser retries a dropped stream on its own; when it gives up
+     (an HTTP error, say), we retry with a growing delay.
+   - Pause keeps the stream open and holds new lines until Resume.
+   - The view holds at most LG_CAP lines; older ones fall off the top.
+   - Lines are only ever set as textContent. */
+const LG_CAP = 2000;
+const LG_LEVELS = ["error", "warn", "info", "debug"];
+function logsInit() {
+  const view = $("#lg-view"), stateEl = $("#lg-state"), stateTx = $("#lg-state-text");
+  const q = $("#lg-q"), pauseBtn = $("#lg-pause"), jump = $("#lg-jump");
+  const st = {
+    es: null, retryTimer: 0, retryN: 0, retryAt: 0, everOpen: false, lost: false,
+    replay: null, tail: [],          // tail: the last raw lines received, for matching a replay
+    rows: [], counts: {}, dropped: 0, // what the view holds
+    held: [], heldDropped: 0, paused: false,
+    on: { error: true, warn: true, info: true, debug: true }, needle: "",
+    pinned: true, unseen: 0, cleared: false, inbox: [], flushTimer: 0,
+  };
+  const pad = n => String(n).padStart(2, "0");
+  const hms = d => pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  const parse = raw => {
+    const m = /^\[([A-Za-z]+)\] ?([\s\S]*)$/.exec(raw);
+    return m ? { lv: m[1].toLowerCase(), msg: m[2] } : { lv: "", msg: raw };
+  };
+
+  /* ---- state pill ---- */
+  function setState(s, text) {
+    stateEl.dataset.state = s;
+    stateTx.textContent = text;
+  }
+  function liveState() {
+    if (!st.es || st.es.readyState !== 1) return;
+    if (st.paused) {
+      const n = st.held.filter(e => !e.mark).length;
+      setState("paused", n ? "Paused · " + n.toLocaleString() + " new" : "Paused");
+    } else setState("live", "Live");
+  }
+
+  /* ---- rows ---- */
+  function makeRow(e) {
+    const el = document.createElement("div");
+    if (e.mark) {
+      el.className = "lg-mark" + (e.err ? " err" : "");
+      el.textContent = e.msg;
+      return el;
+    }
+    el.className = "lg-line" + (LG_LEVELS.includes(e.lv) ? " " + e.lv : "");
+    const tm = document.createElement("time");
+    if (e.t) {
+      tm.textContent = hms(e.t);
+      tm.dateTime = e.t.toISOString();
+      tm.title = "Received " + e.t.toLocaleString();
+    } else tm.title = "Already in the gateway's buffer when this page connected";
+    el.appendChild(tm);
+    const lv = document.createElement("span");
+    lv.className = "lg-lv";
+    lv.textContent = e.lv || "log";
+    el.appendChild(lv);
+    const msg = document.createElement("span");
+    msg.className = "lg-msg";
+    msg.textContent = e.msg;
+    el.appendChild(msg);
+    return el;
+  }
+  const matches = e => e.mark ? !st.needle && LG_LEVELS.every(l => st.on[l])
+    : (st.on[e.lv] !== false) && (!st.needle || e.hay.includes(st.needle));
+  function entry(raw, t) {
+    const p = parse(raw);
+    return { lv: p.lv, msg: p.msg, t, hay: (p.lv + " " + p.msg).toLowerCase() };
+  }
+
+  /* New entries go to the held queue while paused, else to the inbox,
+     which is drawn in one batch so a replay of 1000 lines is one layout. */
+  function accept(e) {
+    if (st.paused) {
+      st.held.push(e);
+      while (st.held.length > LG_CAP) { st.held.shift(); st.heldDropped++; }
+      liveState();
+      return;
+    }
+    st.inbox.push(e);
+    if (!st.flushTimer) st.flushTimer = setTimeout(flush, 16);
+  }
+  function flush() {
+    st.flushTimer = 0;
+    if (!st.inbox.length) return;
+    const frag = document.createDocumentFragment();
+    let shown = 0;
+    for (const e of st.inbox) {
+      e.el = makeRow(e);
+      e.el.hidden = !matches(e);
+      if (!e.el.hidden && !e.mark) shown++;
+      if (!e.mark) st.counts[e.lv] = (st.counts[e.lv] || 0) + 1;
+      st.rows.push(e);
+      frag.appendChild(e.el);
+    }
+    st.inbox = [];
+    view.appendChild(frag);
+    let drop = st.rows.length - LG_CAP;
+    if (drop > 0) {
+      for (const e of st.rows.splice(0, drop)) {
+        e.el.remove();
+        if (!e.mark) { st.counts[e.lv]--; st.dropped++; }
+      }
+    }
+    if (st.pinned) view.scrollTop = view.scrollHeight;
+    else st.unseen += shown;
+    st.cleared = false;
+    refresh();
+  }
+
+  /* ---- counts, empty state, footer, Latest ---- */
+  function refresh() {
+    $$("#tab-logs .lg-chip").forEach(c => {
+      c.querySelector(".n").textContent = (st.counts[c.dataset.lv] || 0).toLocaleString();
+    });
+    const lines = st.rows.filter(e => !e.mark);
+    const shown = lines.filter(e => !e.el.hidden).length;
+    $("#lg-count").textContent = !lines.length ? ""
+      : shown === lines.length ? lines.length.toLocaleString() + (lines.length === 1 ? " line" : " lines")
+      : shown.toLocaleString() + " of " + lines.length.toLocaleString() + " lines shown";
+    $("#lg-note").textContent = st.dropped
+      ? "Holding the newest " + LG_CAP.toLocaleString() + " lines; older ones left this view. Times are when this page received a line."
+      : "Times are when this page received a line. Lines without one were already in the gateway's buffer.";
+    $("#lg-copy").disabled = $("#lg-download").disabled = !shown;
+    $("#lg-note").hidden = !st.rows.length;
+    $("#lg-clear").disabled = !st.rows.length;
+    emptyState(lines.length, shown);
+    syncJump();
+  }
+  function emptyState(total, shown) {
+    const box = $("#lg-empty"), h = $("#lg-empty-h"), p = $("#lg-empty-p"), btn = $("#lg-empty-btn");
+    let kind = "";
+    if (!st.everOpen && stateEl.dataset.state === "down") kind = "error";
+    else if (!total && st.cleared) kind = "cleared";
+    else if (!total && !st.everOpen) kind = "connecting";
+    else if (!total && !st.replay) kind = "none";
+    else if (total && !shown) kind = "nomatch";
+    box.hidden = !kind;
+    box.classList.toggle("err", kind === "error");
+    btn.hidden = !(kind === "error" || kind === "nomatch");
+    if (!kind) return;
+    box.querySelector("use").setAttribute("href",
+      kind === "error" ? "#i-alert" : kind === "nomatch" ? "#i-search" : "#i-terminal");
+    if (kind === "error") {
+      h.textContent = "Can't open the log stream";
+      const secs = Math.max(1, Math.round((st.retryAt - Date.now()) / 1000));
+      p.textContent = "The gateway did not answer GET /v1/logs. It may have stopped, or it needs a token (the key button, top right). Trying again in " + secs + " s.";
+      btn.textContent = "Retry now";
+    } else if (kind === "cleared") {
+      h.textContent = "View cleared";
+      p.textContent = "New lines appear here as the gateway writes them. The gateway keeps its own log.";
+    } else if (kind === "connecting") {
+      h.textContent = "Connecting to the gateway's log…";
+      p.textContent = "";
+    } else if (kind === "none") {
+      h.textContent = "No log lines yet";
+      p.textContent = "Lines appear here as the gateway writes them. Debug lines show only when gateway.log_level is debug (Settings › Gateway & security).";
+    } else {
+      h.textContent = "No lines match";
+      p.textContent = "Nothing in this view matches the levels and filter you picked.";
+      btn.textContent = "Show all lines";
+    }
+  }
+  const nearBottom = () => view.scrollHeight - view.scrollTop - view.clientHeight < 40;
+  function syncJump() {
+    jump.hidden = st.pinned || !st.rows.length;
+    $("#lg-jump-n").textContent = st.unseen ? " · " + st.unseen.toLocaleString() + " new" : "";
+  }
+  view.addEventListener("scroll", () => {
+    if (!view.clientHeight) return;          // the tab is hidden
+    st.pinned = nearBottom();
+    if (st.pinned) st.unseen = 0;
+    syncJump();
+  }, { passive: true });
+  jump.addEventListener("click", () => {
+    st.pinned = true; st.unseen = 0;
+    view.scrollTo({ top: view.scrollHeight, behavior: "smooth" });
+    syncJump();
+  });
+  tabHooks.logs = { show() { if (st.pinned) view.scrollTop = view.scrollHeight; } };
+
+  /* ---- filters ---- */
+  function applyFilter() {
+    for (const e of st.rows) e.el.hidden = !matches(e);
+    if (st.pinned) view.scrollTop = view.scrollHeight;
+    refresh();
+  }
+  $$("#tab-logs .lg-chip").forEach(c => c.addEventListener("click", () => {
+    const on = c.getAttribute("aria-pressed") !== "true";
+    c.setAttribute("aria-pressed", String(on));
+    st.on[c.dataset.lv] = on;
+    applyFilter();
+  }));
+  let qTimer = 0;
+  q.addEventListener("input", () => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => { st.needle = q.value.trim().toLowerCase(); applyFilter(); }, 120);
+  });
+  q.addEventListener("keydown", e => { if (e.key === "Escape" && q.value) { q.value = ""; st.needle = ""; applyFilter(); } });
+  $("#lg-empty-btn").addEventListener("click", () => {
+    if (stateEl.dataset.state === "down") { connect(); return; }
+    q.value = ""; st.needle = "";
+    LG_LEVELS.forEach(l => st.on[l] = true);
+    $$("#tab-logs .lg-chip").forEach(c => c.setAttribute("aria-pressed", "true"));
+    applyFilter();
+  });
+
+  /* ---- pause, clear, copy, download ---- */
+  pauseBtn.addEventListener("click", () => {
+    st.paused = !st.paused;
+    pauseBtn.classList.toggle("on", st.paused);
+    pauseBtn.setAttribute("aria-pressed", String(st.paused));
+    pauseBtn.querySelector("use").setAttribute("href", st.paused ? "#i-play" : "#i-lg-pause");
+    pauseBtn.querySelector("span").textContent = st.paused ? "Resume" : "Pause";
+    pauseBtn.title = st.paused ? "Show the lines that came in while paused, and keep going"
+                               : "Stop new lines from appearing; they wait until you resume";
+    if (!st.paused) {
+      const held = st.held; st.held = [];
+      if (st.heldDropped) {
+        held.unshift({ mark: true, msg: st.heldDropped.toLocaleString() + " lines from while paused did not fit and were skipped" });
+        st.heldDropped = 0;
+      }
+      held.forEach(accept);
+    }
+    liveState();
+  });
+  $("#lg-clear").addEventListener("click", () => {
+    view.textContent = "";
+    st.rows = []; st.counts = {}; st.dropped = 0; st.unseen = 0; st.pinned = true; st.cleared = true;
+    refresh();
+  });
+  const shownText = () => st.rows.filter(e => !e.mark && !e.el.hidden)
+    .map(e => (e.t ? hms(e.t) + " " : "") + (e.lv ? "[" + e.lv + "] " : "") + e.msg).join("\n") + "\n";
+  function flash(btn, text) {
+    const span = btn.querySelector("span"), was = span.textContent;
+    span.textContent = text;
+    setTimeout(() => { span.textContent = was; }, 1500);
+  }
+  $("#lg-copy").addEventListener("click", async () => {
+    const text = shownText();
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); } catch {}
+      ta.remove();
+    }
+    flash($("#lg-copy"), "Copied");
+  });
+  $("#lg-download").addEventListener("click", () => {
+    const d = new Date();
+    const name = "pasclaw-log-" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate())
+      + "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + ".txt";
+    const url = URL.createObjectURL(new Blob([shownText()], { type: "text/plain;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  /* ---- the stream ---- */
+  function remember(raw) {
+    st.tail.push(raw);
+    if (st.tail.length > 64) st.tail.shift();
+  }
+  function endReplay() {
+    const r = st.replay;
+    if (!r) return;
+    st.replay = null;
+    clearTimeout(r.timer);
+    const now = new Date();
+    let fresh = r.lines;
+    if (r.first) {
+      fresh.forEach(raw => accept(entry(raw, null)));
+      if (fresh.length) accept({ mark: true, msg: "Live from " + hms(now) });
+    } else {
+      /* Where the last lines we already have end inside the replay; the
+         lines after that point were written while we were away. */
+      const k = Math.min(st.tail.length, 16);
+      let at = -1;
+      for (let i = r.lines.length - 1; k && i >= k - 1 && at < 0; i--) {
+        let same = true;
+        for (let j = 0; j < k && same; j++) same = r.lines[i - j] === st.tail[st.tail.length - 1 - j];
+        if (same) at = i;
+      }
+      if (at >= 0) {
+        fresh = r.lines.slice(at + 1);
+        accept({ mark: true, msg: "Reconnected at " + hms(now)
+          + (fresh.length ? " · " + fresh.length.toLocaleString() + " written while disconnected" : "") });
+      } else {
+        accept({ mark: true, msg: "Reconnected at " + hms(now) + " · the gateway's buffer was replayed in full (it may have restarted)" });
+      }
+      fresh.forEach(raw => accept(entry(raw, null)));
+    }
+    fresh.forEach(remember);
+    refresh();
+  }
+  function connect() {
+    clearTimeout(st.retryTimer);
+    if (st.es) { st.es.close(); st.es = null; }
+    if (!st.everOpen) setState("connecting", "Connecting…");
+    let es;
+    try { es = new EventSource(gwSseUrl("/v1/logs")); }
+    catch (err) { giveUp(); return; }
+    st.es = es;
+    es.onopen = () => {
+      if (es !== st.es) return;
+      st.retryN = 0;
+      st.replay = { lines: [], first: !st.everOpen, start: Date.now(), timer: 0 };
+      st.replay.timer = setTimeout(endReplay, 300);
+      st.everOpen = true; st.lost = false;
+      liveState();
+      refresh();
+    };
+    es.onmessage = ev => {
+      if (es !== st.es) return;
+      /* The gateway sends the line JSON-escaped but without the quotes
+         (JsonEscape), so wrap it to decode \" \\ \n; a quoted string or
+         anything else that does not parse is taken as it is. */
+      let raw;
+      try { raw = JSON.parse('"' + ev.data + '"'); }
+      catch { try { raw = JSON.parse(ev.data); } catch { raw = ev.data; } }
+      raw = String(raw);
+      const r = st.replay;
+      if (r) {
+        r.lines.push(raw);
+        clearTimeout(r.timer);
+        if (Date.now() - r.start < 3000) r.timer = setTimeout(endReplay, 300);
+        else endReplay();
+        return;
+      }
+      remember(raw);
+      accept(entry(raw, new Date()));
+    };
+    es.onerror = () => {
+      if (es !== st.es) return;
+      endReplay();
+      if (st.everOpen && !st.lost) {
+        st.lost = true;
+        accept({ mark: true, err: true, msg: "Connection lost at " + hms(new Date()) + " · reconnecting" });
+      }
+      if (es.readyState === EventSource.CONNECTING) {
+        setState("reconnecting", "Reconnecting…");
+        refresh();
+        return;                     // the browser retries by itself
+      }
+      giveUp();
+    };
+  }
+  function giveUp() {
+    if (st.es) { st.es.close(); st.es = null; }
+    const wait = Math.min(30, 2 * Math.pow(2, st.retryN++));
+    st.retryAt = Date.now() + wait * 1000;
+    setState(st.everOpen ? "reconnecting" : "down", st.everOpen ? "Reconnecting in " + wait + " s" : "Disconnected");
+    st.retryTimer = setTimeout(connect, wait * 1000);
+    refresh();
+  }
+  refresh();
+  connect();
+}
 
 /* ===== Background tab =====
    The jobs the agent started with spawn_background (a subagent) and
