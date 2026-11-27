@@ -328,7 +328,7 @@ type
                                        ARequest: TIdHTTPRequestInfo;
                                        AResp: TIdHTTPResponseInfo);
     { Knowledge-base browse + ingest for the web UI. GET /v1/kb lists the
-      indexed sources and totals; POST /v1/kb/upload writes a document into
+      indexed sources, the documents (first 500) and totals; POST /v1/kb/upload writes a document into
       workspace/kb-files and (re)indexes it; GET /v1/kb/search?q= runs the
       same FTS/vector search the kb_search tool uses. }
     { GET /v1/workspace/export -- stream $PASCLAW_HOME/workspace as a zip
@@ -3265,14 +3265,16 @@ procedure TGatewayServer.HandleKBList(AResp: TIdHTTPResponseInfo);
 var
   Idx: IKBIndex;
   Sources: TKBSourceArray;
+  Docs: TKBFileArray;
   St: TKBStats;
   Root, Stats, Item: TJsonObject;
-  Arr: TJsonArray;
+  Arr, DocArr: TJsonArray;
   i: Integer;
 begin
   Root := TJsonObject.Create;
   try
     Arr := TJsonArray.Create;
+    DocArr := TJsonArray.Create;
     Stats := TJsonObject.Create;
     Idx := NewKBIndex;
     if Idx.Open(DefaultKBDbPath) then
@@ -3286,6 +3288,18 @@ begin
         Item.PutInt('chunks',   Sources[i].Chunks);
         Item.PutInt('added_at', Sources[i].AddedAt);
         Arr.AddObject(Item);
+      end;
+      { The documents themselves, for the tab's list: the first 500 by
+        path (stats.files is the full count). }
+      Docs := Idx.GetFiles(500);
+      for i := 0 to High(Docs) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr('path',   Docs[i].Path);
+        Item.PutStr('root',   Docs[i].Root);
+        Item.PutInt('chunks', Docs[i].Chunks);
+        Item.PutInt('mtime',  Docs[i].Mtime);
+        DocArr.AddObject(Item);
       end;
       St := Idx.Stats;
       Stats.PutInt ('sources',      St.Sources);
@@ -3303,6 +3317,7 @@ begin
     end;
     Root.PutObject('stats',   Stats);
     Root.PutArray ('sources', Arr);
+    Root.PutArray ('documents', DocArr);
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;

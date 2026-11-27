@@ -1364,8 +1364,121 @@
   .skill-install-row{display:flex;gap:.5rem;margin-bottom:.6rem;max-width:60rem}
   .skill-install-row input{flex:1;min-width:0}
 
-  /* ===== KB tab ===== */
-  .kb-stats{color:var(--text-3);font-size:12px;margin:.2rem 0 .6rem}
+  /* ===== KB tab =====
+     Laid out like the MCP tab: a heading and a line on what the knowledge
+     base is, a strip of counts, then Search (a result per hit: rank, the
+     document, its chunk, how close it scored to the best hit, and the
+     snippet with the matched words marked), Documents (an upload bar, then
+     a row per document with its chunks and modified time) and Sources.
+     Below 760px the strip goes two by two and rows stack. Scoped to kb-. */
+  #kb-pane{padding:1.5rem 2rem 3rem}
+  .kb-wrap{max-width:58rem;margin:0 auto;display:flex;flex-direction:column;gap:1.75rem;min-width:0}
+  .kb-head-row{display:flex;align-items:center;gap:.6rem}
+  .kb-head h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .kb-head-row .icon-btn{margin-left:auto;padding:.3rem}
+  .kb-head-row .icon-btn.busy svg.ic{animation:kbSpin .8s linear infinite}
+  @keyframes kbSpin{to{transform:rotate(360deg)}}
+  .kb-lead{margin:.3rem 0 0;max-width:44rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .kb-lead code,.kb-sub code,.kb-empty code{background:var(--surface-2);border-radius:4px;padding:.03rem .3rem;font-size:.92em;
+    white-space:nowrap}
+  .kb-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--surface);
+    border:1px solid var(--border);border-radius:var(--radius-lg)}
+  .kb-strip[hidden]{display:none}
+  .kb-stat{display:flex;flex-direction:column;gap:.05rem;padding:.75rem 1rem;min-width:0}
+  .kb-stat+.kb-stat{border-left:1px solid var(--border)}
+  .kb-num{font-size:20px;font-weight:600;line-height:1.3;color:var(--text);font-variant-numeric:tabular-nums;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .kb-lbl{font-size:12px;color:var(--text-3);white-space:nowrap}
+  .kb-sec{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+  .kb-sec-head{display:flex;align-items:baseline;gap:.5rem;min-width:0}
+  .kb-sec-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text)}
+  .kb-sec-head .n{font-size:12.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .kb-sub{margin:-.35rem 0 0;font-size:12.5px;line-height:1.5;color:var(--text-3)}
+  .kb-search{display:flex;gap:.5rem;min-width:0}
+  .kb-field{position:relative;flex:1;min-width:0;display:flex;align-items:center}
+  .kb-field svg.ic{position:absolute;left:.65rem;color:var(--text-3);pointer-events:none;vertical-align:0}
+  .kb-field input{width:100%;padding-left:2.05rem;font-size:13.5px}
+  .kb-results:empty{display:none}
+  .kb-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .kb-hit{display:grid;grid-template-columns:auto minmax(0,1fr);gap:.2rem .75rem;padding:.8rem 1rem}
+  .kb-hit+.kb-hit,.kb-doc+.kb-doc,.kb-src+.kb-src{border-top:1px solid var(--border)}
+  .kb-rank{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin-top:.05rem;
+    border-radius:50%;background:var(--surface-3);color:var(--text-2);font-size:11.5px;font-weight:600;
+    font-variant-numeric:tabular-nums}
+  .kb-hit:first-child .kb-rank{background:var(--accent-soft);color:var(--accent)}
+  .kb-hit-main{display:flex;flex-direction:column;gap:.3rem;min-width:0}
+  .kb-hit-l1{display:flex;align-items:center;flex-wrap:wrap;gap:.25rem .5rem;min-width:0}
+  .kb-name{min-width:0;font-weight:600;font-size:13.5px;color:var(--text);overflow-wrap:anywhere}
+  .kb-tag{display:inline-flex;align-items:center;padding:0 .45rem;border-radius:999px;font-size:11px;font-weight:500;
+    line-height:1.65;white-space:nowrap;background:var(--surface-3);color:var(--text-2);font-variant-numeric:tabular-nums}
+  .kb-tag.plain{background:transparent;color:var(--text-3);box-shadow:inset 0 0 0 1px var(--border-strong)}
+  .kb-score{display:inline-flex;align-items:center;gap:.4rem;margin-left:auto;font-size:11.5px;color:var(--text-3);
+    font-variant-numeric:tabular-nums;white-space:nowrap;cursor:default}
+  .kb-meter{display:inline-block;width:3.2rem;height:4px;border-radius:2px;background:var(--surface-3);overflow:hidden}
+  .kb-meter>i{display:block;height:100%;border-radius:2px;background:var(--accent)}
+  .kb-path{display:block;min-width:0;font:11.5px/1.45 var(--mono);color:var(--text-3);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .kb-snip{margin:.1rem 0 0;padding:.05rem 0 .05rem .7rem;border-left:2px solid var(--border-strong);
+    font-size:13px;line-height:1.55;color:var(--text-2);overflow-wrap:anywhere;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}
+  .kb-snip mark{background:var(--warn-soft);color:var(--text);border-radius:2px;padding:0 .1em;font-weight:550}
+  .kb-upload{display:flex;align-items:center;gap:.8rem;padding:.75rem 1rem;min-width:0;
+    border:1px dashed var(--border-strong);border-radius:var(--radius-lg);background:var(--surface)}
+  .kb-upload.drag{border-color:var(--accent);background:var(--accent-soft)}
+  .kb-up-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:34px;height:34px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .kb-up-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .kb-up-main{flex:1;display:flex;flex-direction:column;gap:.2rem;min-width:0}
+  .kb-up-main input[type=file]{max-width:100%;min-width:0}
+  .kb-up-hint{font-size:12px;color:var(--text-3)}
+  .kb-status:empty{display:none}
+  .kb-status{margin-top:-.35rem}
+  .kb-doc{display:grid;grid-template-columns:auto minmax(0,1fr) auto 5.6rem;align-items:center;gap:.25rem .75rem;
+    padding:.6rem 1rem}
+  .kb-doc.new{background:var(--accent-soft)}
+  .kb-doc>svg.ic,.kb-src>svg.ic{color:var(--text-3);vertical-align:0}
+  .kb-src>svg.ic{color:var(--accent)}
+  .kb-doc-main{display:flex;flex-direction:column;min-width:0}
+  .kb-doc-main .kb-name{font-weight:550;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .kb-doc time,.kb-src time{font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums;white-space:nowrap;
+    text-align:right;cursor:default}
+  .kb-src{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:.25rem .75rem;padding:.65rem 1rem}
+  .kb-src-main{display:flex;flex-direction:column;gap:.1rem;min-width:0}
+  .kb-src-main code{font:12.5px/1.45 var(--mono);color:var(--text);overflow-wrap:anywhere}
+  .kb-src-main span{font-size:12px;color:var(--text-3)}
+  .kb-foot{margin:0;font-size:12px;color:var(--text-3)}
+  .kb-foot[hidden]{display:none}
+  .kb-empty{display:flex;gap:.9rem;align-items:flex-start;padding:1.2rem 1.25rem}
+  .kb-empty-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .kb-empty-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .kb-empty b{display:block;margin-bottom:.2rem;font-size:13.5px;font-weight:600;color:var(--text);overflow-wrap:anywhere}
+  .kb-empty p{margin:0;max-width:40rem;font-size:13px;line-height:1.55;color:var(--text-2)}
+  .kb-msg{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;padding:1rem 1.25rem;font-size:13px;
+    color:var(--text-3);overflow-wrap:anywhere}
+  .kb-msg.err{color:var(--danger)}
+  .kb-skel{height:.8rem;margin:1rem;border-radius:4px;background:var(--surface-2)}
+  .kb-skel:nth-child(2n){width:62%} .kb-skel:nth-child(3n){width:44%}
+  @media (max-width:760px){
+    #kb-pane{padding:1rem 1rem 2rem}
+    .kb-wrap{gap:1.4rem}
+    .kb-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .kb-stat+.kb-stat{border-left:0}
+    .kb-stat:nth-child(2n){border-left:1px solid var(--border)}
+    .kb-stat:nth-child(n+3){border-top:1px solid var(--border)}
+    .kb-hit{padding:.75rem .8rem}
+    .kb-score{margin-left:0}
+    .kb-upload{flex-wrap:wrap;padding:.75rem .8rem}
+    .kb-up-main{flex-basis:calc(100% - 3rem)}
+    .kb-upload>button.primary{width:100%}
+    .kb-doc{grid-template-columns:auto minmax(0,1fr) auto;padding:.6rem .8rem}
+    .kb-doc>svg.ic,.kb-doc-main{grid-row:span 2}
+    .kb-doc>.kb-tag{justify-self:end}
+    .kb-doc>time{grid-column:3}
+    .kb-src{padding:.65rem .8rem}
+    .kb-src>time{grid-column:2;text-align:left}
+    .kb-empty{flex-direction:column;gap:.7rem}
+  }
 
   /* ===== Background tab =====
      The jobs list beside the open job, like the other two-column tabs; on
@@ -2076,6 +2189,7 @@
   <symbol id="i-vlt-link" viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5"/><path d="M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/></symbol>
   <symbol id="i-lg-pause" viewBox="0 0 16 16"><path d="M5.75 3.5v9M10.25 3.5v9"/></symbol>
   <symbol id="i-lg-clear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="m3.95 12.05 8.1-8.1"/></symbol>
+  <symbol id="i-kb-book" viewBox="0 0 16 16"><path d="M3 3.25A1.25 1.25 0 0 1 4.25 2h8.25v9.5H4.25A1.25 1.25 0 0 0 3 12.75z"/><path d="M3 12.75A1.25 1.25 0 0 0 4.25 14h8.25v-2.5M6 5.25h4"/></symbol>
 </defs></svg>
 <header>
   <span class="logo"><span class="blue">Pas</span><span class="red">Claw</span></span>
@@ -2271,18 +2385,59 @@
   </div>
 
   <div id="tab-kb" class="tab">
-    <div class="pane">
-      <form id="kb-upload" class="skill-install-row">
-        <input id="kb-file" type="file" accept=".md,.markdown,.txt,.text,.rst,.adoc,.org,.pas,.pp,.inc,.dpr,.lpr,.c,.h,.cc,.cpp,.hpp,.cs,.java,.go,.rs,.js,.ts,.py,.rb,.php,.swift,.kt,.sql,.sh,.bat,.ps1,.json,.yaml,.yml,.toml,.ini,.csv,.html,.htm,.pdf,application/pdf,text/*" title="Upload a text document or PDF into the knowledge base (up to 30 MB)">
-        <button class="primary" id="kb-upload-btn" type="submit">Upload &amp; index</button>
-      </form>
-      <form id="kb-search" class="skill-install-row">
-        <input id="kb-q" type="text" autocomplete="off" placeholder="Search the knowledge base">
-        <button class="primary" id="kb-search-btn" type="submit">Search</button>
-      </form>
-      <div id="kb-status" class="settings-status"></div>
-      <div id="kb-results"></div>
-      <div id="kb-sources"></div>
+    <!-- KB: the knowledge base (workspace/kb.db). GET /v1/kb gives the totals,
+         the sources and the documents; GET /v1/kb/search runs the index the
+         kb_search tool uses; POST /v1/kb/upload writes a file into
+         workspace/kb-files and indexes it. Names, paths and snippets reach
+         the page only as text. -->
+    <div class="pane" id="kb-pane">
+      <div class="kb-wrap">
+        <header class="kb-head">
+          <div class="kb-head-row">
+            <h2>Knowledge base</h2>
+            <button type="button" class="icon-btn" id="kb-refresh" aria-label="Refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+          </div>
+          <p class="kb-lead">Reference documents the agent can search with <code>kb_search</code> and read with <code>kb_get</code>, kept apart from its memory. Upload a text, Markdown, source or PDF file and it is indexed straight away; <code>pasclaw kb add &lt;folder&gt;</code> indexes a folder in place.</p>
+        </header>
+
+        <section class="kb-strip" id="kb-strip" aria-label="Knowledge base summary" hidden>
+          <div class="kb-stat"><span class="kb-num" id="kb-stat-docs">—</span><span class="kb-lbl">documents</span></div>
+          <div class="kb-stat"><span class="kb-num" id="kb-stat-chunks">—</span><span class="kb-lbl">chunks</span></div>
+          <div class="kb-stat"><span class="kb-num" id="kb-stat-sources">—</span><span class="kb-lbl">sources</span></div>
+          <div class="kb-stat"><span class="kb-num kb-mode" id="kb-stat-mode">—</span><span class="kb-lbl">search</span></div>
+        </section>
+
+        <section class="kb-sec" aria-labelledby="kb-search-h">
+          <div class="kb-sec-head"><h3 id="kb-search-h">Search</h3><span class="n" id="kb-results-n"></span></div>
+          <form id="kb-search" class="kb-search" role="search">
+            <label class="kb-field"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+              <input id="kb-q" type="search" autocomplete="off" placeholder="Search the knowledge base" aria-label="Search the knowledge base"></label>
+            <button class="primary" id="kb-search-btn" type="submit">Search</button>
+          </form>
+          <div id="kb-results" class="kb-results" aria-live="polite"></div>
+        </section>
+
+        <section class="kb-sec" aria-labelledby="kb-docs-h">
+          <div class="kb-sec-head"><h3 id="kb-docs-h">Documents</h3><span class="n" id="kb-docs-n"></span></div>
+          <form id="kb-upload" class="kb-upload">
+            <span class="kb-up-ic"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg></span>
+            <div class="kb-up-main">
+              <input id="kb-file" type="file" accept=".md,.markdown,.txt,.text,.rst,.adoc,.org,.pas,.pp,.inc,.dpr,.lpr,.c,.h,.cc,.cpp,.hpp,.cs,.java,.go,.rs,.js,.ts,.py,.rb,.php,.swift,.kt,.sql,.sh,.bat,.ps1,.json,.yaml,.yml,.toml,.ini,.csv,.html,.htm,.pdf,application/pdf,text/*" title="Upload a text document or PDF into the knowledge base (up to 30 MB)" aria-describedby="kb-up-hint">
+              <span class="kb-up-hint" id="kb-up-hint">Text, Markdown, source code or PDF, up to 30 MB. A file with the same name is replaced.</span>
+            </div>
+            <button class="primary" id="kb-upload-btn" type="submit">Upload &amp; index</button>
+          </form>
+          <div id="kb-status" class="settings-status kb-status" role="status"></div>
+          <div id="kb-docs" class="kb-list"></div>
+          <p class="kb-foot" id="kb-docs-foot" hidden></p>
+        </section>
+
+        <section class="kb-sec" aria-labelledby="kb-src-h">
+          <div class="kb-sec-head"><h3 id="kb-src-h">Sources</h3><span class="n" id="kb-sources-n"></span></div>
+          <p class="kb-sub">The folders and files the index watches. Uploads go to <code>workspace/kb-files</code>; remove a source with <code>pasclaw kb remove &lt;path&gt;</code>.</p>
+          <div id="kb-sources" class="kb-list"></div>
+        </section>
+      </div>
     </div>
   </div>
 
@@ -7521,99 +7676,7 @@ const tabLoaders = {
      See skSetup. */
   skills() { skSetup(); return skLoad(); },
 
-  async kb() {
-    const upForm = $("#kb-upload"), file = $("#kb-file");
-    const sForm = $("#kb-search"), q = $("#kb-q");
-    const status = $("#kb-status"), results = $("#kb-results"), sources = $("#kb-sources");
-
-    function setStatus(msg, cls) {
-      status.textContent = msg || "";
-      status.className = "settings-status" + (cls ? " " + cls : "");
-    }
-    async function loadSources() {
-      sources.innerHTML = `<div class="empty-pane">loading…</div>`;
-      try {
-        const j = await (await gwFetch("/v1/kb")).json();
-        const st = j.stats || {};
-        const head = `<div class="kb-stats">${st.sources||0} source(s) · ${st.files||0} file(s) · ${st.chunks||0} chunk(s)${st.vector_ready ? " · vector" : ""}</div>`;
-        const rows = j.sources || [];
-        if (!rows.length) {
-          sources.innerHTML = head + `<div class="empty-pane">No documents indexed yet. Upload one above to make it searchable.</div>`;
-          return;
-        }
-        let html = head;
-        for (const s of rows)
-          html += `<div class="skill-card"><div><span class="name">${escapeHtml(s.root)}</span>`
-                + `<span class="kind">${s.files} file(s)</span></div>`
-                + `<div class="path">${s.chunks} chunk(s)</div></div>`;
-        sources.innerHTML = html;
-      } catch (e) { sources.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
-    }
-    async function search() {
-      const term = q.value.trim();
-      if (!term) { results.innerHTML = ""; return; }
-      results.innerHTML = `<div class="empty-pane">searching…</div>`;
-      try {
-        const r = await gwFetch("/v1/kb/search?q=" + encodeURIComponent(term));
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok || j.error) { results.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(j.error || ("http " + r.status))}</div>`; return; }
-        const hits = j.hits || [];
-        if (!hits.length) { results.innerHTML = `<div class="empty-pane">No matches for “${escapeHtml(term)}”.</div>`; return; }
-        results.innerHTML = "";
-        for (const h of hits) {
-          const el = document.createElement("div");
-          el.className = "skill-card";
-          el.innerHTML = `<div><span class="name">${escapeHtml(h.path)} <span class="kind">#c${h.chunk}</span></span></div>`
-                       + `<div class="desc">${escapeHtml(h.snippet || "")}</div>`;
-          results.appendChild(el);
-        }
-      } catch (e) { results.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(String(e))}</div>`; }
-    }
-    async function upload() {
-      const f = file.files && file.files[0];
-      if (!f) { setStatus("choose a file first", "err"); return; }
-      if (f.size > 30 * 1024 * 1024) { setStatus("file too large (max 30 MB)", "err"); return; }
-      const isPdf = /\.pdf$/i.test(f.name);
-      setStatus("reading " + f.name + "…");
-      let payload;
-      try {
-        if (isPdf) {
-          /* PDFs are binary; await f.text() would mangle them.  Read as
-             ArrayBuffer and base64-encode for JSON transport.  Server
-             decodes content_b64 and writes raw bytes. */
-          const buf = await f.arrayBuffer();
-          const u8 = new Uint8Array(buf);
-          let bin = "";
-          for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
-          payload = { name: f.name, content_b64: btoa(bin) };
-        } else {
-          payload = { name: f.name, content: await f.text() };
-        }
-      } catch (e) { setStatus("read failed: " + e, "err"); return; }
-      setStatus("uploading & indexing " + f.name + "…");
-      try {
-        const r = await gwFetch("/v1/kb/upload", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload) });
-        const j = await r.json().catch(() => ({}));
-        if (r.ok && j.uploaded) {
-          setStatus(`indexed ${j.uploaded} — ${j.indexed_files} file(s), ${j.indexed_chunks} chunk(s)`, "ok");
-          file.value = "";
-          await loadSources();
-        } else setStatus("upload failed: " + (j.error || ("http " + r.status)), "err");
-      } catch (e) { setStatus("upload failed: " + e, "err"); }
-    }
-
-    if (!upForm.dataset.wired) {
-      upForm.dataset.wired = "1";
-      upForm.addEventListener("submit", e => { e.preventDefault(); upload(); });
-    }
-    if (!sForm.dataset.wired) {
-      sForm.dataset.wired = "1";
-      sForm.addEventListener("submit", e => { e.preventDefault(); search(); });
-    }
-    await loadSources();
-  },
+  kb() { setupKbTab(); },
 
   vault() {
     /* The Code Vault is a remote searchable corpus (pasclaw.dev), not a
@@ -11307,6 +11370,342 @@ if (location.hash.slice(1)) showTab(location.hash.slice(1));
 })();
 maybeOnboard();
 m.focus();
+
+/* ===== KB tab implementation =====
+   tabLoaders.kb runs setupKbTab once; tabHooks.kb reloads on each later
+   visit. GET /v1/kb gives the totals, the sources and the documents (the
+   first 500 by path); GET /v1/kb/search?q= gives hits with path, chunk,
+   snippet and score; POST /v1/kb/upload writes a file into
+   workspace/kb-files and indexes it. Paths and snippets come from the
+   user's files, so they reach the page only as textContent; the snippet's
+   «» match markers become <mark> elements built here, never parsed HTML. */
+function kbUI() { return kbUI.s || (kbUI.s = { setup: false, seq: 0, qseq: 0, docs: [], rootOf: new Map(), fresh: "" }); }
+
+function kbEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function kbIcon(name) {
+  const t = document.createElement("template");
+  t.innerHTML = icon(name);
+  return t.content.firstChild;
+}
+function kbSplit(p) { return String(p || "").split(/[\\/]/).filter(Boolean); }
+function kbBase(p) { const a = kbSplit(p); return a.length ? a[a.length - 1] : String(p || ""); }
+function kbDir(p) { const s = String(p || ""), i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\")); return i > 0 ? s.slice(0, i) : ""; }
+/* The path inside its source, e.g. "guides/install.md"; the base name when
+   the root is not a prefix of it. */
+function kbRel(path, root) {
+  const p = String(path || ""), r = String(root || "").replace(/[\\/]+$/, "");
+  if (r && p.length > r.length + 1 && p.startsWith(r) && /[\\/]/.test(p[r.length])) return p.slice(r.length + 1);
+  return kbBase(p);
+}
+/* Uploads land in <workspace>/kb-files; that root reads as
+   "workspace/kb-files" rather than its full path. */
+function kbIsUploads(root) { return kbBase(root) === "kb-files"; }
+function kbRootLabel(root) {
+  const a = kbSplit(root);
+  return a.length >= 2 && kbIsUploads(root) ? a[a.length - 2] + "/kb-files" : String(root || "");
+}
+function kbTime(unix, what) {
+  const t = kbEl("time");
+  if (unix > 0) {
+    const d = new Date(unix * 1000);
+    t.textContent = fsbAgo(unix);
+    t.dateTime = d.toISOString();
+    t.title = what + " " + d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
+  } else t.textContent = "—";
+  return t;
+}
+/* An empty state: icon, title, a line. text is a string, or an array of
+   strings and nodes; all of it lands as text. */
+function kbState(ic, title, text) {
+  const d = kbEl("div", "kb-empty");
+  const i = kbEl("span", "kb-empty-ic");
+  i.appendChild(kbIcon(ic));
+  const body = kbEl("div");
+  body.appendChild(kbEl("b", null, title));
+  const p = kbEl("p");
+  for (const part of [].concat(text)) p.appendChild(typeof part === "string" ? document.createTextNode(part) : part);
+  body.appendChild(p);
+  d.append(i, body);
+  return d;
+}
+function kbMsg(text, retry, err = true) {
+  const d = kbEl("div", "kb-msg" + (err ? " err" : ""));
+  d.appendChild(kbEl("span", null, text));
+  if (retry) {
+    const b = kbEl("button", "icon-btn", "Try again");
+    b.type = "button";
+    b.addEventListener("click", retry);
+    d.appendChild(b);
+  }
+  return d;
+}
+function kbSkeleton(box, n) {
+  box.textContent = "";
+  box.removeAttribute("role");
+  box.setAttribute("aria-busy", "true");
+  for (let i = 0; i < n; i++) box.appendChild(kbEl("div", "kb-skel"));
+}
+function kbStatus(msg, cls) {
+  const st = $("#kb-status");
+  st.textContent = msg || "";
+  st.className = "settings-status kb-status" + (cls ? " " + cls : "");
+}
+
+function setupKbTab() {
+  const ui = kbUI();
+  if (ui.setup) return;
+  ui.setup = true;
+  $("#kb-refresh").addEventListener("click", () => kbLoad(false));
+  $("#kb-search").addEventListener("submit", e => { e.preventDefault(); kbSearch(); });
+  /* The field's clear (x) empties the results too. */
+  $("#kb-q").addEventListener("search", () => { if (!$("#kb-q").value.trim()) kbSearch(); });
+  const up = $("#kb-upload");
+  up.addEventListener("submit", e => { e.preventDefault(); kbUpload(); });
+  up.addEventListener("dragover", e => { e.preventDefault(); up.classList.add("drag"); });
+  up.addEventListener("dragleave", () => up.classList.remove("drag"));
+  up.addEventListener("drop", e => {
+    e.preventDefault(); up.classList.remove("drag");
+    if (e.dataTransfer && e.dataTransfer.files.length) { $("#kb-file").files = e.dataTransfer.files; kbStatus(""); }
+  });
+  $("#kb-file").addEventListener("change", () => kbStatus(""));
+  tabHooks.kb = { show() { kbLoad(false); } };
+  kbLoad(true);
+}
+
+async function kbLoad(first) {
+  const ui = kbUI(), seq = ++ui.seq, btn = $("#kb-refresh");
+  if (first) { kbSkeleton($("#kb-docs"), 3); kbSkeleton($("#kb-sources"), 1); }
+  btn.classList.add("busy");
+  let j = null, err = "";
+  try {
+    /* Only the first load may ask for a gateway token. */
+    const r = await gwFetch("/v1/kb", first ? {} : { noPrompt: true });
+    if (!r.ok) err = "Couldn't load the knowledge base (HTTP " + r.status + ").";
+    else j = await r.json();
+  } catch { err = "Couldn't reach the gateway to load the knowledge base."; }
+  if (seq !== ui.seq) return;
+  btn.classList.remove("busy");
+  for (const id of ["#kb-docs", "#kb-sources"]) $(id).removeAttribute("aria-busy");
+  if (err) kbRenderDown(err); else kbRender(j || {});
+}
+
+function kbRenderDown(msg) {
+  $("#kb-strip").hidden = true;
+  for (const id of ["#kb-docs-n", "#kb-sources-n"]) $(id).textContent = "";
+  $("#kb-docs-foot").hidden = true;
+  const docs = $("#kb-docs"), src = $("#kb-sources");
+  docs.textContent = ""; docs.removeAttribute("role");
+  docs.appendChild(kbMsg(msg, () => kbLoad(false)));
+  src.textContent = ""; src.removeAttribute("role");
+  src.appendChild(kbMsg("Not loaded.", null, false));
+}
+
+function kbRender(j) {
+  const ui = kbUI(), st = j.stats || {};
+  const sources = Array.isArray(j.sources) ? j.sources : [];
+  const docs = Array.isArray(j.documents) ? j.documents : [];
+  ui.rootOf = new Map(docs.map(d => [String(d.path || ""), String(d.root || "")]));
+  ui.docs = docs.map(d => ({ path: String(d.path || ""), root: String(d.root || ""),
+                             rel: kbRel(d.path, d.root), chunks: Number(d.chunks) || 0, mtime: Number(d.mtime) || 0 }));
+  ui.docs.sort((a, b) => a.rel.localeCompare(b.rel, undefined, { numeric: true, sensitivity: "base" }));
+  const nFiles = Number(st.files) || 0;
+
+  /* The strip: only what GET /v1/kb counts. */
+  $("#kb-strip").hidden = !nFiles && !sources.length;
+  $("#kb-stat-docs").textContent = fmtInt(nFiles);
+  $("#kb-stat-chunks").textContent = fmtInt(Number(st.chunks) || 0);
+  $("#kb-stat-sources").textContent = fmtInt(Number(st.sources) || 0);
+  const mode = $("#kb-stat-mode");
+  mode.textContent = st.vector_ready ? "Hybrid" : "Keyword";
+  mode.parentElement.title = st.vector_ready
+    ? "Keyword (BM25) and vector search, fused: the local embedder is provisioned and vector_search_enabled is on."
+    : "Keyword (BM25) search. Provision the local embedder and turn on vector_search_enabled for hybrid search.";
+
+  /* Documents. */
+  const box = $("#kb-docs");
+  box.textContent = "";
+  $("#kb-docs-n").textContent = nFiles ? fmtInt(nFiles) : "";
+  if (!ui.docs.length) {
+    box.removeAttribute("role");
+    box.appendChild(kbState("kb-book", "No documents yet",
+      ["Upload a file above, or run ", kbEl("code", null, "pasclaw kb add <folder>"),
+       " to index a folder where it is. The agent can search whatever is indexed here."]));
+  } else {
+    box.setAttribute("role", "list");
+    for (const d of ui.docs) box.appendChild(kbDocRow(d, !!ui.fresh && kbIsUploads(d.root) && d.rel === ui.fresh));
+  }
+  ui.fresh = "";
+  const foot = $("#kb-docs-foot");
+  foot.hidden = !(ui.docs.length && nFiles > ui.docs.length);
+  foot.textContent = foot.hidden ? "" : "Showing the first " + fmtInt(ui.docs.length) + " of " + fmtInt(nFiles) + " documents, by path.";
+
+  /* Sources. */
+  const sbox = $("#kb-sources");
+  sbox.textContent = "";
+  $("#kb-sources-n").textContent = sources.length ? fmtInt(sources.length) : "";
+  if (!sources.length) {
+    sbox.removeAttribute("role");
+    sbox.appendChild(kbMsg("None yet. The first upload adds workspace/kb-files.", null, false));
+  } else {
+    sbox.setAttribute("role", "list");
+    for (const s of sources) sbox.appendChild(kbSourceRow(s));
+  }
+}
+
+function kbChunks(n) { return n === 1 ? "1 chunk" : fmtInt(n) + " chunks"; }
+
+function kbDocRow(d, fresh) {
+  const row = kbEl("div", "kb-doc" + (fresh ? " new" : ""));
+  row.setAttribute("role", "listitem");
+  const main = kbEl("div", "kb-doc-main");
+  const name = kbEl("span", "kb-name", d.rel);
+  name.title = d.path;
+  const where = kbEl("span", "kb-path", kbRootLabel(d.root));
+  where.title = d.root;
+  main.append(name, where);
+  row.append(kbIcon("file"), main, kbEl("span", "kb-tag", kbChunks(d.chunks)), kbTime(d.mtime, "Modified"));
+  return row;
+}
+
+function kbSourceRow(s) {
+  const row = kbEl("div", "kb-src");
+  row.setAttribute("role", "listitem");
+  const main = kbEl("div", "kb-src-main");
+  const f = Number(s.files) || 0, added = Number(s.added_at) || 0;
+  main.append(kbEl("code", null, String(s.root || "")),
+              kbEl("span", null, (f === 1 ? "1 document" : fmtInt(f) + " documents") + " · " + kbChunks(Number(s.chunks) || 0)));
+  const t = kbTime(added, "Added");
+  if (added > 0) t.textContent = "Added " + t.textContent;
+  row.append(kbIcon("files-folder"), main, t);
+  return row;
+}
+
+/* The snippet as text, with each «match» in a <mark>. */
+function kbSnippet(text) {
+  const p = kbEl("p", "kb-snip");
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  const re = /«([^«»]*)»/g;
+  let at = 0, m;
+  while ((m = re.exec(s))) {
+    if (m.index > at) p.appendChild(document.createTextNode(s.slice(at, m.index)));
+    p.appendChild(kbEl("mark", null, m[1]));
+    at = re.lastIndex;
+  }
+  if (at < s.length) p.appendChild(document.createTextNode(s.slice(at)));
+  return p;
+}
+
+async function kbSearch() {
+  const ui = kbUI(), term = $("#kb-q").value.trim(), box = $("#kb-results"), n = $("#kb-results-n");
+  const seq = ++ui.qseq, btn = $("#kb-search-btn");
+  n.textContent = "";
+  if (!term) { box.textContent = ""; box.classList.remove("kb-list"); box.removeAttribute("role"); btn.disabled = false; return; }
+  box.classList.add("kb-list");
+  kbSkeleton(box, 3);
+  btn.disabled = true;
+  let j = {}, err = "";
+  try {
+    const r = await gwFetch("/v1/kb/search?q=" + encodeURIComponent(term), { noPrompt: true });
+    j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) err = String(j.error || ("HTTP " + r.status));
+  } catch { err = "couldn't reach the gateway"; }
+  if (seq !== ui.qseq) return;
+  btn.disabled = false;
+  box.removeAttribute("aria-busy");
+  box.textContent = "";
+  if (err) { box.appendChild(kbMsg("Search failed: " + err, () => kbSearch())); return; }
+  const hits = Array.isArray(j.hits) ? j.hits : [];
+  if (!hits.length) {
+    box.appendChild(ui.docs.length
+      ? kbState("search", "No matches for “" + term + "”", "Try fewer words, or a word the documents use.")
+      : kbState("search", "Nothing to search yet", "Upload a document below, or index a folder, then search it here."));
+    return;
+  }
+  n.textContent = hits.length === 1 ? "1 result" : fmtInt(hits.length) + " results";
+  box.setAttribute("role", "list");
+  const best = Math.max(...hits.map(h => Math.abs(Number(h.score) || 0)));
+  hits.forEach((h, i) => box.appendChild(kbHitRow(h, i, best)));
+}
+
+/* A hit: its rank, the document (relative to its source when the list has
+   it), the chunk, the score as a share of the best hit's (BM25 scores are
+   negative and RRF ones positive, so the magnitude is compared), the
+   folder, then the snippet. */
+function kbHitRow(h, i, best) {
+  const ui = kbUI(), path = String(h.path || ""), root = ui.rootOf.get(path) || "";
+  const row = kbEl("div", "kb-hit");
+  row.setAttribute("role", "listitem");
+  const main = kbEl("div", "kb-hit-main"), l1 = kbEl("div", "kb-hit-l1");
+  const name = kbEl("span", "kb-name", root ? kbRel(path, root) : kbBase(path));
+  name.title = path;
+  const chunk = Number(h.chunk) || 0;
+  const ch = kbEl("span", "kb-tag plain", "chunk " + (chunk + 1));
+  ch.title = "Chunk #c" + chunk + " of this document";
+  l1.append(name, ch);
+  if (typeof h.score === "number" && best > 0) {
+    const pct = Math.round(Math.abs(h.score) / best * 100);
+    const sc = kbEl("span", "kb-score");
+    sc.title = "Score " + h.score.toPrecision(3) + ": " + pct + "% of the best match's";
+    const meter = kbEl("span", "kb-meter"), fill = kbEl("i");
+    fill.style.width = Math.max(4, pct) + "%";
+    meter.appendChild(fill);
+    sc.append(meter, kbEl("span", null, pct + "%"));
+    l1.appendChild(sc);
+  }
+  const where = kbEl("span", "kb-path", root ? kbRootLabel(root) : kbDir(path));
+  where.title = path;
+  main.append(l1, where, kbSnippet(h.snippet));
+  row.append(kbEl("span", "kb-rank", String(i + 1)), main);
+  return row;
+}
+
+async function kbUpload() {
+  const ui = kbUI(), input = $("#kb-file"), f = input.files && input.files[0];
+  if (!f) { kbStatus("Choose a file first.", "err"); return; }
+  if (f.size > 30 * 1024 * 1024) { kbStatus("“" + f.name + "” is over the 30 MB limit.", "err"); return; }
+  /* A name already in workspace/kb-files is overwritten: ask first. */
+  if (ui.docs.some(d => kbIsUploads(d.root) && d.rel === f.name) &&
+      !confirm("Replace “" + f.name + "” in the knowledge base?\n\nThe uploaded copy in workspace/kb-files is overwritten and indexed again.")) {
+    kbStatus("Not uploaded: “" + f.name + "” is unchanged.");
+    return;
+  }
+  const isPdf = /\.pdf$/i.test(f.name), btn = $("#kb-upload-btn");
+  kbStatus("Reading " + f.name + "…");
+  let payload;
+  try {
+    if (isPdf) {
+      /* PDFs are binary; await f.text() would mangle them. Read as an
+         ArrayBuffer and base64-encode for JSON transport; the server
+         decodes content_b64 and writes the raw bytes. */
+      const u8 = new Uint8Array(await f.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+      payload = { name: f.name, content_b64: btoa(bin) };
+    } else {
+      payload = { name: f.name, content: await f.text() };
+    }
+  } catch (e) { kbStatus("Couldn't read the file: " + e, "err"); return; }
+  kbStatus("Uploading and indexing " + f.name + "…");
+  btn.disabled = true;
+  try {
+    const r = await gwFetch("/v1/kb/upload", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.uploaded) {
+      kbStatus("Indexed " + j.uploaded + " (" + kbChunks(Number(j.indexed_chunks) || 0) + ").", "ok");
+      input.value = "";
+      ui.fresh = String(j.uploaded);
+      await kbLoad(false);
+    } else kbStatus("Upload failed: " + (j.error || ("HTTP " + r.status)), "err");
+  } catch (e) { kbStatus("Upload failed: " + e, "err"); }
+  finally { btn.disabled = false; }
+}
 
 /* ===== MCP tab implementation =====
    tabLoaders.mcp runs setupMcpTab once; after that tabHooks.mcp reloads on
