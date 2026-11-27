@@ -114,6 +114,8 @@ pasclaw config path   # print the resolved path
 pasclaw config reset  # write a default config
 ```
 
+The web UI's **Settings** tab (`pasclaw gateway`, `pasclaw serve`) edits the same file as a form, with each setting's key shown beside it; see [Gateway → Embedded web UI](./gateway.md#embedded-web-ui).
+
 ## `${VAR_NAME}` environment-variable substitution
 
 `config.json` string values can reference environment variables with the openclaw `${VAR_NAME}` syntax. At `LoadConfig` time PasClaw resolves every marker in the raw JSON body before parsing, so the rest of the codebase sees the substituted value.

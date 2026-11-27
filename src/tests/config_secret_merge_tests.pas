@@ -33,9 +33,9 @@ begin
   if Got <> Want then Fail_(Msg + ' (got "' + Got + '", want "' + Want + '")');
 end;
 
-{ Pull providers[name].api_key (or mcp_servers[name].env) out of a config
-  JSON string for assertions. }
-function ArrField(const Json, ArrKey, Name, Field: string): string;
+{ Pull <ArrKey>[KeyField = Key].Field out of a config JSON string for
+  assertions (crons are keyed by id, every other list by name). }
+function ArrFieldBy(const Json, ArrKey, KeyField, Key, Field: string): string;
 var
   Root: TJsonObject;
   Arr: TJsonArray;
@@ -54,7 +54,7 @@ begin
         It := Arr.ItemObject(i);
         if It = nil then Continue;
         try
-          if It.GetStr('name', '') = Name then Exit(It.GetStr(Field, ''));
+          if It.GetStr(KeyField, '') = Key then Exit(It.GetStr(Field, ''));
         finally
           It.Free;
         end;
@@ -63,6 +63,35 @@ begin
       Arr.Free;
     end;
   finally
+    Root.Free;
+  end;
+end;
+
+{ Pull providers[name].api_key (or mcp_servers[name].env) out of a config
+  JSON string for assertions. }
+function ArrField(const Json, ArrKey, Name, Field: string): string;
+begin
+  Result := ArrFieldBy(Json, ArrKey, 'name', Name, Field);
+end;
+
+{ diagnostics.otel.headers[Name], or '' when any level is missing. }
+function OtelHeader(const Json, Name: string): string;
+var
+  Root, D, O, H: TJsonObject;
+begin
+  Result := '';
+  Root := TJsonObject.Parse(Json);
+  if Root = nil then Exit;
+  D := nil; O := nil; H := nil;
+  try
+    D := Root.ChildObject('diagnostics');
+    if D <> nil then O := D.ChildObject('otel');
+    if O <> nil then H := O.ChildObject('headers');
+    if H <> nil then Result := H.GetStr(Name, '');
+  finally
+    if H <> nil then H.Free;
+    if O <> nil then O.Free;
+    if D <> nil then D.Free;
     Root.Free;
   end;
 end;
@@ -145,6 +174,42 @@ begin
   Merged := RestoreMaskedConfigSecrets(Edited, Current);
   AssertEqS(ArrField(Merged, 'providers', 'ghost', 'api_key'), '',
             'placeholder with no server match clears rather than leaking');
+
+  { Channel targets (by name), cron channel targets (by id) and OTel
+    header values (by header name) are masked on read too, so they must
+    come back on write -- before this, an untouched Settings save wrote
+    the placeholder itself into config.json. }
+  Current :=
+    '{"channels":[{"name":"ops","kind":"discord","target":"https://hook/ops"},' +
+                 '{"name":"dev","kind":"slack","target":"https://hook/dev"}],' +
+    '"crons":[{"id":"daily","spec":"0 9 * * *","channel_target":"https://hook/cron"}],' +
+    '"diagnostics":{"otel":{"enabled":true,"headers":{"Authorization":"Bearer OT",' +
+                                                     '"x-team":"TEAM"}}}}';
+  Edited :=
+    '{"channels":[{"name":"dev","kind":"slack","target":"' + M + '"},' +
+                 '{"name":"ops","kind":"discord","target":"https://hook/new"}],' +
+    '"crons":[{"id":"daily","spec":"0 8 * * *","channel_target":"' + M + '"}],' +
+    '"diagnostics":{"otel":{"enabled":true,"headers":{"Authorization":"' + M + '",' +
+                                                     '"x-team":"NEW-TEAM",' +
+                                                     '"x-ghost":"' + M + '"}}}}';
+  Merged := RestoreMaskedConfigSecrets(Edited, Current);
+  AssertEqS(ArrField(Merged, 'channels', 'dev', 'target'), 'https://hook/dev',
+            'masked channel target restored by name despite reorder');
+  AssertEqS(ArrField(Merged, 'channels', 'ops', 'target'), 'https://hook/new',
+            'a new channel target is kept');
+  AssertEqS(ArrFieldBy(Merged, 'crons', 'id', 'daily', 'channel_target'), 'https://hook/cron',
+            'masked cron channel_target restored by id');
+  AssertEqS(OtelHeader(Merged, 'Authorization'), 'Bearer OT',
+            'masked OTel header restored by header name');
+  AssertEqS(OtelHeader(Merged, 'x-team'), 'NEW-TEAM', 'a new OTel header value is kept');
+  AssertEqS(OtelHeader(Merged, 'x-ghost'), '',
+            'a masked OTel header with no server match clears');
+
+  { And the read side masks what the write side restores. }
+  Merged := MaskConfigSecretsJSON(Current);
+  AssertEqS(OtelHeader(Merged, 'Authorization'), M, 'OTel header value masked on read');
+  AssertEqS(ArrField(Merged, 'channels', 'ops', 'target'), M, 'channel target masked on read');
+  if Pos('Bearer OT', Merged) > 0 then Fail_('masked config still carries the OTel header value');
 
   WriteLn('config_secret_merge_tests: OK');
 end.

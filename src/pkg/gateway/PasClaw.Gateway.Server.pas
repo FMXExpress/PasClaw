@@ -368,7 +368,16 @@ type
     procedure HandleMemoryFactDelete(const IdStr: string;
                                 AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryFactsExport(AResp: TIdHTTPResponseInfo);
-    procedure HandleConfig(AResp: TIdHTTPResponseInfo);
+    { GET /v1/config -- the running config, secrets masked. With
+      ?source=file, config.json as saved instead (also masked): what the
+      web UI's Settings editor edits, so a change saved earlier and still
+      waiting for a restart is shown, and kept by the next save. }
+    procedure HandleConfig(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+    { config.json as TConfig reads it (env markers resolved, no profile
+      layer), re-serialised; Fallback when the file is missing or does not
+      parse. The base the PUT merges secrets against, and the ?source=file
+      view of GET. }
+    function SavedConfigJSON(const Fallback: string): string;
     { PUT /v1/config -- persist an edited config from the web UI. Secrets
       sent back as the mask placeholder are preserved from the current
       config (client can set keys, never view them). Writes config.json;
@@ -2211,7 +2220,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory')  then HandleMemoryList(AResponse)
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 11) = '/v1/memory/') then
       HandleMemoryRead(Doc, ARequest, AResponse)
-    else if (ARequest.Command = 'GET')  and (Doc = '/v1/config')  then HandleConfig(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/config')  then HandleConfig(ARequest, AResponse)
     else if (ARequest.Command = 'PUT')  and (Doc = '/v1/config')  then HandleConfigWrite(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/stats')   then HandleStats(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/stats/reset') then HandleStatsReset(AResponse)
@@ -3763,7 +3772,28 @@ begin
   WriteBodyStream(AResp, FactsToMarkdown(Facts, Today));
 end;
 
-procedure TGatewayServer.HandleConfig(AResp: TIdHTTPResponseInfo);
+function TGatewayServer.SavedConfigJSON(const Fallback: string): string;
+var
+  Cur: TConfig;
+  Path: string;
+begin
+  Result := Fallback;
+  Path := GetConfigPath;
+  if not FileExists(Path) then Exit;
+  Cur := TConfig.Create;
+  try
+    try
+      Cur.FromJSON(ExpandEnvVarsInJSON(ReadFileText(Path)));
+      Result := Cur.ToJSON;
+    except
+      on E: Exception do Result := Fallback;
+    end;
+  finally
+    Cur.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleConfig(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
 var
   Body, Masked: string;
 begin
@@ -3784,6 +3814,12 @@ begin
   finally
     FApplyLock.Release;
   end;
+  { ?source=file: the saved file, not the running copy. A save of anything
+    but the provider block only reaches FCfg at the next restart, so an
+    editor that loaded the running copy would show the old value after a
+    reload -- and its next save would quietly put the old value back. }
+  if SameText(Trim(ARequest.Params.Values['source']), 'file') then
+    Body := SavedConfigJSON(Body);
   { The masking itself lives in PasClaw.Config.MaskConfigSecretsJSON so
     `pasclaw backup`'s config.redacted.json and this endpoint can never
     disagree about what counts as a secret (providers[].api_key,
@@ -3801,8 +3837,8 @@ end;
 procedure TGatewayServer.HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
                                            AResp: TIdHTTPResponseInfo);
 var
-  Body, Merged, BaseJSON, Path: string;
-  Tmp, Cur: TConfig;
+  Body, Merged, BaseJSON: string;
+  Tmp: TConfig;
   Applied: Boolean;
 begin
   Applied := False;
@@ -3820,22 +3856,7 @@ begin
     config.json directly (resolving env-var markers the same way
     LoadConfig does) without LoadConfig's process-global side effects.
     Fall back to FCfg when the file is missing/unreadable. }
-  BaseJSON := FCfg.ToJSON;
-  Path := GetConfigPath;
-  if FileExists(Path) then
-  begin
-    Cur := TConfig.Create;
-    try
-      try
-        Cur.FromJSON(ExpandEnvVarsInJSON(ReadFileText(Path)));
-        BaseJSON := Cur.ToJSON;
-      except
-        on E: Exception do { keep the FCfg fallback } ;
-      end;
-    finally
-      Cur.Free;
-    end;
-  end;
+  BaseJSON := SavedConfigJSON(FCfg.ToJSON);
   { Restore masked secrets from the base config so a client that never
     saw the real api_key / env / token values can't blank them by sending
     the mask back. Raises EArgumentException on unparseable JSON. }

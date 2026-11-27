@@ -33,6 +33,8 @@ Off by default. Two ways to enable:
 
 Env values win over config when both are set.
 
+The `headers` values usually carry the collector's key, so `GET /v1/config` and a redacted backup mask them as `•••`, and a save that sends `•••` back keeps the saved value, as for the other secrets.
+
 ### Span shape
 
 ```
