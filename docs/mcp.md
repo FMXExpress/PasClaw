@@ -7,6 +7,8 @@ Both transports supported on the client side:
 - **Stdio MCP** — spawned subprocess + JSON-RPC over pipes. Format `pasclaw mcp add foo npx -y @org/server-foo arg1 arg2`.
 - **Streamable HTTP MCP** — handles SSE-framed responses, Bearer-token auth. Format `pasclaw mcp add bar https://example.com/mcp`.
 
+Both speak MCP 2026-07-28 and fall back to the `initialize` handshake for older servers; see [Protocol versions](#protocol-versions).
+
 A command starting with `http://` or `https://` is dispatched to the HTTP client; everything else is spawned.
 
 ## Commands
@@ -16,7 +18,7 @@ pasclaw mcp list
 pasclaw mcp add filesystem npx -y @modelcontextprotocol/server-filesystem /tmp
 pasclaw mcp add remote https://example.com/mcp
 pasclaw mcp show filesystem
-pasclaw mcp test filesystem          # round-trip an initialize + list_tools
+pasclaw mcp test filesystem          # negotiate the protocol version + list_tools
 pasclaw mcp remove filesystem
 pasclaw mcp edit                     # open mcp_servers in $EDITOR
 pasclaw mcp catalog                  # list curated public MCP servers
@@ -42,6 +44,63 @@ pasclaw mcp install <slug>           # install from hub OR bundled catalog
 ```
 
 `env` is `KEY=VALUE` pairs separated by `;`. For the HTTP transport, `Authorization` is read here and written as a request header on every call.
+
+## Protocol versions
+
+The client speaks MCP **2026-07-28** (the stateless revision) and the handshake revisions before it, and works out which one each server speaks when it connects:
+
+1. It sends `server/discover` declaring `2026-07-28` in `_meta`. A server that answers with `supportedVersions` containing `2026-07-28` is **modern**: there is no `initialize` and no session, and every request carries `_meta` with `io.modelcontextprotocol/protocolVersion`, `io.modelcontextprotocol/clientInfo` (`pasclaw` and its version) and `io.modelcontextprotocol/clientCapabilities`. A result without `resultType` counts as complete.
+2. Anything else means a **legacy** server: an error (method not found, an HTTP 4xx whose body is not a modern MCP error), or no answer within 5 seconds (less when the connect budget is shorter). PasClaw then sends `initialize` offering **2025-11-25**, the newest handshake revision it speaks in full, and uses whatever version the server answers (2024-11-05, 2025-03-26, 2025-06-18 and 2025-11-25 servers all connect).
+3. `UnsupportedProtocolVersionError` (-32022) means a modern server that does not speak 2026-07-28: `initialize` offers the newest revision from the error's `supported` list that PasClaw knows. With none in common the connect fails and says which versions the server supports.
+
+A stdio server that exits when it gets a request before `initialize` is started again for the handshake. If the probe timed out and `initialize` then fails, the server is asked again, in case it was a modern server that was still starting.
+
+The result is recorded per server and shown where server status is shown:
+
+- `pasclaw mcp test <name>` prints `protocol: 2026-07-28 (stateless, via server/discover)` or `protocol: 2025-06-18 (handshake, via initialize (probe: ...))`.
+- The gateway's `GET /v1/mcp` gives each connected server `state` (`connecting` / `ready` / `failed`), `protocol_version`, `negotiation`, `server_name`, `server_version` and, on failure, `error`. The web UI's **MCP** tab shows the state and the version (hover for how it was settled).
+- The live connect is logged: `mcp[name] live connect OK (12 tools, MCP 2026-07-28 via server/discover)`.
+
+Over **Streamable HTTP** a modern request also carries `MCP-Protocol-Version: 2026-07-28`, `Mcp-Method`, and `Mcp-Name` (the tool name for `tools/call`, the `taskId` for `tasks/*`), with the `=?base64?...?=` form for values that are not plain ASCII. Arguments whose schema property has `x-mcp-header` are mirrored into `Mcp-Param-<Name>` headers; a tool whose `x-mcp-header` annotations break the spec's rules is left out of `tools/list` with a warning, and a `HeaderMismatch` error re-reads the tool list and retries once. No `Mcp-Session-Id` is sent. A legacy HTTP server gets the old shape: `Mcp-Session-Id` echoed back, and from 2025-06-18 on the negotiated `MCP-Protocol-Version`. Both eras send one `Accept: application/json, text/event-stream`, and an SSE reply's notifications are skipped to find the response to the request.
+
+`tools/list` follows `nextCursor` pages. `ping` is never sent (2026-07-28 removed it). Sampling, roots and logging are deprecated in 2026-07-28 and are not offered.
+
+## Elicitation (a server asking the user)
+
+A server can ask the user to fill in a form (form mode) or to go to a URL (URL mode). On a modern server the request comes back from `tools/call` as `resultType: "input_required"` with `inputRequests`; PasClaw answers each one and calls the tool again with `inputResponses` and the server's `requestState` echoed unchanged, under a new request id, for at most 8 rounds. A legacy server sends its own `elicitation/create` request while the call is in flight (over stdio); a 2025-11-25 server's `URLElicitationRequiredError` (-32042) is handled too: the URLs are shown, and the call is retried once after the user is done.
+
+Who answers depends on where the tool call came from:
+
+| Context | Form mode | URL mode | Capability declared |
+| --- | --- | --- | --- |
+| `pasclaw agent` (interactive REPL) | one prompt per field, typed per the schema (text, integer, number, yes/no, a choice by value, title or number, a comma-separated multi-select), with defaults, required fields re-asked, then a review: send / edit / decline / cancel | the full URL and its host are shown, with a warning for a punycode host; PasClaw does not open or fetch it; the user opens it and answers done / decline / cancel | `form` and `url` |
+| `pasclaw tui` (FPC line REPL) | the same | the same | `form` and `url` |
+| `pasclaw tui` (Delphi full-screen TUI), gateway, web UI, `pasclaw agent -m` one-shot, subagents, ACP, workflows | declined | declined | none |
+
+At a form prompt, Enter keeps the default or skips an optional field, and `/decline` or `/cancel` stops. Prompts are taken one at a time, like permission asks.
+
+Where nobody can answer, no elicitation capability is declared, so a modern server should not ask; if it needs to, it answers `MissingRequiredClientCapability` and the model is told the tool needs an interactive session. If a server asks anyway, the request is declined, a modern call is not retried, and the tool result tells the model what was asked: the message and field names for a form, and for URL mode the URL itself, to hand to the user with a note to call the tool again once they have finished. A legacy server's `elicitation/create` is answered `decline` and the same note is added to the tool result.
+
+Over HTTP, legacy elicitation is not supported: a legacy server sends `elicitation/create` inside the SSE response and waits for a separate POST, and PasClaw's HTTP layer reads a response whole, so it could not answer in time. PasClaw therefore declares no elicitation on legacy HTTP connections. Modern elicitation arrives in the result itself and works over HTTP as over stdio.
+
+Frontends set the handler through `TToolLoopConfig.Elicitor` (a `TMCPElicitationHandler` from `PasClaw.MCP.Elicit`), which the tool loop publishes on whichever thread dispatches the call. `SetMCPProcessElicitationHandler` decides what a legacy `initialize` declares, since that handshake happens once, before any tool loop.
+
+## Tasks
+
+PasClaw declares the tasks extension (`io.modelcontextprotocol/tasks`) on every modern request. When `tools/call` returns a task handle (`resultType: "task"`) instead of a result, PasClaw polls `tasks/get` at the server's `pollIntervalMs` (default 1 s, kept between 10 ms and 30 s) until the task is `completed` (its `result` is the tool result), `failed` (its error is the tool error) or `cancelled`. Polling stays within the tool call's timeout (30 s on stdio, 60 s on HTTP) and the task's `ttlMs`; a task still running when the time is up is cancelled with `tasks/cancel` and the model is told so. When a task asks for input (`input_required`), each new `inputRequests` key goes through the elicitation handler above and the answers go back with `tasks/update`; keys already answered are not asked again. Where nobody can answer, the task is told `decline` (so it is not left waiting) and the note is added to the result.
+
+## Authorization (OAuth)
+
+`pasclaw mcp auth <name>` runs OAuth 2.1 with PKCE against the authorization server the MCP server names. Following MCP 2026-07-28:
+
+- **Issuer check (RFC 9207).** The issuer from the authorization server's metadata is recorded with the state and PKCE verifier. A redirect that carries `iss` must name that issuer exactly (no case folding, port or trailing-slash normalisation), or it is refused before the code is used, and its error text is neither shown nor acted on. When the metadata says `authorization_response_iss_parameter_supported`, a redirect without `iss` is refused too.
+- **Client ID Metadata Documents.** When the authorization server advertises `client_id_metadata_document_supported` and `mcp_oauth_client_metadata_url` is set, that HTTPS URL is the `client_id` and nothing is registered. PasClaw hosts no such document, so the key has no default; the document you host must list `http://127.0.0.1/cb` in `redirect_uris` (PasClaw listens on a free loopback port, and authorization servers accept any port on a loopback redirect).
+- **Dynamic Client Registration** (deprecated in 2026-07-28, used when CIMD is not available) registers a public client with `application_type: "native"`, so an OpenID Connect server does not apply web-app redirect rules to the loopback redirect.
+- **Credentials bound to the issuer.** The registration is stored in `<home>/oauth/<name>.json` with the issuer that made it and its redirect URI. The next `mcp auth` reuses it only with the same issuer, listening on the same redirect port again; if the protected resource now names another authorization server, the old client is not used and a new one is registered. A refresh is refused when the stored client belongs to a different issuer than the tokens. A reused registration the server rejects (`invalid_client`) is dropped, so the next run registers afresh.
+
+## Skills over MCP
+
+Not implemented. A written specification exists (SEP-2640, `io.modelcontextprotocol/skills`: `skills/list`, `skills/get`, skill files through `resources/read`), but its full text is still labelled beta in the ext-skills repository, and it asks the host for a loading path with per-skill approval, digest and size checks against a manifest, and an origin-tagged cache. PasClaw's MCP client reads no resources today, so this is left for a separate change.
 
 ## Tool bridging
 

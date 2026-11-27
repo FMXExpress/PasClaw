@@ -142,21 +142,84 @@ begin
   if (Pos <= Length(S)) and (S[Pos] = '.') then Inc(Pos);
 end;
 
+{ The dotted number at the front of a version, and what follows it:
+  v0.1.5-36-g4f611ca -> '0.1.5' + '-36-g4f611ca'. }
+procedure SplitVersion(const V: string; out Core, Suffix: string);
+var
+  S: string;
+  i: Integer;
+begin
+  S := NormalizeVersion(V);
+  i := 1;
+  while (i <= Length(S)) and (((S[i] >= '0') and (S[i] <= '9')) or (S[i] = '.')) do
+    Inc(i);
+  Core   := Copy(S, 1, i - 1);
+  Suffix := Copy(S, i, MaxInt);
+end;
+
+{ `git describe` past a tag: -<commits>-g<hash>, maybe -dirty after it.
+  Commits is how far past the tag; -1 when Suffix is not that shape. }
+function GitDescribeCommits(const Suffix: string): Integer;
+var
+  i, Start: Integer;
+  Rest: string;
+begin
+  Result := -1;
+  if (Length(Suffix) < 4) or (Suffix[1] <> '-') then Exit;
+  i := 2;
+  Start := i;
+  while (i <= Length(Suffix)) and (Suffix[i] >= '0') and (Suffix[i] <= '9') do Inc(i);
+  if (i = Start) or (i + 1 > Length(Suffix)) or (Suffix[i] <> '-') or (Suffix[i + 1] <> 'g') then Exit;
+  Inc(i, 2);
+  Start := i;
+  while (i <= Length(Suffix)) and
+        (((Suffix[i] >= '0') and (Suffix[i] <= '9')) or
+         ((Suffix[i] >= 'a') and (Suffix[i] <= 'f'))) do Inc(i);
+  if i = Start then Exit;
+  Rest := Copy(Suffix, i, MaxInt);
+  if (Rest <> '') and (Rest <> '-dirty') then Exit;
+  Result := StrToIntDef(Copy(Suffix, 2, Pos('-g', Suffix) - 2), -1);
+end;
+
+(* -1 when A is older than B, 0 the same, +1 newer. The dotted numbers
+   decide; with the same numbers, a `git describe` suffix is AFTER the
+   release (a dev build on top of v0.1.5 is up to date) and any other
+   suffix BEFORE it (v0.2.0-rc1 is older than v0.2.0).
+
+   The numbers used to be read straight off the whole string by ParseNum,
+   which stops at a character that is neither digit nor dot without moving
+   past it: from a dev build (v0.1.5-36-g4f611ca against the latest tag
+   v0.1.5) the loop below never ended, and `pasclaw update --check` spun at
+   full CPU. Reading only the dotted part, every character is consumed. *)
 function CompareVersions(const A, B: string): Integer;
 var
   Pa, Pb: Integer;
   Na, Nb: Integer;
-  Sa, Sb: string;
+  Ca, Cb, Xa, Xb: string;
+  Ga, Gb, Ra, Rb: Integer;
 begin
-  Sa := NormalizeVersion(A);
-  Sb := NormalizeVersion(B);
+  SplitVersion(A, Ca, Xa);
+  SplitVersion(B, Cb, Xb);
   Pa := 1; Pb := 1;
-  while (Pa <= Length(Sa)) or (Pb <= Length(Sb)) do
+  while (Pa <= Length(Ca)) or (Pb <= Length(Cb)) do
   begin
-    if Pa <= Length(Sa) then Na := ParseNum(Sa, Pa) else Na := 0;
-    if Pb <= Length(Sb) then Nb := ParseNum(Sb, Pb) else Nb := 0;
+    if Pa <= Length(Ca) then Na := ParseNum(Ca, Pa) else Na := 0;
+    if Pb <= Length(Cb) then Nb := ParseNum(Cb, Pb) else Nb := 0;
     if Na < Nb then Exit(-1);
     if Na > Nb then Exit( 1);
+  end;
+  if Xa = Xb then Exit(0);
+  { Rank: a pre-release below the release, a dev build above it. }
+  Ga := GitDescribeCommits(Xa);
+  Gb := GitDescribeCommits(Xb);
+  if Xa = '' then Ra := 0 else if Ga >= 0 then Ra := 1 else Ra := -1;
+  if Xb = '' then Rb := 0 else if Gb >= 0 then Rb := 1 else Rb := -1;
+  if Ra < Rb then Exit(-1);
+  if Ra > Rb then Exit( 1);
+  if (Ga >= 0) and (Gb >= 0) then
+  begin
+    if Ga < Gb then Exit(-1);
+    if Ga > Gb then Exit( 1);
   end;
   Result := 0;
 end;

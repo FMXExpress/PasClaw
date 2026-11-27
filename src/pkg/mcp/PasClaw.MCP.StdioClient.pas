@@ -1,18 +1,26 @@
 {
   PasClaw.MCP.StdioClient - spawns the configured MCP server command and
-  speaks JSON-RPC 2.0 over its stdin/stdout pipes. Mirrors a thin slice of
-  pkg/mcp/manager.go in picoclaw.
+  speaks JSON-RPC 2.0 over its stdin/stdout pipes. The protocol itself --
+  version negotiation, multi-round requests, tasks, elicitation -- lives in
+  PasClaw.MCP.Client; this unit is the pipe.
 
   Protocol flow:
     1. Spawn `cmd args...` with piped stdin/stdout.
-    2. Send `initialize` request, receive server capabilities.
-    3. Send `tools/list`, get the available tool descriptors.
-    4. Optionally `tools/call` to invoke one.
-    5. `shutdown` + close pipes; reap.
+    2. Probe with `server/discover` (2026-07-28). A modern server answers
+       it and every request carries _meta from then on; anything else
+       (an error, or silence within the probe timeout) means a legacy
+       server, which gets `initialize` + notifications/initialized.
+    3. `tools/list`, `tools/call` ...
+    4. Close: terminate the child.
 
   Message framing: one JSON object per line (LSP-style "Content-Length"
   headers are also valid but most MCP servers default to newline-delimited
   JSON, which is what we implement here).
+
+  While a request is in flight a legacy server may send a request of its
+  own (elicitation/create, ping); it is answered on the same pipe before
+  the wait goes on. A modern server must not send any, and a modern client
+  must not write responses, so in modern mode such a line is ignored.
 
   Process spawn is delegated to PasClaw.Platform.TStdioProcess, which
   provides bidirectional pipes on both FPC (via fcl-process) and Delphi
@@ -27,57 +35,60 @@ unit PasClaw.MCP.StdioClient;
 interface
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, SyncObjs,
   PasClaw.MCP.Types,
+  PasClaw.MCP.Client,
   PasClaw.Platform;
 
 type
-  TMCPStdioClient = class(TMCPBaseClient)
+  TMCPStdioClient = class(TMCPProtocolClient)
   private
     FProcess: TStdioProcess;
-    FCmd, FArgs, FName: string;
-    FNextId:  Integer;
+    FCmd, FArgs: string;
+    { One request on the pipe at a time: two threads interleaving writes
+      and reads on one stdout would take each other's responses. }
+    FIOLock:  TCriticalSection;
     { FBuffer is a UTF8String (1-byte-per-char in both FPC and Delphi) so
       byte-level accumulation from the child's stdout works regardless of
       whether `string` is AnsiString (FPC) or UnicodeString (Delphi). }
     FBuffer:  UTF8String;
     function  ReadLine(out Line: string; TimeoutMs: Integer): Boolean;
     function  WriteLine(const S: string): Boolean;
-    function  RoundTrip(const Method, ParamsJSON: string;
-                        TimeoutMs: Integer; out RespJSON: string): Boolean;
+  protected
+    function OpenTransport(TimeoutMs: Integer; out ErrMsg: string): Boolean; override;
+    function Exchange(const Method, ParamsJSON: string; Id, TimeoutMs: Integer;
+                      Modern: Boolean): TMCPWireReply; override;
+    procedure Notify(const Method, ParamsJSON: string); override;
+    function CanAnswerServerRequests: Boolean; override;
+    function TransportAlive: Boolean; override;
   public
     constructor Create(const Name, Cmd, Args: string);
     destructor  Destroy; override;
-
-    function Connect(TimeoutMs: Integer; out ErrMsg: string): Boolean; override;
-    function ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean; override;
-    function CallTool(const ToolName, ArgsJSON: string;
-                      out ResultText, ErrMsg: string): Boolean; override;
-    function CallToolStructured(const ToolName, ArgsJSON: string;
-                      out ResultText, ResultJSON, ErrMsg: string): Boolean; override;
     procedure Close;
   end;
 
 implementation
 
 uses
+  DateUtils,
   PasClaw.JSON,
-  PasClaw.Logger,
-  PasClaw.MCP.Result;
+  PasClaw.Logger;
 
 constructor TMCPStdioClient.Create(const Name, Cmd, Args: string);
 begin
-  inherited Create;
-  FName   := Name;
+  inherited Create(Name);
   FCmd    := Cmd;
   FArgs   := Args;
-  FNextId := 1;
   FBuffer := '';
+  FIOLock := TCriticalSection.Create;
+  FCallTimeoutMs := 30000;
+  FListTimeoutMs := 5000;
 end;
 
 destructor TMCPStdioClient.Destroy;
 begin
   Close;
+  FIOLock.Free;
   inherited Destroy;
 end;
 
@@ -180,57 +191,15 @@ begin
   end;
 end;
 
-function TMCPStdioClient.RoundTrip(const Method, ParamsJSON: string;
-                                   TimeoutMs: Integer;
-                                   out RespJSON: string): Boolean;
+function TMCPStdioClient.OpenTransport(TimeoutMs: Integer; out ErrMsg: string): Boolean;
 var
-  Id: Integer;
-  Req, RespObj: TJsonObject;
-  Line: string;
-begin
-  RespJSON := '';
-  Id := FNextId; Inc(FNextId);
-
-  Req := TJsonObject.Create;
-  try
-    Req.PutStr('jsonrpc', JSONRPCVersion);
-    Req.PutInt('id',      Id);
-    Req.PutStr('method',  Method);
-    if ParamsJSON <> '' then Req.PutRaw('params', ParamsJSON);
-    if not WriteLine(Req.ToJSON) then Exit(False);
-  finally
-    Req.Free;
-  end;
-
-  while ReadLine(Line, TimeoutMs) do
-  begin
-    Line := Trim(Line);
-    if Line = '' then Continue;
-    LogDebug('mcp[%s] <- %s', [FName, Copy(Line, 1, 200)]);
-    RespObj := TJsonObject.Parse(Line);
-    if RespObj = nil then Continue;
-    try
-      { Skip notifications (no id) and responses to other requests. }
-      if (not RespObj.Has('id')) or (RespObj.GetInt('id', -1) <> Id) then
-        Continue;
-      RespJSON := Line;
-      Exit(True);
-    finally
-      RespObj.Free;
-    end;
-  end;
-  Result := False;
-end;
-
-function TMCPStdioClient.Connect(TimeoutMs: Integer; out ErrMsg: string): Boolean;
-var
-  Params, Caps, ClientInfo, RespObj, ResultObj, Inner: TJsonObject;
-  Resp: string;
   ArgList: TStringList;
 begin
+  Result := False;
   ErrMsg := '';
-  if FCmd = '' then begin ErrMsg := 'no command configured'; Exit(False); end;
-
+  if FCmd = '' then begin ErrMsg := 'no command configured'; Exit; end;
+  Close;
+  FBuffer := '';
   FProcess := TStdioProcess.Create;
   ArgList := SplitArgs(FArgs);
   try
@@ -238,161 +207,127 @@ begin
     begin
       ErrMsg := 'failed to spawn ' + FCmd;
       FreeAndNil(FProcess);
-      Exit(False);
+      Exit;
     end;
   finally
     ArgList.Free;
   end;
+  Result := TimeoutMs >= 0;
+end;
 
-  { initialize }
-  Params := TJsonObject.Create;
-  try
-    Params.PutStr('protocolVersion', MCPProtocolVersion);
-    Caps := TJsonObject.Create;
-    Params.PutObject('capabilities', Caps);
-    ClientInfo := TJsonObject.Create;
-    ClientInfo.PutStr('name',    'pasclaw');
-    ClientInfo.PutStr('version', '0.1');
-    Params.PutObject('clientInfo', ClientInfo);
-    if not RoundTrip('initialize', Params.ToJSON, TimeoutMs, Resp) then
-    begin
-      ErrMsg := 'no response to initialize from ' + FCmd;
-      Exit(False);
-    end;
-  finally
-    Params.Free;
-  end;
-
-  { Parse server info & capabilities out of the response. }
-  RespObj := TJsonObject.Parse(Resp);
-  if RespObj = nil then begin ErrMsg := 'bad initialize response'; Exit(False); end;
-  try
-    if RespObj.Has('error') then
-    begin
-      ErrMsg := 'initialize error';
-      Exit(False);
-    end;
-    ResultObj := RespObj.ChildObject('result');
-    if ResultObj <> nil then
-    try
-      Inner := ResultObj.ChildObject('serverInfo');
-      if Inner <> nil then
-      try
-        FInfo.Name    := Inner.GetStr('name',    '');
-        FInfo.Version := Inner.GetStr('version', '');
-      finally
-        Inner.Free;
-      end;
-      Inner := ResultObj.ChildObject('capabilities');
-      if Inner <> nil then
-      try
-        FInfo.Caps.Tools     := Inner.Has('tools');
-        FInfo.Caps.Resources := Inner.Has('resources');
-        FInfo.Caps.Prompts   := Inner.Has('prompts');
-      finally
-        Inner.Free;
-      end;
-    finally
-      ResultObj.Free;
-    end;
-  finally
-    RespObj.Free;
-  end;
-
-  { Send "initialized" notification (no id, no response expected). }
-  WriteLine('{"jsonrpc":"2.0","method":"notifications/initialized"}');
+function TMCPStdioClient.CanAnswerServerRequests: Boolean;
+begin
   Result := True;
 end;
 
-function TMCPStdioClient.ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean;
-var
-  Resp: string;
-  Obj, ResultObj, ToolObj, Schema: TJsonObject;
-  Arr: TJsonArray;
-  i: Integer;
+function TMCPStdioClient.TransportAlive: Boolean;
 begin
-  ErrMsg := '';
-  SetLength(Tools, 0);
-  if not RoundTrip('tools/list', '{}', 5000, Resp) then
+  Result := (FProcess <> nil) and FProcess.Running;
+end;
+
+procedure TMCPStdioClient.Notify(const Method, ParamsJSON: string);
+var
+  N: TJsonObject;
+begin
+  N := TJsonObject.Create;
+  try
+    N.PutStr('jsonrpc', JSONRPCVersion);
+    N.PutStr('method', Method);
+    if ParamsJSON <> '' then N.PutRaw('params', ParamsJSON);
+    FIOLock.Acquire;
+    try
+      WriteLine(N.ToJSON);
+    finally
+      FIOLock.Release;
+    end;
+  finally
+    N.Free;
+  end;
+end;
+
+function TMCPStdioClient.Exchange(const Method, ParamsJSON: string; Id, TimeoutMs: Integer;
+                                  Modern: Boolean): TMCPWireReply;
+var
+  Req, Obj: TJsonObject;
+  Line, Answer: string;
+  Deadline: Int64;
+  Left: Integer;
+  IsRequest: Boolean;
+
+  function NowMs: Int64;
   begin
-    ErrMsg := 'no response to tools/list';
-    Exit(False);
+    Result := MilliSecondsBetween(Now, EncodeDate(2000, 1, 1));
   end;
-  Obj := TJsonObject.Parse(Resp);
-  if Obj = nil then Exit(False);
+
+begin
+  Result.Body := '';
+  Result.HttpStatus := 0;
+  Result.Err := '';
+  Result.TimedOut := False;
+  FIOLock.Acquire;
   try
-    if Obj.Has('error') then begin ErrMsg := 'tools/list error'; Exit(False); end;
-    ResultObj := Obj.ChildObject('result');
-    if ResultObj = nil then Exit(True);
+    Req := TJsonObject.Create;
     try
-      Arr := ResultObj.ChildArray('tools');
-      if Arr = nil then Exit(True);
-      try
-        SetLength(Tools, Arr.Count);
-        for i := 0 to Arr.Count - 1 do
-        begin
-          ToolObj := Arr.ItemObject(i);
-          if ToolObj = nil then Continue;
-          try
-            Tools[i].Name        := ToolObj.GetStr('name',        '');
-            Tools[i].Description := ToolObj.GetStr('description', '');
-            Schema := ToolObj.ChildObject('inputSchema');
-            if Schema <> nil then
-            try
-              Tools[i].Schema := Schema.ToJSON;
-            finally
-              Schema.Free;
-            end
-            else
-              Tools[i].Schema := '{"type":"object"}';
-            Tools[i].Server := FName;
-          finally
-            ToolObj.Free;
-          end;
-        end;
-      finally
-        Arr.Free;
+      Req.PutStr('jsonrpc', JSONRPCVersion);
+      Req.PutInt('id',      Id);
+      Req.PutStr('method',  Method);
+      if ParamsJSON <> '' then Req.PutRaw('params', ParamsJSON);
+      LogDebug('mcp[%s] -> %s', [FName, Copy(Req.ToJSON, 1, 300)]);
+      if not WriteLine(Req.ToJSON) then
+      begin
+        Result.Err := 'the server process is not running';
+        Exit;
       end;
     finally
-      ResultObj.Free;
+      Req.Free;
     end;
-  finally
-    Obj.Free;
-  end;
-  Result := True;
-end;
 
-function TMCPStdioClient.CallTool(const ToolName, ArgsJSON: string;
-                                  out ResultText, ErrMsg: string): Boolean;
-var
-  Dummy: string;
-begin
-  Result := CallToolStructured(ToolName, ArgsJSON, ResultText, Dummy, ErrMsg);
-end;
-
-function TMCPStdioClient.CallToolStructured(const ToolName, ArgsJSON: string;
-  out ResultText, ResultJSON, ErrMsg: string): Boolean;
-var
-  Params: TJsonObject;
-  Resp: string;
-begin
-  ResultText := '';
-  ResultJSON := '';
-  ErrMsg := '';
-  Params := TJsonObject.Create;
-  try
-    Params.PutStr('name', ToolName);
-    if ArgsJSON <> '' then Params.PutRaw('arguments', ArgsJSON)
-    else                    Params.PutRaw('arguments', '{}');
-    if not RoundTrip('tools/call', Params.ToJSON, 30000, Resp) then
+    Deadline := NowMs + TimeoutMs;
+    while True do
     begin
-      ErrMsg := 'no response to tools/call';
-      Exit(False);
+      Left := Integer(Deadline - NowMs);
+      if Left <= 0 then
+      begin
+        Result.TimedOut := True;
+        Exit;
+      end;
+      if not ReadLine(Line, Left) then
+      begin
+        if (FProcess = nil) or not FProcess.Running then
+          Result.Err := 'the server process exited'
+        else
+          Result.TimedOut := True;
+        Exit;
+      end;
+      Line := Trim(Line);
+      if Line = '' then Continue;
+      LogDebug('mcp[%s] <- %s', [FName, Copy(Line, 1, 300)]);
+      Obj := JsonTryParse(Line);
+      if Obj = nil then Continue;
+      try
+        IsRequest := Obj.Has('method') and Obj.Has('id');
+        if Obj.Has('method') and not IsRequest then Continue;   { a notification }
+        if IsRequest then
+        begin
+          { Legacy only: answer the server's request, then keep waiting --
+            the time the user spends answering is not the server's. }
+          if Modern then Continue;
+          Answer := AnswerServerRequest(Line);
+          if Answer <> '' then WriteLine(Answer);
+          Deadline := NowMs + TimeoutMs;
+          Continue;
+        end;
+        { Skip responses to other requests (a probe answered late). }
+        if Obj.GetInt('id', -1) <> Id then Continue;
+        Result.Body := Line;
+        Exit;
+      finally
+        Obj.Free;
+      end;
     end;
   finally
-    Params.Free;
+    FIOLock.Release;
   end;
-  Result := ParseToolCallResult(Resp, ResultText, ResultJSON, ErrMsg);
 end;
 
 end.

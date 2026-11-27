@@ -343,6 +343,7 @@ implementation
 
 uses
   PasClaw.Workspaces,
+  PasClaw.MCP.Elicit,              { ConsoleElicitationHandler -- MCP forms/URLs on the line REPL }
   Classes,
   DateUtils,
   PasClaw.CliUI,
@@ -372,6 +373,7 @@ uses
                                      `pasclaw init` on the CLI. }
   PasClaw.Markdown.Render,
   PasClaw.Providers.Catalog,       { TProviderSpec -- for TModelRefreshThread }
+  PasClaw.Agent.Advisor,           { /advisor -- the second model the agent consults }
   PasClaw.Agent.AutoRouter.Apply   { ApplyAutoRoute -- cheap per-turn routing.
                                      PasClaw.Config moved to the interface uses
                                      (TConfig is now referenced by the TTUI
@@ -1905,7 +1907,7 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /undo [N] /redo [N] /mode [plan|build|improve]')
+      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /tasks /undo [N] /redo [N] /mode [plan|build|improve] /advisor [off|on|model]')
     else if Text = '/mode' then
       Flash('mode: ' + ModeName(FMode) + '  (Tab in chat to cycle; /mode plan|build|improve)')
     (* Through ParseMode, not a list of literals.
@@ -1934,12 +1936,18 @@ begin
     end
     else if (Text = '/tools') and (FRegistry <> nil) then
       Flash(Format('registered tools: %d', [FRegistry.Count]))
+    { The registry asks the advisor settings on every lookup, so the tool
+      appears or goes with the next request. }
+    else if (Text = '/advisor') or (Copy(Text, 1, 9) = '/advisor ') then
+      Flash(AdvisorCommand(Copy(Text, 10, MaxInt)))
     else if Text = '/theme' then
       OpenThemeMenu
     else if Text = '/model' then
       OpenModelMenu
     else if Text = '/stats' then
       OpenStatsOverlay
+    else if Text = '/tasks' then
+      Flash(BackgroundJobsSummary)
     else if (Text = '/undo') or (Copy(Text, 1, 6) = '/undo ') then
       HandleUndoCommand(Copy(Text, 7, MaxInt))
     else if (Text = '/init') or (Copy(Text, 1, 6) = '/init ') then
@@ -3026,12 +3034,14 @@ begin
   PrintLn(Ansi.Bold + 'TUI commands:' + Ansi.Reset);
   PrintLn('  /help          show this');
   PrintLn('  /tools         list registered tools');
+  PrintLn('  /tasks         list background jobs, running first');
   PrintLn('  /clear         clear the screen');
   PrintLn('  /model         list cached models for the default provider');
   PrintLn('  /model <id>    switch the active model for this session');
   PrintLn('  /undo [N]      rewind file-edits over the last N turns (default 1)');
   PrintLn('  /redo [N]      replay the last N undone snapshots (zpaq backend only)');
   PrintLn('  /init [flags]  generate a starter AGENTS.md for this project');
+  PrintLn('  ' + AdvisorCommandHelp);
   PrintLn('  /quit          exit');
 end;
 
@@ -3136,6 +3146,7 @@ begin
   if (Cmd = '/quit') or (Cmd = '/exit') or (Cmd = '/q') then begin FQuit := True; Exit; end;
   if Cmd = '/clear' then begin Print(#27'[2J' + #27'[H'); DrawHeader; Exit; end;
   if Cmd = '/tools' then begin ShowTools; Exit; end;
+  if Cmd = '/tasks' then begin PrintLn(FormatBackgroundJobsText); Exit; end;
   if Cmd = '/help'  then begin ShowHelp;  Exit; end;
   if (Cmd = '/undo') or (Copy(Cmd, 1, 6) = '/undo ') then
   begin
@@ -3152,6 +3163,11 @@ begin
   if (Cmd = '/init') or (Copy(Cmd, 1, 6) = '/init ') then
   begin
     HandleInitCommand(Copy(Cmd, 7, MaxInt));
+    Exit;
+  end;
+  if (Cmd = '/advisor') or (Copy(Cmd, 1, 9) = '/advisor ') then
+  begin
+    PrintLn(AdvisorCommand(Copy(Cmd, 10, MaxInt)));
     Exit;
   end;
   if (Cmd = '/redo') or (Copy(Cmd, 1, 6) = '/redo ') then
@@ -3346,6 +3362,10 @@ begin
   Cfg.OnToolCall    := LiveToolCallLine;
   Cfg.OnToolResult  := LiveToolResultLine;
   Cfg.OnAsk         := AskPermission;  { permissions "ask" rules prompt on stdin }
+  { MCP servers asking the user for input (forms, URLs) prompt there too.
+    The rich Delphi TUI has no form surface in its footer, so it leaves
+    this nil and such requests are declined with a note to the model. }
+  Cfg.Elicitor      := ConsoleElicitationHandler;
   { Background subagents on the FPC line-based path. Codex on
     PR #212: Cmd.TUI registers spawn_background for FPC builds too,
     so without this binding a job would start but its result would

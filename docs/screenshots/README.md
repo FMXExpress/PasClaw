@@ -28,6 +28,16 @@ What the next turn puts in front of the model, part by part: system prompt,
 memory, skills, tools, messages and free space, against the model's window or,
 with no window set as here, the compaction point. Served by `POST /v1/context`.
 
+## Web UI — background jobs (`/` → Background)
+
+![A finished background subagent open in the Background tab](./web-ui-background.png)
+
+The jobs the agent started with `spawn_background` and `shell_background`,
+in every chat, under Running and Finished. The open job is a subagent's
+transcript, drawn like the chat with its tool call as a tool card, and a box
+for a follow-up message. Served by `GET /v1/background`. The other web UI
+shots above and below were taken before this tab was added to the strip.
+
 ## Web UI — memory (`/` → Memory)
 
 ![The web UI's memory tab](./web-ui-memory.png)
@@ -124,10 +134,13 @@ not look for.
 
 Run twice from a fresh fixture home at the same path, `web-ui-chat`,
 `web-ui-context`, `web-ui-memory`, `web-ui-workflow`, `web-ui-settings` and
-`web-ui-phone` come out **byte-identical**. Two do not:
+`web-ui-phone` come out **byte-identical**. Three do not:
 
 - `web-desktop.png`: the taskbar shows a wall clock, so those bytes differ on
   every run. Everything else about it is deterministic.
+- `web-ui-background.png`: the job's start time, its handle and "just now"
+  come from the run. It is taken last, after `shoot` starts one background
+  subagent from a chat of its own, so the shots before it are unchanged.
 - `web-ui-chat-light.png`: a few pixels of the header's status chip differ by
   one colour level between runs. Nothing you could see changes.
 

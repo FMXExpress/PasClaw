@@ -42,6 +42,10 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/rerank` | POST | Order `documents` by relevance to `query` (`top_n`, `return_documents`; `texts` is accepted for `documents`). `rerank_backend` picks the reranker: `local` (the ONNX cross-encoder, on-host), `llm` (the chat model), `auto` (local when provisioned, else llm). A decision model replaces it only where a recorded bench showed it does better; the response's `model` says which answered. See [Decision models](./decision-models.md). |
 | `/v1/mcp` | GET | Configured MCP servers (`name`, `cmd`, `args`, `enabled`). |
 | `/v1/cron` | GET | Cron entries (`id`, `spec`, `skill`, `args`, `channel_*`, `enabled`). |
+| `/v1/background` | GET | Background jobs on this gateway, every chat's: subagents from `spawn_background` and commands from `shell_background`, running first, then newest first. See [below](#v1background--background-jobs). |
+| `/v1/background/<handle>` | GET | One job: a subagent's transcript, or a command's output (the last 64 KB). |
+| `/v1/background/<handle>/cancel` | POST | Stop a running job, the way `spawn_cancel` does. Says whether it was killed or only marked (`advisory`). |
+| `/v1/background/<handle>/message` | POST | `{"text"}`: a follow-up to a finished subagent, run as a new job that continues its conversation. 202 with the new `handle`. |
 | `/v1/skills` | GET | Installed skills (`name`, `description`, `kind`, `path`, `dir`). |
 | `/v1/memory` | GET | Files in `workspace/memory/` with sizes. |
 | `/v1/memory/<name>` | GET | Contents of one memory file (rejects path-traversal). |
@@ -65,11 +69,12 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 
 ## Embedded web UI
 
-`/` serves a single-page vanilla ES2020 app (no JS toolchain, no bundler — `src/pkg/gateway/webui.html` is `{$R webui.res}`'d into the binary). It has a dark and a light theme: it follows the operating system's setting until you use the sun/moon button in the app bar, then remembers your choice. On a narrow screen the tab strip scrolls sideways and the chat list opens over the transcript. Eight tabs:
+`/` serves a single-page vanilla ES2020 app (no JS toolchain, no bundler — `src/pkg/gateway/webui.html` is `{$R webui.res}`'d into the binary). It has a dark and a light theme: it follows the operating system's setting until you use the sun/moon button in the app bar, then remembers your choice. On a narrow screen the tab strip scrolls sideways and the chat list opens over the transcript. The main tabs:
 
 | Tab | Purpose |
 |---|---|
 | **Chat** | SSE-streamed conversation. Tool activity surfaced inline. Chats are saved on the gateway (`workspace/sessions/`, the store the CLI and TUI use). You can open another chat, or start a new one, while a turn runs: the turn keeps going and is saved into the chat it was asked in, which the list marks with a dot until it finishes. The context button in the toolbar shows how much context the conversation uses; click it (or type `/context`) for the breakdown. **Files** lists the files the agent wrote in this chat and downloads them. |
+| **Background** | The background jobs of every chat (`/v1/background`), under Running and Finished, each with a status chip, its elapsed time and the chat it belongs to; the tab button carries the running count. A job opens beside the list: a subagent's transcript drawn like the chat (its tool calls as the chat's tool cards), or a command's output and exit code. **Stop** cancels a running job; a finished subagent has a message box for a follow-up. The list refreshes every 2 s while the tab is open and the page is visible; otherwise only the count is updated (every 5 s while something runs, 15 s when nothing does, and after each chat turn). On a phone the open job takes the whole tab. Scheduled skills stay on the Cron tab. |
 | **Memory** | Browse and read `workspace/memory/*.md`. |
 | **Files** | Browse `$PASCLAW_HOME`. Read individual files up to 256 KB. |
 | **MCP** | List configured MCP servers and their tool counts. |
@@ -210,6 +215,42 @@ So every message is also appended, once, to `<id>.log.jsonl` beside the session:
 Windowed because the record grows without bound: the desktop measured 10.4 s and 2.1 MB to paint a 1500-turn conversation in one go, against 94 ms and 369 DOM nodes for a 120-message window. Page backwards by walking `offset` down from `total`; `limit` is capped at 2000.
 
 `?full=1` falls back to the live transcript for a session recorded before the log existed, so old sessions still answer. Deleting a session deletes its record with it.
+
+## `/v1/background` — background jobs
+
+The jobs the model started with `spawn_background` (a subagent) and `shell_background` (a command). The gateway runs every chat through one coordinator, so this is every chat's work, not one session's. Scheduled work is not here: `GET /v1/cron` lists it.
+
+`GET /v1/background`:
+
+```json
+{"jobs": [{"handle": "bg-3f9a21", "kind": "subagent", "agent": "general-purpose",
+           "prompt": "research the frobnicator", "state": "running", "stopping": false,
+           "started_at": 1795612345, "finished_at": null, "elapsed_sec": 12,
+           "session": "a1b2c3", "result_preview": "", "delivered": false,
+           "can_cancel": true, "can_message": false}],
+ "running": 1, "history_max": 50, "cron": "/v1/cron"}
+```
+
+- Running jobs first, then the rest, newest first within each.
+- `state` is `running`, `done`, `failed` or `cancelled`. A cancelled subagent still finishing a model call reads `cancelled` with `stopping: true` and `finished_at: null`.
+- A shell job has `command` instead of `prompt`, `agent: "shell"`, and `exit_code` once it has ended. `prompt` and `command` are cut to 200 characters here and whole in the detail; `result_preview` to 300 (the error for a failed job).
+- `session` is the chat the job reports to: the `X-PasClaw-Session` of the turn that started it (the web UI's chat id), `""` when that turn named none. A job's result is folded into that session's next turn.
+- `delivered`: its result has reached the model, drained into a turn or fetched with `spawn_wait`.
+- `continued_from` / `continued_by` link a follow-up and the job it continues; `worktree` names a subagent's git branch when it has one.
+- Finished jobs are kept for history, at most 50 (`history_max`): past that the oldest go, those already delivered before those that were not. Before this the gateway kept every job for its whole life.
+
+`GET /v1/background/<handle>` adds, for a subagent, `messages` — `role`, `content`, `tool_calls` (`id`, `name`, `arguments`, `line`), `tool_call_id`, `name` — plus `result` and `transcript_trimmed`. `line` is the one-liner the chat stream shows for that call or result (`⏺ list_dir(.)`, `⎿ 2 entries`). While the subagent runs, the transcript grows as it works; when it ends it is the loop's own history with the answer appended. A job keeps at most 200 messages and 256 KB: a message is cut at 16 KB, tool arguments over 4 KB are elided (they stay JSON), and past the caps the oldest messages after the task go. For a shell job the detail has `output`, the last 64 KB, live while it runs on the local backend, and `output_truncated`. 404 for an unknown handle.
+
+`POST /v1/background/<handle>/cancel` goes through `spawn_cancel`'s path. 200 with `cancelled: true`, `killed` and `advisory`:
+
+- a shell job on the local backend is killed, with everything it started (`killed: true`);
+- a subagent is `advisory: true`: it stops at its next step — before its next model call, or after the tools it is running come back — so a model call already in flight finishes first; the `message` says so. A shell job under the Docker backend is advisory too: nothing here can kill it.
+
+Either way the result is discarded. 409 when the job has already ended, 404 for an unknown handle.
+
+`POST /v1/background/<handle>/message` with `{"text": "..."}` sends a follow-up to a finished subagent. The gateway starts a new background job with the same agent, model, workspace or worktree and chat; its history is the old job's transcript (the bounded copy above) and its prompt is the text, so the subagent picks up where it stopped. 202 `{"handle", "continued_from", "state", "session"}`; the two jobs are linked both ways, and the new one's result reaches the chat's next turn like any job of it, marked as a follow-up. Refused: 409 while the job is still running (or still stopping), 400 for a shell job, an empty `text` or a body that is not JSON, 404 for an unknown handle, 429 when the background-job cap (`background_jobs_max`) is full.
+
+All four are token-gated like the rest of `/v1/*`. `/tasks` in `pasclaw agent` and the TUI lists the same jobs for that process.
 
 ## `/v1/context` — the context breakdown
 

@@ -596,6 +596,79 @@
   /* ===== KB tab ===== */
   .kb-stats{color:var(--text-3);font-size:12px;margin:.2rem 0 .6rem}
 
+  /* ===== Background tab =====
+     The jobs list beside the open job, like the other two-column tabs; on
+     a narrow screen the open job takes the whole tab and Back returns to
+     the list. A job's state is one chip: the accent while it runs, the
+     status colours once it ends. The tab button carries the running count. */
+  .tab-badge{display:inline-block;min-width:1.15rem;margin-left:.35rem;padding:0 .3rem;border-radius:999px;
+    background:var(--accent-solid);color:var(--on-accent);font-size:11px;font-weight:600;line-height:1.15rem;
+    text-align:center;font-variant-numeric:tabular-nums;vertical-align:1px}
+  .tab-badge[hidden]{display:none}
+  #tab-background .two-col{min-height:0}
+  #tab-background .bg-list{flex:0 0 23rem;display:flex;flex-direction:column;padding:0;overflow:hidden}
+  .bg-head{display:flex;align-items:center;gap:.4rem;padding:.55rem .6rem .5rem .8rem;border-bottom:1px solid var(--border)}
+  .bg-head .bg-title{font-size:12px;font-weight:600;color:var(--text-2);margin-right:auto}
+  .bg-head .icon-btn{border-color:transparent;padding:.24rem .45rem}
+  #bg-list{flex:1;overflow:auto;padding:.2rem .45rem .8rem}
+  .bg-sec{display:flex;align-items:center;gap:.4rem;padding:.7rem .4rem .3rem;font-size:12px;font-weight:600;color:var(--text-2)}
+  .bg-sec .n{font-weight:400;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .bg-none{padding:.25rem .55rem .35rem;font-size:12.5px;color:var(--text-3)}
+  button.bg-item{display:flex;flex-direction:column;gap:.18rem;width:100%;text-align:left;margin:0 0 2px;
+    padding:.5rem .6rem;background:transparent;border:1px solid transparent;border-radius:var(--radius);color:var(--text)}
+  button.bg-item:hover{background:var(--surface-2)}
+  button.bg-item.active{background:var(--surface-3)}
+  .bg-l1{display:flex;align-items:center;gap:.45rem;min-width:0}
+  .bg-name{flex:1;min-width:0;font-size:13px;font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bg-time{flex:none;font-size:11.5px;color:var(--text-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .bg-l2,.bg-l3{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bg-l2{font-size:12.5px;color:var(--text-2)}
+  .bg-l2.mono{font-family:var(--mono);font-size:12px}
+  .bg-l3{font-size:11.5px;color:var(--text-3)}
+  .bg-chip{flex:none;display:inline-flex;align-items:center;gap:.35rem;padding:.02rem .5rem;border-radius:999px;
+    font-size:11.5px;font-weight:500;line-height:1.5;background:var(--surface-3);color:var(--text-2);white-space:nowrap}
+  .bg-chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  .bg-chip.running{background:var(--accent-soft);color:var(--accent)}
+  .bg-chip.running::before{animation:typingPulse 1.4s ease-in-out infinite}
+  .bg-chip.done{background:var(--ok-soft);color:var(--ok)}
+  .bg-chip.failed{background:var(--danger-soft);color:var(--danger)}
+  .bg-chip.stopping{background:var(--warn-soft);color:var(--warn)}
+  .bg-empty{margin:2.5rem .6rem;text-align:left;max-width:26rem;line-height:1.55;padding:0 .4rem}
+  .bg-empty b{display:block;color:var(--text);font-size:13.5px;margin-bottom:.35rem}
+  .bg-empty p{margin:.4rem 0}
+  .bg-empty code,.bg-dmeta code,.bg-msg-hint code{background:var(--surface-2);border-radius:4px;padding:.05rem .3rem;font-size:.92em}
+  .bg-cron{background:none;border:0;padding:.1rem .35rem;font-size:12px;color:var(--accent)}
+  .bg-cron:hover{background:none;text-decoration:underline}
+  .bg-detail{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+  .bg-detail>.empty-pane{margin-top:18vh}
+  .bg-dhead{display:flex;flex-direction:column;gap:.35rem;padding:.65rem 1.1rem .6rem;
+    border-bottom:1px solid var(--border);background:var(--surface)}
+  .bg-dtitle{display:flex;align-items:center;gap:.5rem;min-width:0}
+  .bg-dtitle b{font-size:14px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bg-dtitle .bg-h{font-family:var(--mono);font-size:11.5px;color:var(--text-3)}
+  .bg-dtitle .spacer{flex:1}
+  .bg-back{display:none}
+  .bg-dmeta{display:flex;flex-wrap:wrap;gap:.2rem .9rem;font-size:12px;color:var(--text-3)}
+  .bg-dmeta a{cursor:pointer}
+  .bg-note{font-size:12.5px;color:var(--text-2)}
+  .bg-note:empty{display:none}
+  .bg-note.err{color:var(--danger)}
+  .bg-body{flex:1;min-height:0;overflow:auto;padding:1rem 1rem 1.25rem;display:flex;flex-direction:column;gap:1.25rem}
+  .bg-body .row{animation:none}
+  .bg-info{width:100%;max-width:52rem;margin:0 auto;font-size:12.5px;color:var(--text-3)}
+  .bg-cmd,.bg-output{width:100%;max-width:60rem;margin:0 auto;font:12px/1.55 var(--mono);white-space:pre-wrap;
+    word-break:break-word;border:1px solid var(--border);border-radius:8px;padding:.65rem .8rem}
+  .bg-cmd{background:var(--surface);color:var(--text)}
+  .bg-output{background:var(--code);color:var(--text-2)}
+  form.bg-msg{display:flex;flex-direction:column;gap:.4rem;width:calc(100% - 2rem);max-width:52rem;margin:0 auto 1rem;
+    padding:.5rem .55rem .45rem;border:1px solid var(--border-strong);border-radius:12px;background:var(--surface)}
+  form.bg-msg:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  form.bg-msg textarea{border:0;background:transparent;box-shadow:none;padding:.3rem .35rem;font-size:14px;
+    min-height:2.6rem;resize:vertical}
+  form.bg-msg textarea:focus{border:0;box-shadow:none}
+  .bg-msg-bar{display:flex;align-items:center;justify-content:flex-end;gap:.6rem}
+  .bg-msg-hint{flex:1;font-size:12px;color:var(--text-3)}
+
   /* ===== Logs tab ===== */
   #tab-logs{display:none;flex-direction:column}
   #tab-logs.active{display:flex}
@@ -747,7 +820,7 @@
      The tab strip moves to its own row and scrolls sideways; lists and the
      transcript give back their margins. */
   /* Below this the chip's counts would push tabs off the strip: keep the model, drop the counts. */
-  @media (max-width:1240px){
+  @media (max-width:1360px){
     #meta .m-extra{display:none}
   }
   @media (max-width:900px){
@@ -764,6 +837,16 @@
     .chat-toolbar{flex-wrap:wrap}
     .chat-toolbar .lbl{display:none}
     .col-list{flex-basis:9rem}
+    /* Background: the list, or the open job, never both. */
+    #tab-background .bg-list{flex:1 1 auto;border-right:0}
+    #tab-background .bg-detail{display:none}
+    #tab-background.bg-open .bg-list{display:none}
+    #tab-background.bg-open .bg-detail{display:flex}
+    .bg-back{display:inline-flex}
+    .bg-dhead{padding:.55rem .75rem}
+    .bg-body{padding:.9rem .75rem 1.1rem}
+    form.bg-msg{width:calc(100% - 1.5rem);margin-bottom:.75rem}
+    .bg-msg-hint{display:none}
     /* The workflow editor stacks: list, then the editor, then the inspector. */
     .wf-shell{flex-direction:column;overflow:auto}
     .wf-side,.wf-main,#wfInspect{flex:none}
@@ -801,12 +884,15 @@
   <symbol id="i-x" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
   <symbol id="i-play" viewBox="0 0 16 16"><path d="M5.25 3.5v9l7-4.5z"/></symbol>
   <symbol id="i-file" viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></symbol>
+  <symbol id="i-back" viewBox="0 0 16 16"><path d="M9.75 3.5 5.25 8l4.5 4.5"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4.25" y="4.25" width="7.5" height="7.5" rx="1.5"/></symbol>
 </defs></svg>
 <header>
   <span class="logo"><span class="blue">Pas</span><span class="red">Claw</span></span>
   <span id="meta" class="meta">loading...</span>
   <nav id="tabs">
     <button data-tab="chat" class="active">Chat</button>
+    <button data-tab="background">Background<span class="tab-badge" id="bg-badge" hidden></span></button>
     <button data-tab="memory">Memory</button>
     <button data-tab="kb">KB</button>
     <button data-tab="files">Files</button>
@@ -1007,10 +1093,27 @@
     </div>
   </div>
 
+  <div id="tab-background" class="tab">
+    <!-- Background work: what the agent started with spawn_background and
+         shell_background, in every chat. GET /v1/background; one job's
+         transcript or output from GET /v1/background/<handle>. -->
+    <div class="two-col">
+      <div class="col-list bg-list">
+        <div class="bg-head">
+          <span class="bg-title">Background jobs</span>
+          <button class="bg-cron" id="bg-cron" type="button" hidden title="Scheduled skills are listed on the Cron tab"></button>
+          <button class="icon-btn" id="bg-refresh" type="button" aria-label="Refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+        </div>
+        <div id="bg-list"><div class="empty-pane">Loading…</div></div>
+      </div>
+      <div class="bg-detail" id="bg-detail"><div class="empty-pane">Pick a job to read its transcript or output.</div></div>
+    </div>
+  </div>
+
   <div id="tab-mcp" class="tab">
     <div class="pane">
       <table class="data" id="mcp-table">
-        <thead><tr><th>Name</th><th>Command</th><th>Args</th><th>Status</th></tr></thead>
+        <thead><tr><th>Name</th><th>Command</th><th>Args</th><th>Status</th><th>Protocol</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -2198,6 +2301,8 @@ function syncStreaming() {
   b.disabled = false;
   /* A finished turn changed the conversation: recount the context. */
   if (was && !streaming && typeof ctxRefreshSoon === "function") ctxRefreshSoon();
+  /* ...and may have started background jobs: update the tab's count. */
+  if (was && !streaming && typeof bgPoke === "function") bgPoke();
 }
 
 /* The body of the next /v1/chat/completions request, minus `stream`.
@@ -3619,6 +3724,7 @@ const tabLoaders = {
   chat() { /* always loaded */ },
   workflow() { wfInit(); },
   checkpoints() { renderCheckpoints(); },
+  background() { bgInit(); },
 
   /* Memory: the workspace/memory/*.md files ARE the memory; the SQLite
      index is a rebuildable FTS5 (+ optional vector) cache over them. The
@@ -3806,18 +3912,25 @@ const tabLoaders = {
     try {
       const j = await (await gwFetch("/v1/mcp")).json();
       if (!j.servers || !j.servers.length) {
-        tbody.innerHTML = `<tr><td colspan=4><div class="empty-pane">No MCP servers configured.</div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan=5><div class="empty-pane">No MCP servers configured.</div></td></tr>`;
         return;
       }
       for (const s of j.servers) {
         const tr = document.createElement("tr");
+        /* state/protocol_version come from the live connection; a disabled
+           server, or one this gateway never connected, has neither. */
+        const live = s.state ? ` · ${s.state}` : "";
+        const proto = s.protocol_version
+          ? `<span title="${escapeHtml(s.negotiation || "")}">${escapeHtml(s.protocol_version)}</span>`
+          : (s.error ? `<span title="${escapeHtml(s.error)}">—</span>` : "—");
         tr.innerHTML = `<td>${escapeHtml(s.name)}</td>`
                      + `<td>${escapeHtml(s.cmd)}</td>`
                      + `<td>${escapeHtml(s.args || "")}</td>`
-                     + `<td><span class="badge ${s.enabled?"on":"off"}">${s.enabled?"enabled":"disabled"}</span></td>`;
+                     + `<td><span class="badge ${s.enabled?"on":"off"}">${s.enabled?"enabled":"disabled"}</span>${escapeHtml(live)}</td>`
+                     + `<td>${proto}</td>`;
         tbody.appendChild(tr);
       }
-    } catch (e) { tbody.innerHTML = `<tr><td colspan=4>${escapeHtml(String(e))}</td></tr>`; }
+    } catch (e) { tbody.innerHTML = `<tr><td colspan=5>${escapeHtml(String(e))}</td></tr>`; }
   },
 
   async cron() {
@@ -4578,6 +4691,370 @@ async function resetStats() {
 }
 
 $("#stats-reset").addEventListener("click", resetStats);
+
+/* ===== Background tab =====
+   The jobs the agent started with spawn_background (a subagent) and
+   shell_background (a command), in every chat, from GET /v1/background:
+   running first, then finished, newest first. A job opens beside the list:
+   a subagent's transcript drawn by the chat's own renderer (its tool calls
+   as the chat's tool cards), or a command's output. Stop cancels a running
+   job; a finished subagent takes a follow-up message, which the gateway
+   runs as a new job continuing its conversation.
+
+   Refreshed every 2 s while this tab is open and the page is visible.
+   Otherwise only the tab's running count is kept current: every 5 s while
+   something runs, every 15 s when nothing does, and after each chat turn;
+   nothing while the page is hidden. Scheduled skills stay on the Cron tab
+   (GET /v1/cron); the header links there when there are any.
+
+   Declared above the boot block: a page loaded at /#background runs the
+   loader during boot, and a `const` below it would not exist yet. */
+const bg = { jobs: [], running: 0, open: null, listSig: "", detailSig: "",
+             timer: null, seq: 0, detailSeq: 0, note: "", noteErr: false, wired: false };
+
+function bgTabActive() { const t = $("#tab-background"); return !!t && t.classList.contains("active"); }
+function fmtDur(s) {
+  s = Math.max(0, Math.round(s || 0));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s";
+  return Math.floor(s / 3600) + "h " + String(Math.floor(s / 60) % 60).padStart(2, "0") + "m";
+}
+function bgAgo(unix) {
+  const d = Math.max(0, Date.now() / 1000 - unix);
+  if (d < 60) return "just now";
+  if (d < 3600) return Math.floor(d / 60) + " min ago";
+  if (d < 86400) return Math.floor(d / 3600) + " h ago";
+  return new Date(unix * 1000).toLocaleDateString();
+}
+function bgStateOf(j) { return j.stopping ? "stopping" : j.state; }
+function bgChip(j) { const st = bgStateOf(j); return `<span class="bg-chip ${st}">${st}</span>`; }
+function bgName(j) { return j.kind === "shell" ? "Shell command" : (j.agent || "subagent"); }
+/* The chat a job belongs to, by its title when it is a saved chat. */
+function bgChatTitle(id) {
+  if (!id) return "";
+  const s = (sessions || []).find(x => x.id === id);
+  return s ? (s.title || "(untitled)") : "";
+}
+function bgTimeText(j) {
+  return j.finished_at ? fmtDur(j.elapsed_sec) + " · " + bgAgo(j.finished_at) : fmtDur(j.elapsed_sec);
+}
+
+function bgBadge() {
+  const el = $("#bg-badge");
+  if (!el) return;
+  el.hidden = !bg.running;
+  el.textContent = String(bg.running);
+  el.title = bg.running + " running";
+}
+
+async function bgRefresh(prompt) {
+  const seq = ++bg.seq;
+  let j;
+  try {
+    const r = await gwFetch("/v1/background", prompt ? {} : { noPrompt: true });
+    j = await r.json().catch(() => ({}));
+    if (seq !== bg.seq) return;
+    if (!r.ok) { if (bgTabActive()) bgListError(j.error || ("http " + r.status)); return; }
+  } catch (e) { if (seq === bg.seq && bgTabActive()) bgListError(String(e)); return; }
+  bg.jobs = j.jobs || [];
+  bg.running = j.running || 0;
+  bg.historyMax = j.history_max || 50;
+  bgBadge();
+  if (!bgTabActive()) return;
+  renderBgList();
+  if (bg.open) bgLoadDetail(bg.open, false);
+}
+function bgListError(msg) {
+  bg.listSig = "";
+  $("#bg-list").innerHTML = `<div class="empty-pane">Could not load the jobs: ${escapeHtml(msg)}</div>`;
+}
+
+/* One timer, re-armed after each refresh at the pace described above. */
+function bgSchedule() {
+  clearTimeout(bg.timer);
+  bg.timer = null;
+  if (document.hidden) return;
+  const ms = bgTabActive() ? 2000 : (bg.running > 0 ? 5000 : 15000);
+  bg.timer = setTimeout(async () => { await bgRefresh(false); bgSchedule(); }, ms);
+}
+function bgPoke() { bgRefresh(false).then(bgSchedule, bgSchedule); }
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { clearTimeout(bg.timer); bg.timer = null; } else bgPoke();
+});
+
+function bgItemHTML(j) {
+  const what = j.kind === "shell" ? j.command : j.prompt;
+  const chat = bgChatTitle(j.session);
+  let l3 = chat ? "in " + escapeHtml(chat) : "";
+  if (j.continued_from) l3 += (l3 ? " · " : "") + "follow-up to " + escapeHtml(j.continued_from);
+  if (j.exit_code !== undefined && j.kind === "shell") l3 += (l3 ? " · " : "") + "exit " + j.exit_code;
+  return `<button type="button" class="bg-item${bg.open === j.handle ? " active" : ""}" data-h="${escapeHtml(j.handle)}">`
+       + `<span class="bg-l1">${bgChip(j)}<span class="bg-name">${escapeHtml(bgName(j))}</span>`
+       + `<span class="bg-time">${bgTimeText(j)}</span></span>`
+       + `<span class="bg-l2${j.kind === "shell" ? " mono" : ""}">${escapeHtml(what || "")}</span>`
+       + (l3 ? `<span class="bg-l3">${l3}</span>` : "")
+       + `</button>`;
+}
+
+const BG_EMPTY_HTML =
+    `<div class="bg-empty"><b>No background jobs yet</b>`
+  + `<p>The agent starts them itself and keeps working while they run: <code>spawn_background</code> `
+  + `hands a task to a subagent, <code>shell_background</code> runs a command such as a build or a test suite. `
+  + `Ask for it in a chat, for example “research this in the background” or “run the tests in the background”.</p>`
+  + `<p>Running and finished jobs show up here, from every chat; the last 50 finished ones are kept.</p></div>`;
+
+function renderBgList() {
+  const box = $("#bg-list");
+  if (!box) return;
+  if (!bg.jobs.length) {
+    if (bg.listSig !== "empty") { box.innerHTML = BG_EMPTY_HTML; bg.listSig = "empty"; }
+    return;
+  }
+  /* Rebuilt only when something other than the clock changed, so a
+     focused or hovered item is not replaced under the pointer every tick. */
+  const sig = JSON.stringify(bg.jobs.map(j => [j.handle, j.state, j.stopping, j.finished_at, j.continued_by,
+                                               j.session, bgChatTitle(j.session)])) + "|" + bg.open;
+  if (sig === bg.listSig) {
+    for (const j of bg.jobs) {
+      const el = box.querySelector(`.bg-item[data-h="${CSS.escape(j.handle)}"] .bg-time`);
+      if (el) el.textContent = bgTimeText(j);
+    }
+    return;
+  }
+  bg.listSig = sig;
+  const live = bg.jobs.filter(j => !j.finished_at), done = bg.jobs.filter(j => j.finished_at);
+  box.innerHTML =
+      `<div class="bg-sec">Running <span class="n">${live.length}</span></div>`
+    + (live.length ? live.map(bgItemHTML).join("") : `<div class="bg-none">Nothing running.</div>`)
+    + `<div class="bg-sec">Finished <span class="n">${done.length}</span></div>`
+    + (done.length ? done.map(bgItemHTML).join("") : `<div class="bg-none">Nothing finished yet.</div>`);
+  box.querySelectorAll(".bg-item").forEach(el => el.addEventListener("click", () => bgOpen(el.dataset.h)));
+}
+
+function bgOpen(handle) {
+  bg.open = handle;
+  bg.note = "";
+  $("#tab-background").classList.add("bg-open");
+  $$("#bg-list .bg-item").forEach(el => el.classList.toggle("active", el.dataset.h === handle));
+  bg.listSig = "";   /* the active mark is part of the list */
+  bgLoadDetail(handle, true);
+}
+function bgClose() {
+  bg.open = null;
+  $("#tab-background").classList.remove("bg-open");
+  $$("#bg-list .bg-item").forEach(el => el.classList.remove("active"));
+  $("#bg-detail").innerHTML = `<div class="empty-pane">Pick a job to read its transcript or output.</div>`;
+  bg.detailSig = "";
+}
+
+async function bgLoadDetail(h, fresh) {
+  const seq = ++bg.detailSeq;
+  const pane = $("#bg-detail");
+  if (fresh) { bg.detailSig = ""; pane.innerHTML = `<div class="empty-pane">Loading…</div>`; }
+  let j;
+  try {
+    const r = await gwFetch("/v1/background/" + encodeURIComponent(h), fresh ? {} : { noPrompt: true });
+    j = await r.json().catch(() => ({}));
+    if (seq !== bg.detailSeq || bg.open !== h) return;
+    if (!r.ok) {
+      bg.detailSig = "";
+      pane.innerHTML = `<div class="empty-pane">${escapeHtml(j.error || ("http " + r.status))}</div>`;
+      return;
+    }
+  } catch (e) {
+    if (seq === bg.detailSeq && fresh) pane.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`;
+    return;
+  }
+  renderBgDetail(j);
+}
+
+/* A subagent's messages as chat turns: each user message is a turn, and
+   everything the subagent did until the next one is one assistant turn --
+   its text, a call line per tool call (the gateway sends the chat's own
+   one-liners) and a result line per result, with the full arguments and
+   results as the tool cards' bodies. renderAssistantHTML pairs a run of
+   calls with the run of results after it, the shape these come in. */
+function bgTurns(messages) {
+  const turns = [];
+  let cur = null;
+  const open = () => { if (!cur) { cur = { role: "a", parts: [], tools: [] }; turns.push(cur); } return cur; };
+  for (const m of messages || []) {
+    if (m.role === "user") { cur = null; turns.push({ role: "u", text: m.content || "" }); continue; }
+    if (m.role === "assistant") {
+      const t = open();
+      if (m.content) t.parts.push(m.content);
+      for (const c of m.tool_calls || []) {
+        t.parts.push(c.line || ("⏺ " + c.name));
+        t.tools.push({ name: c.name, args: c.arguments || "" });
+      }
+    } else if (m.role === "tool") {
+      const t = open();
+      t.parts.push(m.line || "  ⎿ (result)");
+      const slot = t.tools.find(x => x.result === undefined);
+      if (slot) slot.result = m.content || "";
+    }
+  }
+  return turns.map(t => t.role === "u" ? t : { role: "a", text: t.parts.join("\n"), tools: t.tools });
+}
+
+function bgRow(body, role, html) {
+  const r = document.createElement("div");
+  r.className = "row " + role;
+  r.innerHTML = `<div class="role">${role === "e" ? "error" : ""}</div><div class="bub"></div>`;
+  if (html !== undefined) r.querySelector(".bub").innerHTML = html;
+  body.appendChild(r);
+  return r.querySelector(".bub");
+}
+
+function renderBgDetail(j) {
+  const pane = $("#bg-detail");
+  const msgs = j.messages || [];
+  const last = msgs.length ? msgs[msgs.length - 1] : null;
+  const sig = [j.handle, j.state, j.stopping, msgs.length, last ? (last.content || "").length : 0,
+               (last && last.tool_calls) ? last.tool_calls.length : 0, (j.output || "").length,
+               j.continued_by || "", bgChatTitle(j.session)].join("|");
+  if (sig === bg.detailSig) {
+    const el = $("#bg-elapsed");
+    if (el) el.textContent = (j.finished_at ? "took " : "running for ") + fmtDur(j.elapsed_sec);
+    return;
+  }
+  bg.detailSig = sig;
+  /* Keep the reader's place and a follow-up being typed. */
+  const oldBody = $("#bg-body"), oldText = $("#bg-msg-text");
+  const atBottom = !oldBody || oldBody.scrollHeight - oldBody.scrollTop - oldBody.clientHeight < 40;
+  const keepTop = oldBody ? oldBody.scrollTop : 0;
+  const draft = oldText ? oldText.value : "", hadFocus = oldText && document.activeElement === oldText;
+
+  const chat = bgChatTitle(j.session);
+  const meta = [];
+  meta.push(`<span id="bg-elapsed">${(j.finished_at ? "took " : "running for ") + fmtDur(j.elapsed_sec)}</span>`);
+  if (j.started_at) meta.push(`<span>started ${escapeHtml(new Date(j.started_at * 1000).toLocaleString())}</span>`);
+  if (j.session) meta.push(chat ? `<span>in <a data-chat="${escapeHtml(j.session)}">${escapeHtml(chat)}</a></span>`
+                                : `<span>session <code>${escapeHtml(j.session)}</code></span>`);
+  if (j.worktree) meta.push(`<span>worktree <code>${escapeHtml(j.worktree)}</code></span>`);
+  if (j.continued_from) meta.push(`<span>follow-up to <a data-job="${escapeHtml(j.continued_from)}">${escapeHtml(j.continued_from)}</a></span>`);
+  if (j.continued_by) meta.push(`<span>continued by <a data-job="${escapeHtml(j.continued_by)}">${escapeHtml(j.continued_by)}</a></span>`);
+  pane.innerHTML =
+      `<div class="bg-dhead"><div class="bg-dtitle">`
+    + `<button class="icon-btn bg-back" type="button" aria-label="Back to the jobs">${icon("back")}Jobs</button>`
+    + bgChip(j) + `<b>${escapeHtml(bgName(j))}</b><span class="bg-h">${escapeHtml(j.handle)}</span>`
+    + `<span class="spacer"></span>`
+    + (j.can_cancel ? `<button class="icon-btn" id="bg-stop" type="button" title="Cancel this job">${icon("stop")}Stop</button>` : "")
+    + `</div><div class="bg-dmeta">${meta.join("")}</div>`
+    + `<div class="bg-note${bg.noteErr ? " err" : ""}" role="status">${escapeHtml(bg.note)}</div></div>`
+    + `<div class="bg-body" id="bg-body"></div>`
+    + (j.can_message
+        ? `<form class="bg-msg" id="bg-msg"><textarea id="bg-msg-text" rows="2" placeholder="Send a follow-up to this subagent…"></textarea>`
+          + `<div class="bg-msg-bar"><span class="bg-msg-hint">Runs as a new background job that continues this conversation`
+          + (chat ? `; its result goes to ${escapeHtml(chat)}` : "") + `.</span>`
+          + `<button class="primary" type="submit">Send</button></div></form>`
+        : "");
+  const body = $("#bg-body");
+  if (j.kind === "shell") {
+    body.insertAdjacentHTML("beforeend", `<pre class="bg-cmd">$ ${escapeHtml(j.command || "")}</pre>`);
+    if (j.output_truncated)
+      body.insertAdjacentHTML("beforeend", `<div class="bg-info">Showing the last 64 KB of the output.</div>`);
+    body.insertAdjacentHTML("beforeend", `<pre class="bg-output">${escapeHtml(j.output ||
+      (j.finished_at ? "(no output)" : "(waiting for output…)"))}</pre>`);
+    if (j.exit_code !== undefined)
+      body.insertAdjacentHTML("beforeend", `<div class="bg-info">Exit code ${j.exit_code}.</div>`);
+  } else {
+    if (j.transcript_trimmed)
+      body.insertAdjacentHTML("beforeend", `<div class="bg-info">Long messages were cut and the oldest dropped to keep this transcript bounded.</div>`);
+    for (const t of bgTurns(msgs)) fillBubble(bgRow(body, t.role), t.text, t.role === "a", t.tools);
+    if (!j.finished_at) bgRow(body, "a", TYPING_HTML);
+  }
+  if (j.state === "failed" && j.error) bgRow(body, "e").textContent = j.error;
+  if (j.state === "cancelled")
+    body.insertAdjacentHTML("beforeend", `<div class="bg-info">${j.stopping
+      ? "Cancelled: it stops at its next step; a model call in flight finishes first."
+      : "Cancelled. Its result was discarded."}</div>`);
+  body.scrollTop = atBottom ? body.scrollHeight : keepTop;
+
+  pane.querySelector(".bg-back").addEventListener("click", bgClose);
+  pane.querySelectorAll("a[data-job]").forEach(a => a.addEventListener("click", () => bgOpen(a.dataset.job)));
+  pane.querySelectorAll("a[data-chat]").forEach(a => a.addEventListener("click", () => {
+    showTab("chat"); activateSession(a.dataset.chat);
+  }));
+  const stop = $("#bg-stop");
+  if (stop) stop.addEventListener("click", () => bgStop(j.handle, stop));
+  const form = $("#bg-msg");
+  if (form) {
+    const ta = $("#bg-msg-text");
+    ta.value = draft;
+    if (hadFocus) ta.focus();
+    form.addEventListener("submit", e => { e.preventDefault(); bgSend(j.handle, form); });
+    ta.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); bgSend(j.handle, form); }
+    });
+  }
+}
+
+function bgSetNote(text, isErr) {
+  bg.note = text || "";
+  bg.noteErr = !!isErr;
+  const el = $("#bg-detail .bg-note");
+  if (el) { el.textContent = bg.note; el.classList.toggle("err", bg.noteErr); }
+}
+
+async function bgStop(h, btn) {
+  btn.disabled = true;
+  try {
+    const r = await gwFetch("/v1/background/" + encodeURIComponent(h) + "/cancel", { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) bgSetNote(j.message || "Cancelled.", false);
+    else bgSetNote(j.error || ("http " + r.status), true);
+  } catch (e) { bgSetNote(String(e), true); }
+  bg.detailSig = "";
+  bgPoke();
+}
+
+async function bgSend(h, form) {
+  const ta = form.querySelector("textarea"), btn = form.querySelector("button[type=submit]");
+  const text = ta.value.trim();
+  if (!text || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const r = await gwFetch("/v1/background/" + encodeURIComponent(h) + "/message", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.handle) {
+      ta.value = "";
+      await bgRefresh(false);
+      bgOpen(j.handle);
+      bgSchedule();
+      return;
+    }
+    bgSetNote(j.error || ("http " + r.status), true);
+  } catch (e) { bgSetNote(String(e), true); }
+  btn.disabled = false;
+}
+
+/* Scheduled work has its own tab and route; say how much there is. */
+async function bgCronLink() {
+  const el = $("#bg-cron");
+  try {
+    const j = await (await gwFetch("/v1/cron", { noPrompt: true })).json();
+    const n = (j.entries || []).filter(c => c.enabled).length;
+    el.hidden = n === 0;
+    el.textContent = n + " scheduled";
+  } catch { el.hidden = true; }
+}
+
+function bgInit() {
+  if (!bg.wired) {
+    bg.wired = true;
+    $("#bg-refresh").addEventListener("click", () => { bg.listSig = ""; bg.detailSig = ""; bgPoke(); });
+    $("#bg-cron").addEventListener("click", () => showTab("cron"));
+  }
+  bgCronLink();
+  bgRefresh(true).then(bgSchedule, bgSchedule);
+}
+/* Opening the tab (button, link, back/forward) refreshes at once and
+   switches to the 2 s pace; leaving it drops back on the next tick. */
+$$('nav button[data-tab="background"]').forEach(b => b.addEventListener("click", () => { if (tabLoaded.background) bgPoke(); }));
+window.addEventListener("hashchange", () => { if (bgTabActive() && tabLoaded.background) bgPoke(); });
+bgPoke();   /* the running count, from the first paint */
 
 /* ===== Per-chat parameters + system-prompt presets =====
    LM-Studio-style controls applied to outgoing /v1/chat/completions

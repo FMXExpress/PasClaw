@@ -300,6 +300,10 @@ type
     procedure HandleDesktopEvents(AContext: TIdContext;
                                   AResp: TIdHTTPResponseInfo);
     procedure HandleCronList(AResp: TIdHTTPResponseInfo);
+    { /v1/background and /v1/background/<handle>[/cancel|/message]: the
+      background jobs of every chat (PasClaw.Gateway.Background). }
+    procedure HandleBackground(const Doc: string; ARequest: TIdHTTPRequestInfo;
+                               AResp: TIdHTTPResponseInfo);
     procedure HandleSkillsList(AResp: TIdHTTPResponseInfo);
     { Install a skill (POST /v1/skills with a JSON target field) into
       workspace/skills, and remove one (DELETE /v1/skills/<name>). Changes
@@ -770,6 +774,7 @@ uses
   PasClaw.Identity,
   PasClaw.Vault.Client,     { SearchVault / GetVaultEntry -- /v1/vault browse }
   PasClaw.Gateway.ToolView,
+  PasClaw.Gateway.Background, { /v1/background -- the background-jobs view }
   PasClaw.Gateway.WebUI,
   PasClaw.Gateway.Desktop,  { desktop client surface: workspaces, projects,
                               tasks, jobs, apps, pages }
@@ -2179,6 +2184,8 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/providers/catalog') then HandleProvidersCatalog(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp')     then HandleMCPList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/cron')    then HandleCronList(AResponse)
+    else if (Doc = '/v1/background') or (Copy(Doc, 1, 15) = '/v1/background/') then
+      HandleBackground(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills/search') then HandleSkillSearch(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills/pending') then HandleSkillsPending(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/skills/pending/approve') then HandleSkillPendingAction(True, ARequest, AResponse)
@@ -2532,8 +2539,12 @@ var
   Root: TJsonObject;
   Arr: TJsonArray;
   Item: TJsonObject;
-  i: Integer;
+  i, j: Integer;
+  Live: TMCPServerStatusArray;
 begin
+  { What each server negotiated, for the web UI's MCP tab. Only servers
+    this gateway connected have an entry; a disabled one has none. }
+  Live := MCPServerStatuses;
   Root := TJsonObject.Create;
   try
     Arr := TJsonArray.Create;
@@ -2544,6 +2555,17 @@ begin
       Item.PutStr ('cmd',     FCfg.MCPServers[i].Cmd);
       Item.PutStr ('args',    FCfg.MCPServers[i].Args);
       Item.PutBool('enabled', FCfg.MCPServers[i].Enabled);
+      for j := 0 to High(Live) do
+        if SameText(Live[j].Name, FCfg.MCPServers[i].Name) then
+        begin
+          Item.PutStr('state',            Live[j].State);
+          Item.PutStr('protocol_version', Live[j].ProtocolVersion);
+          Item.PutStr('negotiation',      Live[j].Negotiation);
+          Item.PutStr('server_name',      Live[j].ServerName);
+          Item.PutStr('server_version',   Live[j].ServerVersion);
+          if Live[j].Error <> '' then Item.PutStr('error', Live[j].Error);
+          Break;
+        end;
       Arr.AddObject(Item);
     end;
     Root.PutArray('servers', Arr);
@@ -2658,6 +2680,21 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+procedure TGatewayServer.HandleBackground(const Doc: string;
+                                          ARequest: TIdHTTPRequestInfo;
+                                          AResp: TIdHTTPResponseInfo);
+var
+  Body, JSON: string;
+  Status: Integer;
+begin
+  Body := '';
+  if ARequest.Command = 'POST' then Body := ReadRequestBody(ARequest);
+  if HandleBackgroundRoute(ARequest.Command, Doc, Body, Status, JSON) then
+    WriteJSON(AResp, Status, JSON)
+  else
+    WriteJSON(AResp, 404, '{"error":"not found"}');
 end;
 
 function SkillRemovableId(const Spec: TSkillSpec): string;

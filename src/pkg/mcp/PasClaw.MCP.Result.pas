@@ -38,17 +38,80 @@ uses
 function ParseToolCallResult(const RespJSON: string;
   out ResultText, ResultJSON, ErrMsg: string): Boolean;
 
+{ The same, for a bare `result` object rather than a JSON-RPC envelope: a
+  task's final result arrives inside tasks/get, and a multi-round call has
+  already unwrapped its envelope to read resultType. }
+function ParseToolCallResultObject(const ResultObjJSON: string;
+  out ResultText, ErrMsg: string): Boolean;
+
 implementation
 
 uses
   PasClaw.JSON;
 
+function TextOfResult(ResultObj: TJsonObject; out ResultText, ErrMsg: string): Boolean;
+var
+  Block: TJsonObject;
+  ContentArr: TJsonArray;
+  i: Integer;
+begin
+  Result := False;
+  ResultText := '';
+  ErrMsg := '';
+  ContentArr := ResultObj.ChildArray('content');
+  if ContentArr <> nil then
+  try
+    for i := 0 to ContentArr.Count - 1 do
+    begin
+      Block := ContentArr.ItemObject(i);
+      if Block = nil then Continue;
+      try
+        if Block.GetStr('type', '') = 'text' then
+        begin
+          if ResultText <> '' then ResultText := ResultText + sLineBreak;
+          ResultText := ResultText + Block.GetStr('text', '');
+        end;
+      finally
+        Block.Free;
+      end;
+    end;
+  finally
+    ContentArr.Free;
+  end;
+
+  if (ResultText = '') and ResultObj.GetBool('isError', False) then
+  begin
+    ErrMsg := 'tool reported error (no text content)';
+    Exit;
+  end;
+  Result := True;
+end;
+
+function ParseToolCallResultObject(const ResultObjJSON: string;
+  out ResultText, ErrMsg: string): Boolean;
+var
+  ResultObj: TJsonObject;
+begin
+  Result := False;
+  ResultText := '';
+  ErrMsg := '';
+  ResultObj := JsonTryParse(ResultObjJSON);
+  if ResultObj = nil then
+  begin
+    ErrMsg := 'tools/call result is not an object';
+    Exit;
+  end;
+  try
+    Result := TextOfResult(ResultObj, ResultText, ErrMsg);
+  finally
+    ResultObj.Free;
+  end;
+end;
+
 function ParseToolCallResult(const RespJSON: string;
   out ResultText, ResultJSON, ErrMsg: string): Boolean;
 var
-  RespObj, ResultObj, Block: TJsonObject;
-  ContentArr: TJsonArray;
-  i: Integer;
+  RespObj, ResultObj: TJsonObject;
 begin
   Result := False;
   ResultText := '';
@@ -84,40 +147,13 @@ begin
     try
       { The whole result object, verbatim, is the structured escape hatch. }
       ResultJSON := ResultObj.ToJSON;
-
-      ContentArr := ResultObj.ChildArray('content');
-      if ContentArr <> nil then
-      try
-        for i := 0 to ContentArr.Count - 1 do
-        begin
-          Block := ContentArr.ItemObject(i);
-          if Block = nil then Continue;
-          try
-            if Block.GetStr('type', '') = 'text' then
-            begin
-              if ResultText <> '' then ResultText := ResultText + sLineBreak;
-              ResultText := ResultText + Block.GetStr('text', '');
-            end;
-          finally
-            Block.Free;
-          end;
-        end;
-      finally
-        ContentArr.Free;
-      end;
-
-      if (ResultText = '') and ResultObj.GetBool('isError', False) then
-      begin
-        ErrMsg := 'tool reported error (no text content)';
-        Exit;
-      end;
+      Result := TextOfResult(ResultObj, ResultText, ErrMsg);
     finally
       ResultObj.Free;
     end;
   finally
     RespObj.Free;
   end;
-  Result := True;
 end;
 
 end.

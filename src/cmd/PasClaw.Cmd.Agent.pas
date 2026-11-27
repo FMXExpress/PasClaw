@@ -66,6 +66,7 @@ uses
   PasClaw.Agent.Prune,
   PasClaw.MCP.Bridge,
   PasClaw.MCP.Disclosure,   { tool_search must exist even with --no-mcp }
+  PasClaw.MCP.Elicit,       { the REPL answers MCP elicitation at the keyboard }
   PasClaw.Skills.Loader,
   PasClaw.Skills.Slash,       { /name -> prompt skill expansion in the REPL }
   PasClaw.Skills.Manage,
@@ -77,6 +78,7 @@ uses
   PasClaw.Agent.SubagentBg,
   PasClaw.Agent.AutoRouter,
   PasClaw.Agent.AutoRouter.Apply,
+  PasClaw.Agent.Advisor,           { advisor tool, --advisor, /advisor }
   PasClaw.Session.Store,
   PasClaw.Tools.Sandbox,
   PasClaw.Shell.Backend,           { StartShellSession / CloseShellSession +
@@ -219,6 +221,10 @@ type
     { --orient / --no-orient override of Cfg.OrientTaskAware. See
       TOrientOverride. ooUnset = honour config/profile. }
     OrientOverride: TOrientOverride;
+    { --advisor <[provider:]model> / --no-advisor: the second model the
+      agent may consult (PasClaw.Agent.Advisor), for this run. }
+    Advisor:       string;
+    NoAdvisor:     Boolean;
   end;
 
   TLoopHandlers = class
@@ -420,6 +426,8 @@ begin
     Refuse('--goal-objective/--goal-max-iters');
   if A.BackendOverride <> '' then Refuse('--backend');
   if A.Profile <> '' then Refuse('--profile');
+  { The gateway's own advisor setting answers an attached turn. }
+  if (A.Advisor <> '') or A.NoAdvisor then Refuse('--advisor/--no-advisor');
 end;
 
 function ParseArgs(const Argv: array of string; var A: TAgentArgs): Boolean;
@@ -470,6 +478,8 @@ begin
     if Argv[i] = '--plan'        then begin A.Mode := pmPlan;  Inc(i); Continue; end;
     if Argv[i] = '--build'       then begin A.Mode := pmBuild; Inc(i); Continue; end;
     if Argv[i] = '--profile'     then begin if i = High(Argv) then Exit(False); A.Profile := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--advisor'     then begin if i = High(Argv) then Exit(False); A.Advisor := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--no-advisor'  then begin A.NoAdvisor := True; Inc(i); Continue; end;
     Inc(i);
   end;
 end;
@@ -587,6 +597,10 @@ begin
      comments terminate the comment early on dcc64; FPC tolerated
      it but Delphi closes on the first '}'. *)
   RegisterSendMessageTool(Result);
+  { advisor: listed only while an advisor model is set -- config, --advisor,
+    or /advisor in the REPL. Cmd_Agent_Run / Cmd_ACP_Run seed the settings
+    from the loaded config and the flags before any registry is built. }
+  RegisterAdvisorTool(Result, nil);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(Result, Skills);
   { Install the configured db_* connections (inert when the "database" section
@@ -698,6 +712,12 @@ begin
     AskPermission, so the rule never quietly becomes allow. }
   if Handlers <> nil then
     Result.OnAsk := Handlers.AskPermission;
+  { MCP elicitation (a server asking the user to fill in a form or visit a
+    URL) is answered at the keyboard in the REPL only; one-shot and piped
+    runs leave it nil and the request is declined with a note to the
+    model. }
+  if (Handlers <> nil) and Handlers.Interactive then
+    Result.Elicitor := ConsoleElicitationHandler;
   Result.Fallbacks     := ResolveFallbacks(Cfg, Result.FallbackModels);
   Result.Options       := DefaultChatOptions;
   { ToolsEnabled tracks the registry we are about to hand RunToolLoop
@@ -1739,6 +1759,9 @@ begin
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
+  { Before the connect: a legacy server learns at initialize whether this
+    client can answer its elicitation/create, and here someone can. }
+  SetMCPProcessElicitationHandler(ConsoleElicitationHandler);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
@@ -1844,6 +1867,14 @@ begin
           PrintLn(Ansi.Red + '(steer push failed)' + Ansi.Reset);
         Continue;
       end;
+      if Line = '/tasks' then
+      begin
+        { Background jobs (spawn_background / shell_background) of this
+          process, running first -- the CLI's view of the gateway's
+          Background tab. }
+        PrintLn(FormatBackgroundJobsText);
+        Continue;
+      end;
       if Line = '/tools' then
       begin
         if Reg = nil then
@@ -1864,11 +1895,13 @@ begin
         PrintLn('  /compact     force a one-shot summariser pass on the history now');
         PrintLn('  /think       toggle extended thinking on the next turn (if the provider supports it)');
         PrintLn('  /tools       list registered tools');
+        PrintLn('  /tasks       list background jobs (spawn_background / shell_background), running first');
         PrintLn('  /mode [plan|build|improve]  show or set the mode (plan = read-only, build = full access, improve = measure-first loop)');
         PrintLn('  /steer <msg> queue a mid-loop steering message for the NEXT iteration');
         PrintLn('  /undo [N]    rewind N turns by restoring file checkpoints (default 1)');
         PrintLn('  /goal [--max N] <objective>');
         PrintLn('               auto-continue turns until a judge model says MET / FAILED (budget N, default 5)');
+        PrintLn('  ' + AdvisorCommandHelp);
         PrintLn('  /quit        exit (alias: /exit)');
         if SlashSkillHelp(SlashSkills) <> '' then
         begin
@@ -1911,6 +1944,15 @@ begin
         HandleGoalCommand(Copy(Line, 7, MaxInt));
         Continue;
       end;
+      if (Line = '/advisor') or (Copy(Line, 1, 9) = '/advisor ') then
+      begin
+        { The tool follows on the next request: the registry asks the
+          advisor settings on every lookup. }
+        PrintLn('  ' + AdvisorCommand(Copy(Line, 10, MaxInt)));
+        if Reg = nil then
+          PrintLn(Ansi.Dim + '  (tools are off in this run, so the agent cannot call it)' + Ansi.Reset);
+        Continue;
+      end;
       if Line = '/status' then
       begin
         if Provider <> nil then
@@ -1927,6 +1969,8 @@ begin
           PrintLn('  thinking:  on (next turn)')
         else
           PrintLn('  thinking:  off');
+        { AdvisorStatus reads "advisor: ..."; drop its label for the column. }
+        PrintLn('  advisor:   ' + Copy(AdvisorStatus, Length('advisor: ') + 1, MaxInt));
         if SystemPromptOverride <> '' then
           PrintLn('  compacted: yes (summary in system prompt)')
         else
@@ -2695,6 +2739,13 @@ begin
   try
     if A.OrientOverride = ooOn then Cfg.OrientTaskAware := True
     else if A.OrientOverride = ooOff then Cfg.OrientTaskAware := False;
+    { The advisor, as `pasclaw agent` seeds it: the same registry builder
+      lists the tool from these settings. }
+    if not ApplyAdvisorFlags(Cfg, A.Advisor, A.NoAdvisor, Err) then
+    begin
+      LogError('acp: %s', [Err]);
+      Exit(2);
+    end;
     if Cfg.MemoryDistillEnabled then EnableBestFactEmbedder(GetHome);
     ConfigureSandbox(Cfg.Sandbox, '');
     try
@@ -2747,6 +2798,7 @@ var
   AttachURL, AttachReason, AttachWarn, Unsupported: string;
   AttachFail: Boolean;
   Turn: TChatTurnOptions;
+  AdvisorErr: string;
 begin
   if not ParseArgs(Argv, A) then
   begin
@@ -2755,6 +2807,7 @@ begin
     PrintLnErr('                     [--max-iterations N] [--no-tools] [-q|--quiet] [--verbose|--brief]');
     PrintLnErr('                     [--orient|--no-orient] [--mode plan|build|improve] [--plan|--build]');
     PrintLnErr('                     [--profile baseline|low-token|security|max-build|all-on|<custom>]');
+    PrintLnErr('                     [--advisor [provider:]model | --no-advisor]');
     Exit(1);
   end;
 
@@ -2810,6 +2863,14 @@ begin
     PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + AttachReason);
     Cfg.Free;
     Exit(1);
+  end;
+  { The advisor: config, then --advisor / --no-advisor. Before any
+    registry is built -- NewBuiltinRegistry lists the tool from these. }
+  if not ApplyAdvisorFlags(Cfg, A.Advisor, A.NoAdvisor, AdvisorErr) then
+  begin
+    PrintErr(FormatCLIError(AdvisorErr, 'pasclaw agent'));
+    Cfg.Free;
+    Exit(2);
   end;
   { Phase 4c: best-effort load the semantic fact embedder once per run
     (no-op when distill off or ONNX unprovisioned). }

@@ -9,7 +9,8 @@ Two steps, because the gateway has to be running between them:
 
 `init` writes the fixture config and a MEMORY.md. `shoot` seeds the running
 gateway with projects, one workflow and one finished conversation, then
-captures.
+captures; then it starts one background subagent from a chat of its own and
+captures the Background tab.
 
 Every shot names its colour scheme. The web UI follows the OS theme until a
 theme is chosen, and Playwright's default is light, so a shot that does not
@@ -94,6 +95,22 @@ WORKFLOW = {
     ],
     "edges": [{"from": "read", "to": "remember"}],
 }
+
+# The Background tab: a chat turn hands a task to a background subagent,
+# which reads the memory file once and answers. Seeded after the shots above are
+# taken, under a chat of its own, so they come out as they did before it.
+BG_SESSION_ID = "docs-screenshot-background"
+
+BG_QUESTION = "Check the release checklist in the background while we keep going."
+
+BG_TASK = ("Compare the release checklist in docs/release.md with what workspace "
+           "memory says about it, and list any step whose order is a trap.")
+
+BG_ANSWER = """One ordering trap, from workspace memory: **step 3 runs before \
+step 2**. Nothing else in the notes constrains the order.
+
+Not checked: whether docs/release.md itself still says so -- the note may \
+predate an edit."""
 
 W, H = 1600, 1000
 
@@ -223,6 +240,95 @@ def relay_worker(base, stop, answered):
             return
 
 
+def background_worker(base, stop, answered):
+    """Answer relay jobs for the background seeding until told to stop.
+
+    Two loops come through here: the chat turn, which calls
+    spawn_background once and then says so, and the subagent it starts
+    (its system prompt is the general-purpose sub-agent's), which reads
+    the memory file once and then answers. The subagent runs after the
+    chat turn has returned, so this keeps serving until the job is done.
+    """
+    req = urllib.request.Request(base + "/v1/relay/poll",
+                                 headers={"X-Relay-Worker-Id": "screenshot-background"})
+    try:
+        stream = urllib.request.urlopen(req, timeout=120)
+    except Exception as exc:                                    # noqa: BLE001
+        answered.append(("error", "could not attach relay worker: %r" % exc))
+        return
+    for raw in stream:
+        if stop.is_set():
+            return
+        line = raw.decode("utf-8", "replace").strip()
+        if not line.startswith("data: "):
+            continue
+        try:
+            job = json.loads(line[6:])
+        except ValueError:
+            continue
+        msgs = job.get("messages", [])
+        after_tool = bool(msgs) and msgs[-1].get("role") == "tool"
+        system = (job.get("options") or {}).get("system_prompt", "")
+        usage = {"prompt_tokens": 2100, "completion_tokens": 40}
+        if not job.get("tools"):
+            # Not an agent loop: the fixture's fact distiller, after the turn.
+            body = {"content": "[]", "finish_reason": "stop", "usage": usage}
+        elif "focused sub-agent" in system:
+            if after_tool:
+                body = {"content": BG_ANSWER, "finish_reason": "stop", "usage": usage}
+            else:
+                body = {"content": "Checking what memory says about the checklist first.",
+                        "finish_reason": "tool_calls", "usage": usage,
+                        # A workspace-relative path: the result then names no
+                        # directory of the machine the shot was taken on.
+                        "tool_calls": [{"id": "b1", "type": "function",
+                                        "function": {"name": "read_file",
+                                                     "arguments": json.dumps(
+                                                         {"path": "memory/MEMORY.md"})}}]}
+        elif after_tool:
+            body = {"content": "Started a background subagent on it; its findings will "
+                               "come back to this chat.", "finish_reason": "stop", "usage": usage}
+        else:
+            body = {"content": "", "finish_reason": "tool_calls", "usage": usage,
+                    "tool_calls": [{"id": "p1", "type": "function",
+                                    "function": {"name": "spawn_background",
+                                                 "arguments": json.dumps(
+                                                     {"agent": "general-purpose", "prompt": BG_TASK})}}]}
+        try:
+            post(base + "/v1/relay/respond/" + job["id"], body, timeout=30)
+            answered.append(("ok", job["id"]))
+        except Exception as exc:                                # noqa: BLE001
+            answered.append(("error", "respond failed: %r" % exc))
+            return
+
+
+def seed_background(base):
+    """One finished background subagent job, started from its own chat."""
+    stop = threading.Event()
+    answered = []
+    worker = threading.Thread(target=background_worker, args=(base, stop, answered),
+                              daemon=True)
+    worker.start()
+    time.sleep(1.0)
+    try:
+        post(base + "/v1/chat", {"message": BG_QUESTION},
+             headers={"X-PasClaw-Session": BG_SESSION_ID})
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            jobs = json.loads(get(base + "/v1/background")).get("jobs", [])
+            if jobs and all(j.get("finished_at") for j in jobs):
+                break
+            time.sleep(0.5)
+        else:
+            raise SystemExit("the background job never finished")
+    finally:
+        stop.set()
+    for kind, detail in answered:
+        if kind == "error":
+            raise SystemExit("background seeding failed: " + detail)
+    print("background: %d relay turn(s) answered" % len(answered))
+
+
 def seed_conversation(base):
     stop = threading.Event()
     answered = []
@@ -345,6 +451,31 @@ def cmd_shoot(args):
                 failures.append((name, len(errs)))
             page.close()
         browser.close()
+
+    if not args.no_seed:
+        # After the shots above, so their chat list and transcript are the
+        # ones they always were.
+        seed_background(base)
+        with sync_playwright() as p:
+            browser = launch(p)
+            page = browser.new_page(viewport={"width": W, "height": H}, color_scheme="dark")
+            errs = []
+            page.on("pageerror", lambda e: errs.append(str(e)))
+            page.on("console",
+                    lambda m: errs.append(m.text) if m.type == "error" else None)
+            page.goto(base + "/#background", wait_until="networkidle", timeout=30000)
+            page.wait_for_selector("#bg-list .bg-item", timeout=15000)
+            page.locator("#bg-list .bg-item").first.click()
+            page.wait_for_selector("#bg-detail details.tool-card", timeout=15000)
+            page.wait_for_timeout(800)
+            dest = os.path.join(out, "web-ui-background.png")
+            page.screenshot(path=dest)
+            print("%-16s %7d bytes  title=%r" % ("web-ui-background", os.path.getsize(dest), page.title()))
+            if errs:
+                for e in errs[:5]:
+                    print("    JS ERROR: %s" % e[:200])
+                failures.append(("web-ui-background", len(errs)))
+            browser.close()
 
     if failures:
         raise SystemExit("FAILED: %s" % ", ".join(

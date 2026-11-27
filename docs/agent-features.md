@@ -30,6 +30,7 @@ row is weak evidence while presence is strong.
 | State machine constraining tools per phase | statewright [S] | ⚠️ mode gates, not per-phase [P] |
 | Parallel tool dispatch | common [S] | ✅ read-only batching [P] |
 | Subagent fan-out via orchestration scripts | AgentSPEX, JS orchestration [S] | ✅ `spawn*` [P] |
+| Advisor model the agent consults mid-task | Claude Code Advisor tool, OpenClaw Advisor (experimental) [K] | ✅ `advisor` tool, on request only [P] |
 | Loop-detection middleware | [S] | ❌ iteration cap only [P] |
 
 ## 2. Context management & compaction
@@ -71,7 +72,9 @@ row is weak evidence while presence is strong.
 |---|---|---|
 | MCP client | Cline, Goose, Continue, Codex [S] | ✅ [P] |
 | MCP server (expose own tools) | rare [K] | ✅ gateway + `mcp stdio` [P] |
-| Stateless MCP core (2026-07-28 spec) | [S] | ✅ supported [P] |
+| Stateless MCP core (2026-07-28 spec) | [S] | ✅ **client and server** [P]. Server: `server/discover`, per-request `_meta`, `resultType`, legacy `initialize` still served. Client: probes with `server/discover`, falls back to `initialize` (offering 2025-11-25, accepting what the server answers) on an error, a 4xx, a probe timeout or `UnsupportedProtocolVersionError`; modern requests carry `_meta` and, over HTTP, `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` / `x-mcp-header` headers and no session. The negotiated version shows in `mcp test`, `/v1/mcp` and the web UI's MCP tab. Interop-tested against PasClaw's own server and the reference `server-everything` 2.3.1 [P] |
+| MCP elicitation (form + URL) | MCP 2025-06-18 / 2026-07-28 spec [S] | ✅ **client** [P]: multi round-trip `input_required` (retry with `inputResponses` + `requestState`, 8-round cap) and legacy `elicitation/create` over stdio. The REPLs ask at the keyboard (typed form fields; URL shown, never opened); the gateway, one-shot runs and subagents decline and hand the model a note with the URL. ⚠️ No legacy elicitation over HTTP; the Delphi full-screen TUI declines |
+| MCP tasks (`io.modelcontextprotocol/tasks`) | MCP 2026-07-28 extension [S] | ✅ **client** [P]: task handles from `tools/call` are polled with `tasks/get` at the server's interval within the call timeout and the task TTL; task input goes through elicitation and `tasks/update`; timed-out tasks are cancelled. ❌ not offered by PasClaw's own MCP server |
 | Skill bundles with routing | Microsoft Skills Framework, agent-skills [S] | ✅ skills [P] |
 | **Negative examples in skill routing** | [S] | ❌ |
 | Skill marketplace / hub | Cline, Continue; **ClawHub** ("npm for AI agents", vector search, one-command install; 3,286 skills at first sourcing, **64K by May 2026** [S]) | ✅ **corrected pass 15**: a 522-line ClawHub integration (search + install from clawhub.ai) was in the repo all along — this row said ❌ for fourteen passes [P] |
@@ -259,6 +262,7 @@ edit → PR → human review* is now the same across every major tool [S].
 | **Per-agent git worktree isolation** | Intent — attribution "a property of the workspace itself" [S] | ✅ a subagent spawned with `worktree: "<branch>"` runs in its own checkout (per-thread sandbox workspace, `TToolLoopConfig.Workspace`); sessions record their `location` [P] |
 | Attribution without span propagation (structural, from the worktree boundary) | [S] | ⚠️ the boundary exists (one branch per subagent, commits land there); nothing yet reads it back as attribution [P] |
 | Free-tier background quota as a product lever | Jules: 15 tasks/day [S] | n/a (self-hosted) |
+| A view of background work: running and finished jobs, open one to read it, stop it, message a finished agent | Codex agent command center; Claude Code `/tasks` (finished subagents reopened and messaged); OpenClaw Subagents / Processes panels [S] | ✅ web UI **Background** tab over `GET /v1/background` (every chat's `spawn_background` / `shell_background` jobs, running count on the tab); a subagent's transcript with the chat's tool cards or a command's output; Stop; a follow-up to a finished subagent continues its conversation as a linked job; `/tasks` in the CLI and TUI. Cron stays on its own tab [P] |
 
 Worktree isolation is the standout: it solves attribution, conflict, and
 rollback in one move, structurally, with no instrumentation — and PasClaw's
@@ -374,7 +378,7 @@ Zero coverage in four passes; meanwhile the field has a draft IETF standard.
 
 | Feature | Who | PasClaw |
 |---|---|---|
-| OAuth 2.1 + PKCE as the MCP authorization model | MCP spec, Stytch/Aembit guides [S] | ✅ **as MCP client** — `pasclaw mcp auth` runs the full flow in `MCP.OAuth.pas`: AS discovery, PKCE `S256`, dynamic registration, token persistence + refresh. ⚠️ **as MCP server** — the inbound gateway is still one shared bearer token [P] **(corrected pass 17: the original row read ❌ because it checked only the inbound half)** |
+| OAuth 2.1 + PKCE as the MCP authorization model | MCP spec, Stytch/Aembit guides [S] | ✅ **as MCP client** — `pasclaw mcp auth` runs the full flow in `MCP.OAuth.pas`: AS discovery, PKCE `S256`, RFC 9207 `iss` validation, Client ID Metadata Documents (`mcp_oauth_client_metadata_url`) or dynamic registration as a `native` client, client credentials bound to their issuer, token persistence + refresh. ⚠️ **as MCP server** — the inbound gateway is still one shared bearer token [P] **(corrected pass 17: the original row read ❌ because it checked only the inbound half)** |
 | **On-behalf-of delegation**: `requested_actor` / `actor_token` binding agent identity into the token exchange | IETF draft-oauth-ai-agents-on-behalf-of [S] | ❌ |
 | Two-identity model: user identity + agent identity, both in every call | [S] | ❌ no agent identity at all |
 | Short-lived scoped tokens + policy engine in front of tools | [S] | ⚠️ sandbox policy exists; tokens do not expire [P] |

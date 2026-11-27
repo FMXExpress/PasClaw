@@ -87,11 +87,13 @@ pasclaw agent --quiet -m "..."                              # machine-readable
 pasclaw agent --backend docker -m "..."                     # per-run override
 pasclaw agent --plan -m "review the gateway auth flow"      # read-only Plan mode
 pasclaw agent --mode build -m "..."                         # full-access (default)
+pasclaw agent --advisor anthropic:claude-opus-4-7 -m "..."  # a second model the agent may consult
+pasclaw agent --no-advisor -m "..."                         # no advisor, whatever config says
 pasclaw agent --attach                                      # client of the running gateway
 pasclaw agent --attach --session <id> -m "..."              # one turn on a gateway session
 ```
 
-Persists conversation history to `$PASCLAW_HOME/workspace/sessions/<id>.json` after every turn by default. Interactive slash commands: `/help`, `/status`, `/new`, `/reset`, `/compact`, `/think`, `/tools`, `/mode [plan|build]`, `/steer <msg>`, `/quit`, plus every installed prompt skill as `/<name> <args>` (see [Skills → Arguments and slash commands](./skills.md#arguments-and-slash-commands)). See [Sessions](./sessions.md).
+Persists conversation history to `$PASCLAW_HOME/workspace/sessions/<id>.json` after every turn by default. Interactive slash commands: `/help`, `/status`, `/new`, `/reset`, `/compact`, `/think`, `/tools`, `/mode [plan|build]`, `/steer <msg>`, `/advisor [off|on|[provider:]model]`, `/quit`, plus every installed prompt skill as `/<name> <args>` (see [Skills → Arguments and slash commands](./skills.md#arguments-and-slash-commands)). See [Sessions](./sessions.md).
 
 ### `--attach`: the terminal as a gateway client
 
@@ -99,9 +101,15 @@ When a gateway is already running (serving the web UI, the desktop, a channel), 
 
 The gateway is found through `$PASCLAW_HOME/run/gateway.json`, which `pasclaw gateway` / `pasclaw serve` write on start and remove on stop (a file naming a dead pid is ignored). `--attach` with no running gateway is an error.
 
-**Flags on an attached turn.** The turn runs on the gateway, so a flag only means something if the request can carry it. These are sent with every turn: `--plan` / `--build` / `--mode` (as `mode` — without it the gateway would run build mode), `--model`, `--system` (composed into the gateway's prompt, as it is locally), `--max-tokens`, `--no-tools`. These cannot be sent and are **refused** rather than silently dropped: `--provider`, `--thinking`, `--max-iterations`, `--no-mcp`, `--no-hashline`, `--no-plan`, `--orient` / `--no-orient`, `--goal-objective` / `--goal-max-iters`, `--backend`, `--profile` (on `tui`: `--provider`, `--no-mcp`, `--no-hashline`, `--backend`, `--profile`). Display flags (`-q`, `--verbose`, `--brief`, `--theme`) stay local.
+**Flags on an attached turn.** The turn runs on the gateway, so a flag only means something if the request can carry it. These are sent with every turn: `--plan` / `--build` / `--mode` (as `mode` — without it the gateway would run build mode), `--model`, `--system` (composed into the gateway's prompt, as it is locally), `--max-tokens`, `--no-tools`. These cannot be sent and are **refused** rather than silently dropped: `--provider`, `--thinking`, `--max-iterations`, `--no-mcp`, `--no-hashline`, `--no-plan`, `--orient` / `--no-orient`, `--goal-objective` / `--goal-max-iters`, `--backend`, `--profile`, `--advisor` / `--no-advisor` (on `tui`: `--provider`, `--no-mcp`, `--no-hashline`, `--backend`, `--profile`, `--advisor` / `--no-advisor`). Display flags (`-q`, `--verbose`, `--brief`, `--theme`) stay local.
 
 `cli.attach` in config makes it the default: `auto` attaches when a gateway is up and runs locally otherwise, `on` always attaches, `off` (default) never. The bearer token comes from this config's `gateway.token`; a mismatch with the running gateway is warned about up front. The same flag exists on `pasclaw tui`, where v1 is this line client on both builds.
+
+### `--advisor` and `/advisor`: a second model to consult
+
+`--advisor <model>` or `--advisor <provider>:<model>` gives the agent the `advisor` tool for this run: it sends a second model a condensed transcript of the conversation and a question, and gets advice back as the tool result. A bare model runs on `advisor.provider` from config (else the default provider); the part before the first `:` counts as a provider only when it names a configured one, so `llama3:8b` stays a model id. `--no-advisor` turns it off whatever config says. The same two flags work on `tui`, `gateway`, `serve` and `acp`.
+
+In the REPL (and the TUI), `/advisor` shows the status, `/advisor <[provider:]model>` switches the advisor for the rest of the run, `/advisor off` turns it off, and `/advisor on` goes back to config and `--advisor`. The change applies to the next request. See [Advisor](./advisor.md).
 
 ### Agent modes (build / plan / improve / space)
 
@@ -128,6 +136,7 @@ pasclaw tui
 pasclaw tui --session 20260601T093015-1a2b3c4d
 pasclaw tui --provider openai --model gpt-4o-mini
 pasclaw tui --theme matrix
+pasclaw tui --advisor gemini:gemini-3-pro    # or --no-advisor; /advisor in the chat
 ```
 
 Full-screen terminal UI. **Delphi build**: positioned two-pane (`MVCFramework.Console`-backed) — session list on the left, chat history + input on the right. **Tab** swaps focus; in the session pane **Up/Down** navigates, **Enter** loads, **N** new session, **D** then **Y** deletes, **R** refreshes. Background-thread turn runs (UI keeps redrawing). `/theme`, `/model`, `/stats` modals. **FPC build** stays on the original line-based ANSI renderer (no session list pane yet).
@@ -156,6 +165,8 @@ pasclaw gateway --matrix                            # also $PASCLAW_MATRIX_HOMES
 pasclaw gateway --irc                               # also $PASCLAW_IRC_{SERVER,NICK,CHANNEL}
 pasclaw gateway --email                             # SMTP send + IMAP poll
 pasclaw gateway --mcp-port 9090                     # spawn a second MCP-only listener
+pasclaw gateway --advisor anthropic:claude-opus-4-7  # every chat may consult a second model
+pasclaw gateway --no-advisor                        # none, whatever config says
 pasclaw gateway --no-tools --no-mcp --no-hashline
 ```
 
@@ -170,6 +181,7 @@ pasclaw serve
 pasclaw serve --addr 0.0.0.0 --port 8088
 pasclaw serve --debug
 pasclaw serve --max-iter 40
+pasclaw serve --advisor gemini:gemini-3-pro         # or --no-advisor, as on gateway
 pasclaw serve --no-tools --no-mcp --no-hashline
 ```
 
@@ -236,7 +248,7 @@ pasclaw acp                          # an editor starts this; it speaks ACP on s
 pasclaw acp --model claude-opus-4-7 --mode plan
 ```
 
-Takes the `agent` flags (`--model`, `--provider`, `--mode`, `--max-iterations` (default 50 here), `--system`, `--no-mcp`, `--profile`, `--backend`). See [Editors: the Agent Client Protocol](./acp.md).
+Takes the `agent` flags (`--model`, `--provider`, `--mode`, `--max-iterations` (default 50 here), `--system`, `--no-mcp`, `--profile`, `--backend`, `--advisor` / `--no-advisor`). See [Editors: the Agent Client Protocol](./acp.md).
 
 ## mcp
 

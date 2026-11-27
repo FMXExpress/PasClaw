@@ -376,6 +376,7 @@ uses
   PasClaw.Tools.Worktree,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.SendMessage,
+  PasClaw.Agent.Advisor,     { advisor -- config.json's "advisor" block }
   PasClaw.Skills.Manage,
   PasClaw.Skills.Disclosure,
   PasClaw.MCP.Disclosure,   { tool_search must exist even with MCP off }
@@ -612,6 +613,8 @@ begin
   { send_message self-gates on config.json's "channels" array --
     no-op when the operator hasn't declared named targets. }
   RegisterSendMessageTool(FRegistry);
+  { advisor: listed while FConfig names an advisor model. }
+  RegisterAdvisorTool(FRegistry, FConfig);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(FRegistry, Skills);
   SetWorkflowConfig(FConfig);   { workflow llm nodes -> configured providers }
@@ -1107,6 +1110,7 @@ begin
       TPasClawServer builds its registry independently of TPasClawAgent
       and the CLI surfaces, so it must register the tool separately. }
     RegisterSendMessageTool(FRegistry);
+    RegisterAdvisorTool(FRegistry, FConfig);
     Skills := LoadSkillManifests(GetHome);
     RegisterSkills(FRegistry, Skills);
     SetWorkflowConfig(FConfig);   { workflow llm nodes -> configured providers }
