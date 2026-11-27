@@ -361,6 +361,10 @@ function FormatBackgroundJobsText: string;
 { The same in one line, for the positioned TUI's footer flash. }
 function BackgroundJobsSummary: string;
 
+{ How many jobs had their resources freed while their thread could still
+  run. Always 0; a test seam for subagent_bg_tests. }
+function BackgroundJobsFreedWhileRunning: Integer;
+
 (* Apply the transcript bounds (the BgTranscript constants). Cut messages keep
    their role and structure; dropped ones go from the front, after the
    first message, and never leave a tool result without its call.
@@ -976,8 +980,38 @@ begin
   NotifyDone;
 end;
 
+var
+  { Jobs whose lock, registry or config were freed while their thread could
+    still use them. Only ever 0 since Destroy waits; subagent_bg_tests pins
+    that. }
+  GFreedWhileRunning: Integer = 0;
+
+function BackgroundJobsFreedWhileRunning: Integer;
+begin
+  Result := GFreedWhileRunning;
+end;
+
 destructor TBgJob.Destroy;
 begin
+  (* Wait for Execute to end before freeing what it uses. TThread.Destroy
+     waits as well, but only after this body has freed everything: the
+     coordinator frees a job whose state is no longer bjRunning, and its
+     thread can still be running -- a cancelled subagent finishing the
+     model call in flight, any job still in NotifyDone -- where it takes
+     FStateLock and uses FChildReg and FCfg. Freed first, that was a
+     use-after-free; test-subagent-bg once died of it with EThreadError (a
+     critical section destroyed or unlocked out from under its thread). A
+     job freeing itself (FreeOnTerminate) is past Execute here already, and
+     one never started (Suspended) has no thread to wait for. *)
+  if (not Finished) and (not Suspended) then
+  begin
+    Terminate;
+    WaitFor;
+  end;
+  { AtomicIncrement is dcc64's intrinsic (its InterlockedIncrement is in
+    Winapi.Windows), as in PasClaw.Workflow.Store. }
+  if (not Finished) and (not Suspended) then
+    {$IFDEF FPC}InterlockedIncrement(GFreedWhileRunning);{$ELSE}AtomicIncrement(GFreedWhileRunning);{$ENDIF}
   FChildReg.Free;
   FChildDisc.Free;   { non-primary disclosure bound to FChildReg }
   FCfg.Free;

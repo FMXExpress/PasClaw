@@ -36,7 +36,7 @@ program subagent_bg_tests;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  SysUtils, Classes, DateUtils,
+  SysUtils, Classes, DateUtils, SyncObjs,
   PasClaw.Config,
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
@@ -148,13 +148,56 @@ function TFakeEchoProvider.SupportsThinking: Boolean;     begin Result := False;
 function TFakeEchoProvider.SupportsNativeSearch: Boolean; begin Result := False; end;
 function TFakeEchoProvider.SupportsStreaming: Boolean;    begin Result := False; end;
 
+type
+  { Signals when a model call starts, then holds it until released: a job
+    that is mid-call when the test wants it to be. }
+  TFakeBlockingProvider = class(TFakeEchoProvider, ILLMProvider)
+  public
+    function Chat(const Messages: array of TMessage;
+                  const Tools:    array of TToolDefinition;
+                  const Model:    string;
+                  const Options:  TChatOptions): TLLMResponse;
+  end;
+  TReleaser = class(TThread)
+  protected
+    procedure Execute; override;
+  end;
+
+var
+  GCallEntered, GCallRelease: TEvent;
+
+function TFakeBlockingProvider.Chat(const Messages: array of TMessage;
+                                    const Tools:    array of TToolDefinition;
+                                    const Model:    string;
+                                    const Options:  TChatOptions): TLLMResponse;
+begin
+  GCallEntered.SetEvent;
+  GCallRelease.WaitFor(10000);
+  Result := inherited Chat(Messages, Tools, Model, Options);
+end;
+
+procedure TReleaser.Execute;
+begin
+  Sleep(300);
+  GCallRelease.SetEvent;
+end;
+
+function MakeCoordWith(const P: ILLMProvider; out Provider: ILLMProvider;
+                       out ParentReg: TToolRegistry): TBackgroundSpawnCoordinator; forward;
+
 function MakeCoord(out Provider: ILLMProvider;
                    out ParentReg: TToolRegistry): TBackgroundSpawnCoordinator;
+begin
+  Result := MakeCoordWith(TFakeEchoProvider.Create, Provider, ParentReg);
+end;
+
+function MakeCoordWith(const P: ILLMProvider; out Provider: ILLMProvider;
+                       out ParentReg: TToolRegistry): TBackgroundSpawnCoordinator;
 var
   Specs: TSubagentSpecArray;
   Ctx: TSubagentContext;
 begin
-  Provider  := TFakeEchoProvider.Create;
+  Provider  := P;
   ParentReg := TToolRegistry.Create;
   { A stack record: zero it, or Ctx.Cfg is whatever the stack held and
     the coordinator's config-aware paths dereference garbage. }
@@ -328,6 +371,50 @@ begin
     Coord.Free;
     ParentReg.Free;
   end;
+end;
+
+(* The coordinator frees a job whose state is not bjRunning -- and a
+   cancelled subagent's thread is still running: it finishes the model call
+   in flight before it sees the cancel. Freeing the job must wait for that
+   thread before freeing its lock and registry (it once did not, and this
+   suite died now and then with EThreadError). Here the race is certain: the
+   job is held inside its model call, cancelled, and the coordinator freed
+   while a second thread releases the call 300 ms later. *)
+procedure TestFreeingACancelledJobWaitsForItsThread;
+var
+  Coord: TBackgroundSpawnCoordinator;
+  Provider: ILLMProvider;
+  ParentReg: TToolRegistry;
+  Out_, Err, Handle: string;
+  R: TReleaser;
+  Before: Integer;
+begin
+  GCallEntered := TEvent.Create(nil, True, False, '');
+  GCallRelease := TEvent.Create(nil, True, False, '');
+  R := nil;
+  try
+    Coord := MakeCoordWith(TFakeBlockingProvider.Create, Provider, ParentReg);
+    try
+      Out_ := Coord.HandleSpawnBackground('{"agent":"researcher","prompt":"hold"}', Err);
+      Handle := ExtractHandle(Out_);
+      AssertTrue(Handle <> '', 'the job started: ' + Out_ + Err);
+      AssertTrue(GCallEntered.WaitFor(10000) = wrSignaled, 'the job reached its model call');
+      Out_ := Coord.HandleCancel('{"handle":"' + Handle + '"}', Err);
+      AssertTrue(Pos('cancel', LowerCase(Out_)) > 0, 'cancelled while its model call is in flight: ' + Out_);
+      Before := BackgroundJobsFreedWhileRunning;
+      R := TReleaser.Create(False);
+    finally
+      Coord.Free;   { frees the cancelled job: must wait for its thread }
+    end;
+    AssertTrue(BackgroundJobsFreedWhileRunning = Before,
+               'a cancelled job''s lock and registry were freed while its thread still ran');
+  finally
+    if R <> nil then begin R.WaitFor; R.Free; end;
+    ParentReg.Free;
+    GCallEntered.Free;
+    GCallRelease.Free;
+  end;
+  WriteLn('  ok: freeing a cancelled job waits for its thread before freeing what it uses');
 end;
 
 procedure TestConcurrencyCapRejects;
@@ -1070,6 +1157,7 @@ begin
   TestWaitReturnsResultWhenDone;
   TestStatusReportsRunning;
   TestCancelMarksJobCancelled;
+  TestFreeingACancelledJobWaitsForItsThread;
   TestConcurrencyCapRejects;
   TestDrainEmitsBlockOnceAndOnlyOnce;
   TestSpawnWaitDeliversFullEvenAfterPreviewTruncated;
