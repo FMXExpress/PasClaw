@@ -1007,6 +1007,50 @@ begin
   end;
 end;
 
+procedure TestCancelBeforeTheSpawnIsAKill;
+(* A cancel that lands after shell_background made the job but before its
+   thread spawned the command. It was reported advisory (no process yet),
+   and the thread then started the command anyway, only to kill it on its
+   first poll; the background view's cancel test failed on it now and
+   then. Now the job knows from the start that the local backend runs it:
+   the cancel is a kill, and the command never starts. *)
+var
+  Coord: TBackgroundSpawnCoordinator;
+  Provider: ILLMProvider;
+  ParentReg: TToolRegistry;
+  Gate: TEvent;
+  Marker, Out_, Err, H, Msg: string;
+  Outcome: TBgCancelOutcome;
+begin
+  {$IFDEF UNIX}
+  Marker := IncludeTrailingPathDelimiter(GetTempDir) +
+            'pasclaw-bg-gate-' + IntToStr(GetProcessID) + '.txt';
+  DeleteFile(Marker);
+  Coord := MakeCoord(Provider, ParentReg);
+  Gate := TEvent.Create(nil, True, False, '');
+  try
+    SetShellSpawnGateForTests(Gate);
+    Out_ := Coord.HandleShellBackground('{"command":"touch ' + Marker + '"}', Err);
+    AssertTrue(Err = '', 'gated job starts: ' + Err);
+    H := ExtractHandle(Out_);
+    Outcome := Coord.CancelJob(H, Msg);
+    AssertTrue(Outcome = bcoKilled, 'a cancel before the spawn is a kill, not advisory: ' + Msg);
+    AssertContains(Msg, 'before its command started', 'the message says it never started');
+    Gate.SetEvent;
+    WaitForState(Coord, H, 'state=cancelled', 5);
+    Sleep(200);
+    AssertTrue(not FileExists(Marker), 'the cancelled command never ran');
+  finally
+    SetShellSpawnGateForTests(nil);
+    Gate.SetEvent;
+    Coord.Free;
+    ParentReg.Free;
+    Gate.Free;
+    DeleteFile(Marker);
+  end;
+  {$ENDIF}
+end;
+
 procedure TestBothTUILoopsDrainTheFlash;
 (* Every TTUI.Run must call DrainBackgroundFlash.
 
@@ -1166,6 +1210,7 @@ begin
   TestShellBackground;
   TestDoneHookTeardownWaitsForInFlightCall;
   TestCancelAndTimeoutKillTheTree;
+  TestCancelBeforeTheSpawnIsAKill;
   TestBothTUILoopsDrainTheFlash;
   TestShellToolsSurviveSubagentsOff;
   WriteLn('subagent_bg_tests: OK');

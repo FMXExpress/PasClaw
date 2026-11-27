@@ -245,7 +245,7 @@ The jobs the model started with `spawn_background` (a subagent) and `shell_backg
 
 `POST /v1/background/<handle>/cancel` goes through `spawn_cancel`'s path. 200 with `cancelled: true`, `killed` and `advisory`:
 
-- a shell job on the local backend is killed, with everything it started (`killed: true`);
+- a shell job on the local backend is killed, with everything it started (`killed: true`); cancelled before its thread has started the command, it never starts (the `message` says so), and it is still `killed: true`;
 - a subagent is `advisory: true`: it stops at its next step — before its next model call, or after the tools it is running come back — so a model call already in flight finishes first; the `message` says so. A shell job under the Docker backend is advisory too: nothing here can kill it.
 
 Either way the result is discarded. 409 when the job has already ended, 404 for an unknown handle.
