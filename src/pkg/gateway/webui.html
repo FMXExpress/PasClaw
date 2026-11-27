@@ -1495,14 +1495,106 @@
   .vault-search-row input{width:100%}
   .vault-item .sub,.col-list .item .sub{display:block;color:var(--text-3);font-size:12px;margin-top:.15rem;
     white-space:normal;overflow:hidden;text-overflow:ellipsis}
-  #vault-view{white-space:normal;font-family:var(--sans);font-size:14px}
-  .build-with{margin:.35rem 0 .6rem}
-  #vault-view h2{margin:.1rem 0 .3rem;font-size:1.2em;color:var(--text)}
-  #vault-view p{margin:.35rem 0}
-  #vault-view a{word-break:break-all}
-  #vault-view ul{margin:.3rem 0;padding-left:1.3rem}
-  .vault-meta{display:flex;flex-wrap:wrap;gap:.3rem;margin:.4rem 0}
-  .vault-meta .badge{background:var(--surface-3);color:var(--text-2)}
+
+  /* ===== Vault tab (vlt-) =====
+     Laid out like Cron and MCP: a heading with a line on what the Code
+     Vault is and how the agent reaches it (a pill says whether its tools
+     are on), a search field, then the results as rows beside the entry
+     that is open. Every entry is a third-party GitHub repository, so a
+     flagged or blocked one says so in a pill and a box. Below 1000px the
+     list and the entry share one column: opening an entry hides the list
+     and a Back button brings it back. (.vault-search-row above is shared
+     with the Memory tab.) */
+  #vault-pane{padding:1.5rem 2rem 3rem}
+  .vlt-wrap{max-width:68rem;margin:0 auto;display:flex;flex-direction:column;gap:1.25rem;min-width:0}
+  .vlt-head h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .vlt-title{display:flex;align-items:center;flex-wrap:wrap;gap:.4rem .6rem}
+  .vlt-lead{margin:.3rem 0 0;max-width:46rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .vlt-lead a{white-space:nowrap}
+  .vlt-lead code{background:var(--surface-2);border-radius:4px;padding:.03rem .3rem;font-size:.92em}
+  .vlt-pill{display:inline-flex;align-items:center;gap:.35rem;padding:0 .5rem;border-radius:999px;font-size:11.5px;
+    font-weight:500;line-height:1.75;white-space:nowrap;background:var(--surface-3);color:var(--text-2)}
+  .vlt-pill[hidden]{display:none}
+  .vlt-pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.8}
+  .vlt-pill.on{background:var(--ok-soft);color:var(--ok)}
+  .vlt-search{display:flex;align-items:center;gap:.5rem;min-width:0}
+  .vlt-field{position:relative;flex:1;min-width:0}
+  .vlt-field svg.ic{position:absolute;left:.65rem;top:50%;transform:translateY(-50%);color:var(--text-3);pointer-events:none}
+  .vlt-field input{width:100%;padding-left:2rem}
+  .vlt-search button{flex:none}
+  .vlt-body{display:grid;grid-template-columns:minmax(0,22rem) minmax(0,1fr);gap:1.25rem;align-items:start;min-width:0}
+  .vlt-sec{display:flex;flex-direction:column;gap:.6rem;min-width:0}
+  .vlt-sec-head{display:flex;align-items:baseline;gap:.5rem;min-width:0}
+  .vlt-sec-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text)}
+  .vlt-sec-head .n{min-width:0;font-size:12.5px;color:var(--text-3);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+  .vlt-list,.vlt-detail{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .vlt-row{display:flex;flex-direction:column;gap:.3rem;width:100%;min-width:0;padding:.75rem 1rem;border:0;border-radius:0;
+    background:none;color:var(--text);text-align:left;font:inherit;cursor:pointer}
+  .vlt-row+.vlt-row{border-top:1px solid var(--border)}
+  .vlt-row:first-child{border-radius:var(--radius-lg) var(--radius-lg) 0 0}
+  .vlt-row:last-child{border-radius:0 0 var(--radius-lg) var(--radius-lg)}
+  .vlt-row:only-child{border-radius:var(--radius-lg)}
+  .vlt-row:hover{background:var(--surface-2)}
+  .vlt-row[aria-current=true]{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+  .vlt-row-l1{display:flex;align-items:center;flex-wrap:wrap;gap:.25rem .45rem;min-width:0}
+  .vlt-name{min-width:0;font-size:13.5px;font-weight:600;color:var(--text);overflow-wrap:anywhere}
+  .vlt-tag{display:inline-flex;align-items:center;padding:0 .45rem;border-radius:999px;font-size:11px;font-weight:500;
+    line-height:1.65;white-space:nowrap;background:var(--surface-3);color:var(--text-2)}
+  .vlt-tag.mono{font-family:var(--mono);font-size:10.5px}
+  .vlt-tag.warn{background:var(--warn-soft);color:var(--warn)}
+  .vlt-tag.bad{background:var(--danger-soft);color:var(--danger)}
+  .vlt-sum{font-size:12.5px;line-height:1.5;color:var(--text-2);overflow-wrap:anywhere;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
+  .vlt-repo{min-width:0;font:11.5px/1.5 var(--mono);color:var(--text-3);overflow-wrap:anywhere}
+  .vlt-detail{display:flex;flex-direction:column;gap:1rem;padding:1.15rem 1.25rem 1.4rem}
+  .vlt-detail[hidden]{display:none}
+  .vlt-body.solo{grid-template-columns:minmax(0,1fr)}
+  .vlt-back{align-self:flex-start;display:none}
+  .vlt-d-head{display:flex;flex-direction:column;gap:.4rem;min-width:0}
+  .vlt-d-name{margin:0;font-size:17px;font-weight:650;letter-spacing:-.01em;color:var(--text);overflow-wrap:anywhere}
+  .vlt-d-sum{margin:0;font-size:13.5px;line-height:1.55;color:var(--text-2);overflow-wrap:anywhere}
+  .vlt-note{display:flex;gap:.5rem;align-items:flex-start;padding:.55rem .75rem;border-radius:8px;font-size:12.5px;
+    line-height:1.5;color:var(--text);border:1px solid var(--border-strong);background:var(--warn-soft)}
+  .vlt-note svg.ic{flex:none;margin-top:2px;color:var(--warn)}
+  .vlt-note.bad{border-color:var(--danger-line);background:var(--danger-soft)}
+  .vlt-note.bad svg.ic{color:var(--danger)}
+  .vlt-actions{display:flex;flex-wrap:wrap;gap:.5rem;min-width:0}
+  .vlt-actions a.icon-btn{text-decoration:none}
+  .vlt-facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.35rem 1.25rem;margin:0;
+    padding:.75rem 0 0;border-top:1px solid var(--border);font-size:12.5px;line-height:1.5}
+  .vlt-facts dt{color:var(--text-3)}
+  .vlt-facts dd{margin:0;min-width:0;color:var(--text);overflow-wrap:anywhere}
+  .vlt-facts dd a{overflow-wrap:anywhere}
+  .vlt-sub{margin:0 0 .4rem;font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--text-3)}
+  .vlt-md{min-width:0;font-size:13.5px;line-height:1.6;overflow-wrap:anywhere}
+  .vlt-md img{max-width:100%;height:auto}
+  .vlt-md pre{max-width:100%;overflow:auto}
+  .vlt-empty{display:flex;gap:.9rem;align-items:flex-start;padding:1.2rem 1.25rem}
+  .vlt-empty-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .vlt-empty-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .vlt-empty b{display:block;margin-bottom:.2rem;font-size:13.5px;font-weight:600;color:var(--text);overflow-wrap:anywhere}
+  .vlt-empty p{margin:0;max-width:40rem;font-size:13px;line-height:1.55;color:var(--text-2)}
+  .vlt-chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.7rem}
+  .vlt-chips button{padding:.2rem .65rem;border:1px solid var(--border-strong);border-radius:999px;background:var(--surface-2);
+    font-size:12.5px;color:var(--text-2);cursor:pointer}
+  .vlt-chips button:hover{color:var(--text);border-color:var(--accent-line)}
+  .vlt-msg{display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;padding:1rem 1.25rem;font-size:13px;color:var(--text-3)}
+  .vlt-msg.err{color:var(--danger)}
+  .vlt-msg .vlt-err-text{flex-basis:100%;font:12px/1.5 var(--mono);color:var(--text);overflow-wrap:anywhere}
+  .vlt-foot{margin:0;font-size:12px;color:var(--text-3)}
+  @media (max-width:1000px){
+    .vlt-body{grid-template-columns:minmax(0,1fr)}
+    .vlt-back{display:inline-flex}
+    .vlt-wrap.reading .vlt-results,.vlt-wrap:not(.reading) .vlt-detail{display:none}
+  }
+  @media (max-width:760px){
+    #vault-pane{padding:1rem 1rem 2rem}
+    .vlt-detail{padding:1rem}
+    .vlt-facts{grid-template-columns:minmax(0,1fr);gap:.05rem}
+    .vlt-facts dd+dt{margin-top:.4rem}
+    .vlt-empty{flex-direction:column;gap:.7rem}
+  }
 
   /* ===== Workflow tab =====
      The editor's layout lives in its markup; this gives it the page's
@@ -1687,6 +1779,8 @@
   <symbol id="i-files-up" viewBox="0 0 16 16"><path d="M8 13V3.5M4.25 7.25 8 3.5l3.75 3.75"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 16 16"><path d="M4.75 12.5h6.75a2.75 2.75 0 0 0 .3-5.48 4 4 0 0 0-7.7 1.1A2.2 2.2 0 0 0 4.75 12.5Z"/></symbol>
   <symbol id="i-cron-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="M8 4.75V8l2.25 1.5"/></symbol>
+  <symbol id="i-vlt-box" viewBox="0 0 16 16"><path d="M2.5 5.25 8 2.5l5.5 2.75v5.5L8 13.5l-5.5-2.75z"/><path d="M2.5 5.25 8 8l5.5-2.75M8 8v5.5"/></symbol>
+  <symbol id="i-vlt-link" viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5"/><path d="M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/></symbol>
 </defs></svg>
 <header>
   <span class="logo"><span class="blue">Pas</span><span class="red">Claw</span></span>
@@ -2026,15 +2120,31 @@
   </div>
 
   <div id="tab-vault" class="tab">
-    <div class="two-col">
-      <div class="col-list">
-        <form id="vault-form" class="vault-search-row">
-          <input id="vault-q" type="search" autocomplete="off"
-                 placeholder="Search the Code Vault (Object Pascal)">
+    <!-- Vault: the pasclaw.dev Code Vault, searched through GET /v1/vault?q=
+         and read through GET /v1/vault/<slug>. Read-only and public: the
+         gateway proxies the registry and holds nothing of yours here. -->
+    <div class="pane" id="vault-pane">
+      <div class="vlt-wrap" id="vlt-wrap">
+        <header class="vlt-head">
+          <div class="vlt-title"><h2>Code Vault</h2><span class="vlt-pill" id="vlt-agent" hidden></span></div>
+          <p class="vlt-lead">Open-source Object Pascal libraries, components and samples listed on pasclaw.dev. Search it, read an entry, then start a chat that builds with it. With the vault tools on, the agent searches it too, through <code>vault_search</code> and <code>vault_get</code>.
+            <a href="#settings" data-vlt-settings>Settings › Tools</a></p>
+        </header>
+        <form id="vlt-form" class="vlt-search" role="search">
+          <label class="vlt-field"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+            <input id="vlt-q" type="search" autocomplete="off" spellcheck="false" maxlength="200"
+                   placeholder="Search libraries, components and samples" aria-label="Search the Code Vault"></label>
+          <button class="primary" type="submit" id="vlt-go">Search</button>
         </form>
-        <div id="vault-list"></div>
+        <div class="vlt-body solo" id="vlt-body">
+          <section class="vlt-sec vlt-results" aria-labelledby="vlt-res-h">
+            <div class="vlt-sec-head"><h3 id="vlt-res-h">Results</h3><span class="n" id="vlt-n"></span></div>
+            <div class="vlt-list" id="vlt-list" aria-live="polite"></div>
+          </section>
+          <section class="vlt-detail" id="vlt-detail" hidden aria-live="polite" aria-label="Entry"></section>
+        </div>
+        <p class="vlt-foot">Every entry is someone else's GitHub repository. Read its code before you build with it.</p>
       </div>
-      <div class="col-view" id="vault-view"><div class="empty-pane">Search the pasclaw.dev Code Vault for Object Pascal samples and components.</div></div>
     </div>
   </div>
 
@@ -7053,82 +7163,8 @@ const tabLoaders = {
 
   vault() {
     /* The Code Vault is a remote searchable corpus (pasclaw.dev), not a
-       fixed list -- wire the search form once and let the operator query. */
-    const form = $("#vault-form"), q = $("#vault-q");
-    const list = $("#vault-list"), view = $("#vault-view");
-    if (!form || form.dataset.wired) { if (q) q.focus(); return; }
-    form.dataset.wired = "1";
-
-    async function openEntry(slug) {
-      view.innerHTML = `<div class="empty-pane">loading…</div>`;
-      try {
-        const d = await (await gwFetch("/v1/vault/" + encodeURIComponent(slug))).json();
-        if (d.error) { view.innerHTML = `<div class="empty-pane">${escapeHtml(d.error)}</div>`; return; }
-        const meta = [];
-        if (d.category)       meta.push(escapeHtml(d.category));
-        if (d.latestVersion)  meta.push("v" + escapeHtml(d.latestVersion));
-        if (d.license)        meta.push(escapeHtml(d.license));
-        if (d.delphiVersions) meta.push(escapeHtml(d.delphiVersions));
-        let html = `<h2>${escapeHtml(d.displayName || d.slug)}</h2>`;
-        if (meta.length)
-          html += `<div class="vault-meta">` + meta.map(x => `<span class="badge">${x}</span>`).join("") + `</div>`;
-        if (d.suspicious || d.blocked)
-          html += `<div class="vault-meta"><span class="badge off">${d.blocked ? "blocked" : "flagged"}</span></div>`;
-        if (!d.blocked)
-          html += `<button class="primary build-with" type="button" title="Start a chat set up to build with this library">Build with this</button>`;
-        if (d.repoUrl)
-          html += /^https?:\/\//i.test(d.repoUrl)
-            ? `<p><a href="${escapeHtml(d.repoUrl)}" target="_blank" rel="noopener">${escapeHtml(d.repoUrl)}</a></p>`
-            : `<p>${escapeHtml(d.repoUrl)}</p>`;
-        if (d.installSnippet)
-          html += renderMarkdown("```\n" + d.installSnippet + "\n```");
-        html += renderMarkdown(d.descriptionMarkdown || d.summary || "");
-        view.innerHTML = html;
-        wireCopyButtons(view);
-        const bw = view.querySelector(".build-with");
-        if (bw) bw.addEventListener("click", () => {
-          /* Hand the library's reference (repo, install snippet, docs) to the
-             chat as an attachment and prime a build-oriented prompt. */
-          const ctx = [
-            "# " + (d.displayName || d.slug),
-            d.repoUrl ? ("Repo: " + d.repoUrl) : "",
-            d.installSnippet ? ("\nInstall:\n```\n" + d.installSnippet + "\n```") : "",
-            "\n" + (d.descriptionMarkdown || d.summary || "")
-          ].filter(Boolean).join("\n");
-          buildWithInChat((d.slug || "library") + ".md", ctx,
-            "Help me build a small Object Pascal example using " + (d.displayName || d.slug) +
-            ". Use the attached library reference for install/setup.");
-        });
-      } catch (e) { view.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
-    }
-
-    async function runSearch() {
-      const query = q.value.trim();
-      if (!query) return;
-      list.innerHTML = `<div class="empty-pane">searching…</div>`;
-      try {
-        const j = await (await gwFetch("/v1/vault?q=" + encodeURIComponent(query))).json();
-        if (j.error) { list.innerHTML = `<div class="empty-pane">${escapeHtml(j.error)}</div>`; return; }
-        const rows = j.results || [];
-        if (!rows.length) { list.innerHTML = `<div class="empty-pane">no matches</div>`; return; }
-        list.innerHTML = "";
-        for (const r of rows) {
-          const el = document.createElement("div");
-          el.className = "item vault-item";
-          el.innerHTML = `<div><span>${escapeHtml(r.displayName || r.slug)}</span>`
-                       + (r.summary ? `<span class="sub">${escapeHtml(r.summary)}</span>` : "") + `</div>`;
-          el.addEventListener("click", () => {
-            $$("#vault-list .item").forEach(x => x.classList.remove("active"));
-            el.classList.add("active");
-            openEntry(r.slug);
-          });
-          list.appendChild(el);
-        }
-      } catch (e) { list.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
-    }
-
-    form.addEventListener("submit", e => { e.preventDefault(); runSearch(); });
-    q.focus();
+       fixed list: vltInit wires the search once (see "Vault tab"). */
+    vltInit();
   },
 
   logs() {
@@ -7726,6 +7762,277 @@ async function bgSend(h, form) {
     bgSetNote(j.error || ("http " + r.status), true);
   } catch (e) { bgSetNote(String(e), true); }
   btn.disabled = false;
+}
+
+/* ===== Vault tab =====
+   The pasclaw.dev Code Vault through the gateway's read-only proxy: GET
+   /v1/vault?q= for a search and GET /v1/vault/<slug> for one entry. Both
+   carry only the registry's public listing, never a secret. Every field is
+   a third party's text, so names, summaries, tags and URLs go in with
+   textContent; the entry's description goes through renderMarkdown, which
+   escapes first; a URL becomes a link only when it is http(s). The pill
+   reads one boolean, vault_tools_enabled, from GET /v1/config (which the
+   page already loads for the sandbox chip) and nothing else from it. */
+const VLT_SUGGEST = ["JSON", "REST client", "SQLite", "FireMonkey", "Indy"];
+let vltWired = false, vltSearchSeq = 0, vltOpenSeq = 0;
+
+function vltEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+const vltIsWeb = u => /^https?:\/\/\S+$/i.test(String(u || ""));
+/* "https://github.com/a/b.git" -> "github.com/a/b" for a row; the full URL
+   stays on the entry. */
+function vltShortUrl(u) {
+  try { const x = new URL(u); return (x.host + x.pathname).replace(/\.git$/i, "").replace(/\/+$/, ""); }
+  catch { return String(u || ""); }
+}
+function vltLink(u, text, cls) {
+  const a = vltEl("a", cls || "", text);
+  a.href = u; a.target = "_blank"; a.rel = "noopener noreferrer";
+  return a;
+}
+
+function vltOpenSettings() {
+  try { localStorage.setItem("pasclaw.settings.section", "tools"); } catch {}
+  showTab("settings");
+  const b = document.querySelector('#set-nav button[data-sec="tools"]');
+  if (b && $("#tab-settings").classList.contains("active")) b.click();
+}
+
+async function vltAgentPill() {
+  const pill = $("#vlt-agent");
+  try {
+    const c = await (await gwFetch("/v1/config")).json();
+    const on = !!c && c.vault_tools_enabled === true;
+    pill.textContent = on ? "Agent tools on" : "Agent tools off";
+    pill.classList.toggle("on", on);
+    pill.title = on ? "The agent can call vault_search and vault_get."
+                    : "The agent cannot search the vault. Turn on Vault tools in Settings › Tools.";
+    pill.hidden = false;
+  } catch { pill.hidden = true; }
+}
+
+function vltEmpty(title, text, withChips) {
+  const d = vltEl("div", "vlt-empty");
+  const ic = vltEl("span", "vlt-empty-ic"); ic.innerHTML = icon("vlt-box");
+  const body = vltEl("div");
+  body.append(vltEl("b", "", title), vltEl("p", "", text));
+  if (withChips) {
+    const chips = vltEl("div", "vlt-chips");
+    for (const q of VLT_SUGGEST) {
+      const b = vltEl("button", "", q); b.type = "button"; b.dataset.vltQ = q;
+      chips.append(b);
+    }
+    body.append(chips);
+  }
+  d.append(ic, body);
+  return d;
+}
+
+function vltErr(what, msg, retry) {
+  const m = vltEl("div", "vlt-msg err");
+  m.innerHTML = icon("alert");
+  m.append(vltEl("span", "", what));
+  if (retry) {
+    const b = vltEl("button", "icon-btn vlt-retry"); b.type = "button";
+    b.innerHTML = icon("refresh") + "<span>Try again</span>";
+    b.addEventListener("click", retry);
+    m.append(b);
+  }
+  m.append(vltEl("span", "vlt-err-text", msg));
+  return m;
+}
+
+/* GET -> [ok, json or error text]; the error is drawn as text. */
+async function vltGet(url) {
+  const r = await gwFetch(url);
+  let j = null; try { j = await r.json(); } catch {}
+  if (!r.ok || !j || j.error) return [false, String((j && j.error) || ("http " + r.status))];
+  return [true, j];
+}
+
+function vltShowList(on) { $("#vlt-wrap").classList.toggle("reading", !on); }
+/* With no rows (before a search, no matches, an error) the list spans the
+   page; with rows, the entry pane sits beside it. */
+function vltSolo(on) { $("#vlt-body").classList.toggle("solo", on); }
+
+async function vltSearch(query) {
+  const list = $("#vlt-list"), n = $("#vlt-n"), go = $("#vlt-go"), view = $("#vlt-detail");
+  const seq = ++vltSearchSeq;
+  query = String(query || "").trim();
+  if (!query) { $("#vlt-q").focus(); return; }
+  ++vltOpenSeq;
+  vltShowList(true);
+  view.hidden = true; view.replaceChildren();
+  vltSolo(true);
+  n.textContent = "";
+  list.replaceChildren(vltEl("div", "vlt-msg", "Searching the Code Vault…"));
+  go.disabled = true;
+  let ok, j;
+  try { [ok, j] = await vltGet("/v1/vault?q=" + encodeURIComponent(query)); }
+  catch (e) { ok = false; j = String(e && e.message || e); }
+  if (seq !== vltSearchSeq) return;
+  go.disabled = false;
+  if (!ok) {
+    list.replaceChildren(vltErr("The search failed. pasclaw.dev may be out of reach.", j, () => vltSearch(query)));
+    return;
+  }
+  const rows = Array.isArray(j.results) ? j.results : [];
+  n.textContent = rows.length + (rows.length === 1 ? " entry for " : " entries for ") + "“" + query + "”";
+  if (!rows.length) {
+    list.replaceChildren(vltEmpty("No entries match “" + query + "”",
+      "Try a shorter or broader term: a library's name, a format or a task.", false));
+    return;
+  }
+  vltSolo(false);
+  view.hidden = false;
+  view.replaceChildren(vltEl("div", "vlt-msg", "Open an entry to read it here."));
+  list.replaceChildren(...rows.map(r => {
+    const b = vltEl("button", "vlt-row"); b.type = "button";
+    b.dataset.slug = r.slug || "";
+    const l1 = vltEl("span", "vlt-row-l1");
+    l1.append(vltEl("span", "vlt-name", r.displayName || r.slug || ""));
+    if (r.category) l1.append(vltEl("span", "vlt-tag", r.category));
+    if (r.version) l1.append(vltEl("span", "vlt-tag mono", "v" + r.version));
+    b.append(l1);
+    if (r.summary) b.append(vltEl("span", "vlt-sum", r.summary));
+    if (r.repoUrl) b.append(vltEl("span", "vlt-repo", vltIsWeb(r.repoUrl) ? vltShortUrl(r.repoUrl) : r.repoUrl));
+    b.addEventListener("click", () => {
+      list.querySelectorAll(".vlt-row").forEach(x => x.removeAttribute("aria-current"));
+      b.setAttribute("aria-current", "true");
+      vltOpen(r.slug);
+    });
+    return b;
+  }));
+}
+
+async function vltOpen(slug) {
+  const view = $("#vlt-detail"), seq = ++vltOpenSeq;
+  view.hidden = false;
+  vltShowList(false);
+  const back = vltEl("button", "icon-btn vlt-back"); back.type = "button";
+  back.innerHTML = icon("back") + "<span>Results</span>";
+  back.addEventListener("click", () => {
+    vltShowList(true);
+    const cur = $("#vlt-list .vlt-row[aria-current=true]");
+    if (cur) cur.focus();
+  });
+  view.replaceChildren(back, vltEl("div", "vlt-msg", "Loading the entry…"));
+  let ok, d;
+  try { [ok, d] = await vltGet("/v1/vault/" + encodeURIComponent(slug)); }
+  catch (e) { ok = false; d = String(e && e.message || e); }
+  if (seq !== vltOpenSeq) return;
+  if (!ok) {
+    const gone = d === "not found";
+    view.replaceChildren(back, vltErr(gone ? "This entry is no longer in the vault." : "The entry could not be loaded.",
+                                      d, gone ? null : () => vltOpen(slug)));
+    return;
+  }
+  const name = d.displayName || d.slug || slug;
+  const head = vltEl("header", "vlt-d-head");
+  const tags = vltEl("div", "vlt-row-l1");
+  if (d.category) tags.append(vltEl("span", "vlt-tag", d.category));
+  if (d.latestVersion) tags.append(vltEl("span", "vlt-tag mono", "v" + d.latestVersion));
+  if (d.blocked) tags.append(vltEl("span", "vlt-tag bad", "Blocked"));
+  else if (d.suspicious) tags.append(vltEl("span", "vlt-tag warn", "Flagged"));
+  head.append(vltEl("h3", "vlt-d-name", name));
+  if (tags.childNodes.length) head.append(tags);
+  if (d.summary) head.append(vltEl("p", "vlt-d-sum", d.summary));
+  const parts = [back, head];
+
+  if (d.blocked || d.suspicious) {
+    const note = vltEl("div", "vlt-note" + (d.blocked ? " bad" : ""));
+    note.innerHTML = icon("alert");
+    note.append(vltEl("span", "", d.blocked
+      ? "pasclaw.dev has blocked this entry, so Build with this is off. Do not install it."
+      : "pasclaw.dev has flagged this entry for review. Read the repository before you use it."));
+    parts.push(note);
+  }
+
+  const acts = vltEl("div", "vlt-actions");
+  if (!d.blocked) {
+    const bw = vltEl("button", "primary build-with", "Build with this"); bw.type = "button";
+    bw.title = "Start a chat set up to build with this library";
+    bw.addEventListener("click", () => {
+      /* Hand the library's reference (repo, install snippet, docs) to the
+         chat as an attachment and prime a build-oriented prompt. */
+      const ctx = [
+        "# " + name,
+        d.repoUrl ? ("Repo: " + d.repoUrl) : "",
+        d.installSnippet ? ("\nInstall:\n```\n" + d.installSnippet + "\n```") : "",
+        "\n" + (d.descriptionMarkdown || d.summary || "")
+      ].filter(Boolean).join("\n");
+      buildWithInChat((d.slug || "library") + ".md", ctx,
+        "Help me build a small Object Pascal example using " + name +
+        ". Use the attached library reference for install/setup.");
+    });
+    acts.append(bw);
+  }
+  if (vltIsWeb(d.repoUrl)) {
+    const a = vltLink(d.repoUrl, null, "icon-btn vlt-repo-link");
+    a.innerHTML = icon("vlt-link") + "<span>Repository</span>";
+    acts.append(a);
+  }
+  if (vltIsWeb(d.homepageUrl) && d.homepageUrl !== d.repoUrl) {
+    const a = vltLink(d.homepageUrl, null, "icon-btn vlt-home-link");
+    a.innerHTML = icon("vlt-link") + "<span>Homepage</span>";
+    acts.append(a);
+  }
+  if (acts.childNodes.length) parts.push(acts);
+
+  const facts = vltEl("dl", "vlt-facts");
+  const fact = (k, v) => {
+    if (v == null || v === "") return;
+    const dd = vltEl("dd");
+    if (v instanceof Node) dd.append(v); else dd.textContent = v;
+    facts.append(vltEl("dt", "", k), dd);
+  };
+  if (d.repoUrl) fact("Repository", vltIsWeb(d.repoUrl) ? vltLink(d.repoUrl, d.repoUrl) : d.repoUrl);
+  if (d.homepageUrl && d.homepageUrl !== d.repoUrl)
+    fact("Homepage", vltIsWeb(d.homepageUrl) ? vltLink(d.homepageUrl, d.homepageUrl) : d.homepageUrl);
+  fact("License", d.license);
+  fact("Delphi versions", d.delphiVersions);
+  fact("Package manager", d.packageManager);
+  fact("Tags", d.tags);
+  if (typeof d.viewCount === "number" && d.viewCount > 0) fact("Views", d.viewCount.toLocaleString());
+  fact("Slug", d.slug);
+  if (facts.childNodes.length) parts.push(facts);
+
+  if (d.installSnippet) {
+    const inst = vltEl("div", "vlt-install");
+    const md = vltEl("div", "md vlt-md");
+    md.innerHTML = renderMarkdown("```\n" + d.installSnippet + "\n```");
+    inst.append(vltEl("h4", "vlt-sub", "Install"), md);
+    parts.push(inst);
+  }
+  const desc = String(d.descriptionMarkdown || "");
+  if (desc.trim()) {
+    const about = vltEl("div", "vlt-about");
+    const md = vltEl("div", "md vlt-md");
+    md.innerHTML = renderMarkdown(desc);
+    about.append(vltEl("h4", "vlt-sub", "About"), md);
+    parts.push(about);
+  }
+  view.replaceChildren(...parts);
+  wireCopyButtons(view);
+}
+
+function vltInit() {
+  vltAgentPill();
+  if (vltWired) { if (!$("#vlt-wrap").classList.contains("reading")) $("#vlt-q").focus(); return; }
+  vltWired = true;
+  $("#vlt-list").replaceChildren(vltEmpty("Search the Code Vault",
+    "Look for a library by name, a file format, a protocol or a task. Open an entry to read it and build with it.", true));
+  $("#vlt-form").addEventListener("submit", e => { e.preventDefault(); vltSearch($("#vlt-q").value); });
+  $("#tab-vault").addEventListener("click", e => {
+    if (e.target.closest("[data-vlt-settings]")) { e.preventDefault(); vltOpenSettings(); return; }
+    const chip = e.target.closest("[data-vlt-q]");
+    if (chip) { $("#vlt-q").value = chip.dataset.vltQ; vltSearch(chip.dataset.vltQ); }
+  });
+  $("#vlt-q").focus();
 }
 
 /* ===== Cron tab =====
