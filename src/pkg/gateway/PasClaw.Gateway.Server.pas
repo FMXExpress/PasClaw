@@ -555,6 +555,10 @@ type
       Replicate model search + schema fetch (proxied through the MCP bridge) so
       the Replicate node can build a form instead of raw JSON. }
     procedure HandleProvidersList(AResp: TIdHTTPResponseInfo);
+    { GET /v1/providers/<name>/models[?refresh=1] -- one provider's models
+      for the Settings tab's model pickers. }
+    procedure HandleProviderModels(const Name: string; ARequest: TIdHTTPRequestInfo;
+                                   AResp: TIdHTTPResponseInfo);
     procedure HandleReplicateSearch(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     procedure HandleReplicateModel(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     { POST /v1/steer -- push a mid-turn steering message into the running turn
@@ -2239,6 +2243,9 @@ begin
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows') then HandleWorkflowCreate(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp/tools') then HandleMCPTools(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/providers') then HandleProvidersList(AResponse)
+    else if (ARequest.Command = 'GET') and (Copy(Doc, 1, 14) = '/v1/providers/') and
+            (Length(Doc) > 21) and (Copy(Doc, Length(Doc) - 6, 7) = '/models') then
+      HandleProviderModels(Copy(Doc, 15, Length(Doc) - 21), ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/replicate/search') then HandleReplicateSearch(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/replicate/model') then HandleReplicateModel(ARequest, AResponse)
     else if (Copy(Doc, 1, 14) = '/v1/workflows/') then HandleWorkflowItem(Doc, ARequest, AResponse)
@@ -11554,6 +11561,136 @@ begin
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleProviderModels(const Name: string;
+                                             ARequest: TIdHTTPRequestInfo;
+                                             AResp: TIdHTTPResponseInfo);
+(* One configured provider's models, for the Settings tab's model pickers:
+   each model field lists the models of the provider it belongs to (a
+   provider card, a fallback row, the advisor's provider), where GET
+   /v1/models only ever listed the default provider's.
+
+   Same discovery and on-disk cache as GET /v1/models and `pasclaw model
+   refresh`: the cache answers when it has the list, a live fetch fills it
+   otherwise, and ?refresh=1 fetches again. When a live fetch fails, a
+   stale cache is still returned, with the error beside it. The provider
+   comes from the saved config.json (markers resolved, as LoadConfig
+   resolves them), so one added in Settings is listed before the restart
+   that brings it into the running config; the running config when the
+   file is missing or unreadable. Model ids only -- no keys, no URLs.
+
+   {"provider", "kind", "source": "live"|"cache"|"relay"|"none",
+    "fetched_at", "default_model", "models": [{"id", "name"}], "error"} *)
+var
+  Cfg: TConfig;
+  OwnCfg, Refresh, Found: Boolean;
+  Spec: TProviderSpec;
+  Base, Key, Err, Kind, DefModel, LiveErr: string;
+  Disc, Stale: TModelDiscoveryResult;
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+  Workers: TRelayWorkerArray;
+  i, j, Idx: Integer;
+  procedure AddModel(const Id, Display: string);
+  begin
+    if Id = '' then Exit;
+    Item := TJsonObject.Create;
+    Item.PutStr('id', Id);
+    if (Display <> '') and (Display <> Id) then Item.PutStr('name', Display);
+    Arr.AddObject(Item);
+  end;
+begin
+  Cfg := nil;
+  OwnCfg := False;
+  if FileExists(GetConfigPath) then
+  begin
+    Cfg := TConfig.Create;
+    try
+      Cfg.FromJSON(ExpandEnvVarsInJSON(ReadFileText(GetConfigPath)));
+      OwnCfg := True;
+    except
+      FreeAndNil(Cfg);
+    end;
+  end;
+  if Cfg = nil then Cfg := FCfg;
+  try
+    Idx := -1;
+    for i := 0 to High(Cfg.Providers) do
+      if SameText(Cfg.Providers[i].Name, Name) then begin Idx := i; Break; end;
+    if Idx < 0 then
+    begin
+      WriteJSON(AResp, 404, '{"error":' + JsonStr('no saved provider named "' + Name + '"') + '}');
+      Exit;
+    end;
+    Kind := Cfg.Providers[Idx].Kind;
+    DefModel := Cfg.Providers[Idx].Model;
+    Refresh := ARequest.Params.Values['refresh'] = '1';
+    Found := False;
+    LiveErr := '';
+    Root := TJsonObject.Create;
+    try
+      Root.PutStr('provider', Cfg.Providers[Idx].Name);
+      Root.PutStr('kind', Kind);
+      Arr := TJsonArray.Create;
+      if SameText(Kind, 'relay') then
+      begin
+        { No list to fetch: the models are what the connected workers offer. }
+        Root.PutStr('source', 'relay');
+        if FRelayQueue <> nil then
+        begin
+          Workers := FRelayQueue.GetConnectedWorkers;
+          for i := 0 to High(Workers) do
+            for j := 0 to High(Workers[i].Capabilities) do
+              AddModel(Workers[i].Capabilities[j], '');
+        end;
+      end
+      else if ResolveProviderSpecForName(Cfg, Cfg.Providers[Idx].Name, Spec, Base, Key, Err) then
+      begin
+        if DefModel = '' then DefModel := Spec.DefaultModel;
+        Found := (not Refresh) and LoadCachedModels(Cfg.Providers[Idx].Name, Disc);
+        if not Found then
+        begin
+          Disc := DiscoverModels(Spec, Base, Key);
+          if Disc.Ok and (Length(Disc.Models) > 0) then
+            SaveCachedModels(Cfg.Providers[Idx].Name, Disc)
+          else if LoadCachedModels(Cfg.Providers[Idx].Name, Stale) then
+          begin
+            { The fetch failed or came back empty: an older list beats none. }
+            LiveErr := Disc.ErrMsg;
+            if LiveErr = '' then LiveErr := 'the provider listed no models';
+            Disc := Stale;
+          end;
+        end;
+        if Disc.Ok then
+        begin
+          Root.PutStr('source', Disc.Source);
+          if Disc.FetchedAt > 0 then Root.PutInt('fetched_at', Disc.FetchedAt);
+          for i := 0 to High(Disc.Models) do
+            AddModel(Disc.Models[i].Id, Disc.Models[i].Display);
+          if LiveErr <> '' then Root.PutStr('error', LiveErr);
+        end
+        else
+        begin
+          Root.PutStr('source', 'none');
+          if Disc.ErrMsg <> '' then Root.PutStr('error', Disc.ErrMsg)
+          else Root.PutStr('error', 'the provider listed no models');
+        end;
+      end
+      else
+      begin
+        Root.PutStr('source', 'none');
+        Root.PutStr('error', Err);
+      end;
+      Root.PutStr('default_model', DefModel);
+      Root.PutArray('models', Arr);
+      WriteJSON(AResp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+  finally
+    if OwnCfg then Cfg.Free;
   end;
 end;
 
