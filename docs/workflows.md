@@ -152,13 +152,68 @@ $ pasclaw workflow approve digest
 - `pending` can't be used as a workflow id, because
   `/v1/workflows/pending` is the approval list's route.
 
+## In the web UI
+
+The **Workflow** tab lists the saved workflows and opens one in an editor:
+steps as cards on a canvas, the selected step's settings beside it, and a
+run under it.
+
+**A step's arguments are a form.** For an MCP tool (`GET /v1/mcp/tools`)
+or a built-in one (`GET /v1/tools`) the settings show one field per
+property of the tool's input schema:
+
+| Property | Field |
+|---|---|
+| `string` | a text field; a textarea for long text and prompts |
+| `number`, `integer` | a number |
+| `boolean` | a checkbox |
+| `enum` | a select |
+| an array of strings, numbers or booleans | a list you add to and remove from |
+| an object with properties | a fieldset with its own fields; JSON for anything nested deeper |
+
+Required properties are marked with `*`, the description is the hint
+under the field, and the default is the placeholder (a field left empty
+isn't sent, so the tool's default applies). A field that holds a
+template, `{{inputs.prompt}}` or `{{nodes.gen.output[0]}}`, is text
+whatever the property's type, and is saved as you typed it: a number
+field holding `{{inputs.steps}}` saves the string. A checkbox or a select
+has a `{{ }}` button to type a template instead.
+
+The JSON is still there, under **Arguments as JSON**, and the two follow
+each other: a form edit rewrites the JSON (keeping keys the schema doesn't
+name), and a JSON edit refills the form. JSON that doesn't parse shows
+the error under it and leaves the form as it was. A tool with no schema
+has the JSON alone. LLM steps keep their provider, model and prompt form,
+and a Replicate model's inputs use the same schema form.
+
+**A run shows what it made.** After a run:
+
+- each step's result is in the run panel, and in the step's settings when
+  you click its card. JSON is pretty-printed with collapsible sections; a
+  Replicate prediction gets a line with its `status`, `model` and
+  `metrics.predict_time` above it. Text is rendered as markdown.
+- clicking the **Outputs** box shows each declared output's name and
+  value (the run route's `outputs`).
+- media in a result shows as an image, a video or an audio player, and as
+  a thumbnail on the step's card and on the Outputs box. Clicking an image
+  or video opens it large (Esc closes it), with a link to the original.
+
+Media is found by URL: a result that is a URL; the `output`, `url`,
+`image`, `images`, `video` and `audio` fields; any other string or list
+of strings that is a URL; and `data:` URIs. The file extension says what
+it is (png, jpg, jpeg, webp, gif, avif; mp4, webm, mov; mp3, wav, ogg,
+m4a, flac); a URL without one counts only under a field named for a kind,
+such as `image` or `video`. Nothing is fetched to find out. Only `http`,
+`https` and `data:` image, video and audio URLs are shown or linked, with
+no referrer; anything else, `javascript:` included, stays text.
+
 ## Routes and commands
 
 | | |
 |---|---|
 | `GET /v1/workflows` | Saved workflows. |
 | `POST /v1/workflows`, `PUT /v1/workflows/<id>` | Save (yours; not staged). |
-| `POST /v1/workflows/<id>/run` | Run one; the body is the inputs. Steps meet the rules; `ask` is refused. |
+| `POST /v1/workflows/<id>/run` | Run one; the body is the inputs. Steps meet the rules; `ask` is refused. Answers each step's result, and `outputs` (name to value) when the workflow declares outputs. |
 | `GET /v1/workflows/pending` | Staged workflows: `id`, `name`, `description`, `nodes`, `replaces`, `sha256`, `spec`. |
 | `POST /v1/workflows/pending/approve` | `{"id", "sha256"?}` |
 | `POST /v1/workflows/pending/reject` | `{"id"}` |

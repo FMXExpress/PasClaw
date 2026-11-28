@@ -4352,6 +4352,16 @@ begin
         Arr.AddObject(O);
       end;
       Root.PutArray('nodes', Arr);
+      { The declared outputs' values (name -> value), as workflow_run gives
+        them, so the editor's Outputs box can show what the run produced.
+        Resolved against the run's own inputs: a looped run's feedback is
+        not replayed here. An output that didn't resolve is "" and named
+        in output_errors. Additive: absent when none are declared. }
+      if Length(Spec.Outputs) > 0 then
+      begin
+        Root.PutRaw('outputs', ResolveWorkflowOutputs(Spec, InputsJSON, Res, Errs));
+        if Errs <> '' then Root.PutStr('output_errors', Errs);
+      end;
       WriteJSON(AResp, 200, Root.ToJSON);
     finally
       Root.Free;

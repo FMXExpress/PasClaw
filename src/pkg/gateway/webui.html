@@ -2415,6 +2415,91 @@
     background:var(--code);border:1px solid var(--border);font:12px/1.5 var(--mono);color:var(--text-2);
     white-space:pre-wrap;overflow-wrap:anywhere}
   .wf-step.err .wf-step-out{color:var(--danger);border-color:var(--danger-line)}
+  /* Arguments from the tool's input schema: one field per property. */
+  .wf-sform{display:flex;flex-direction:column;gap:.7rem;min-width:0}
+  .wf-sf-l{display:flex;align-items:center;gap:.3rem;min-width:0;font-size:12.5px;font-weight:550;color:var(--text-2)}
+  .wf-sf-l>span:first-child{min-width:0;overflow-wrap:anywhere}
+  .wf-req{color:var(--danger);font-weight:600}
+  .wf-sf-tpl{margin-left:auto;padding:0 .35rem;border-color:transparent;font:11px/1.6 var(--mono);color:var(--text-3)}
+  .wf-sf-tpl:hover{color:var(--accent)}
+  .wf-f.wf-tplv input,.wf-f.wf-tplv textarea{border-color:var(--accent-line);font-family:var(--mono);font-size:12px}
+  .wf-f.wf-bad input,.wf-f.wf-bad textarea{border-color:var(--danger-line)}
+  .wf-f .wf-bad-t{color:var(--danger)}
+  .wf-sf-set{margin:0;padding:.55rem .7rem .7rem;border:1px solid var(--border);border-radius:8px;min-width:0;
+    display:flex;flex-direction:column;gap:.6rem}
+  .wf-sf-set>legend{padding:0 .3rem;font-size:12.5px;font-weight:600;color:var(--text-2)}
+  .wf-sf-list{display:flex;flex-direction:column;gap:.3rem;min-width:0}
+  .wf-sf-item{display:flex;gap:.3rem;min-width:0}
+  .wf-sf-item input{flex:1;min-width:0}
+  .wf-sf-item .icon-btn{padding:.2rem .35rem}
+  .wf-sf-add{align-self:flex-start;font-size:12px}
+  .wf-json-err{margin-top:.35rem;font-size:12px;line-height:1.45;color:var(--danger);overflow-wrap:anywhere}
+  .wf-raw.wf-raw-bad textarea{border-color:var(--danger-line)}
+  /* What a run produced: media, a prediction's summary, JSON, text. */
+  .wf-rv{grid-column:2;display:flex;flex-direction:column;gap:.5rem;min-width:0}
+  .wf-insp-run .wf-rv,.wf-outp .wf-rv{grid-column:auto}
+  .wf-pred{display:flex;align-items:center;flex-wrap:wrap;gap:.3rem .5rem;font-size:12.5px;color:var(--text-2);min-width:0}
+  .wf-pred code{font:11.5px/1.5 var(--mono);color:var(--text-2);overflow-wrap:anywhere}
+  .wf-media{display:flex;flex-wrap:wrap;gap:.5rem;min-width:0}
+  .wf-mi{margin:0;display:flex;flex-direction:column;gap:.25rem;min-width:0;max-width:100%}
+  .wf-mi img,.wf-mi video{display:block;max-width:min(100%,20rem);max-height:14rem;border-radius:6px;
+    border:1px solid var(--border);background:var(--code)}
+  .wf-mi audio{width:min(100%,20rem)}
+  .wf-mbtn{padding:0;border:0;background:none;border-radius:6px;cursor:zoom-in;max-width:100%}
+  .wf-mbtn:hover{background:none}
+  .wf-mcap{display:flex;align-items:center;gap:.5rem;font-size:11.5px;color:var(--text-3);min-width:0}
+  .wf-mcap a,.wf-mcap button{display:inline-flex;align-items:center;gap:.2rem;font-size:11.5px}
+  .wf-mcap button{padding:0 .3rem;border-color:transparent;background:none;color:var(--accent)}
+  .wf-rv-json>summary,.wf-insp-run>summary{cursor:pointer;font-size:12px;font-weight:550;color:var(--text-2);border-radius:2px}
+  .wf-jt{margin-top:.3rem;max-height:18rem;overflow:auto;padding:.45rem .6rem;border-radius:6px;background:var(--code);
+    border:1px solid var(--border);font:12px/1.5 var(--mono);color:var(--text-2);overflow-wrap:anywhere}
+  .wf-jd>summary{cursor:pointer;list-style:none;border-radius:2px}
+  .wf-jd>summary::-webkit-details-marker{display:none}
+  .wf-jd>summary::before{content:"▸";display:inline-block;width:1em;color:var(--text-3)}
+  .wf-jd[open]>summary::before{content:"▾"}
+  .wf-jd[open]>summary .wf-jn,.wf-jd:not([open])>.wf-jc{display:none}
+  .wf-jd:not([open])>summary .wf-jn::after{content:" …"}
+  .wf-jkids{padding-left:1.1em;border-left:1px dotted var(--border-strong);margin-left:.3em}
+  .wf-jl{padding-left:1em}
+  .wf-jk{color:var(--text)}
+  .wf-js{color:var(--ok)} .wf-jnum{color:var(--accent)} .wf-jlit{color:var(--warn)}
+  .wf-jn{color:var(--text-3)}
+  .wf-step-out.wf-md{white-space:normal;font-family:var(--sans);font-size:13px;color:var(--text)}
+  .wf-outs{display:flex;flex-direction:column;gap:.6rem;padding:.6rem .8rem;border:1px solid var(--border);border-radius:8px;min-width:0}
+  .wf-outs-h{font-size:12.5px;font-weight:600;color:var(--text-2)}
+  .wf-out1{display:flex;flex-direction:column;gap:.35rem;min-width:0}
+  .wf-out1>b{font-size:13px;font-weight:600;overflow-wrap:anywhere}
+  .wf-out1+.wf-out1{padding-top:.6rem;border-top:1px solid var(--border)}
+  .wf-insp-run{padding-bottom:.7rem;border-bottom:1px solid var(--border);min-width:0}
+  .wf-insp-run>.wf-rv,.wf-insp-run>pre{margin-top:.45rem}
+  .wf-insp-run[hidden]{display:none}
+  .wf-outp-body{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+  .wf-kind.k-out{background:var(--accent-soft);color:var(--accent)}
+  /* Media on the canvas after a run: a step's card and the Outputs box. */
+  .wf-nthumb,.wf-othumb{display:flex;align-items:center;justify-content:center;gap:.3rem;position:relative;padding:0;
+    border:0;border-top:1px solid var(--border);border-radius:0 0 7px 7px;background:var(--code);cursor:zoom-in;overflow:hidden}
+  .wf-nthumb:hover,.wf-othumb:hover{background:var(--code)}
+  .wf-nthumb img,.wf-nthumb video{display:block;width:100%;height:84px;object-fit:cover;pointer-events:none}
+  .wf-othumb{margin:.2rem .6rem .1rem;border:1px solid var(--border);border-radius:6px}
+  .wf-othumb img,.wf-othumb video{display:block;width:100%;height:64px;object-fit:cover;pointer-events:none}
+  .wf-nthumb.aud,.wf-othumb.aud{height:auto;padding:.35rem .5rem;font-size:11.5px;color:var(--text-2);cursor:pointer}
+  .wf-nthumb .n{position:absolute;right:.3rem;bottom:.3rem;padding:0 .35rem;border-radius:999px;font-size:10.5px;
+    background:rgba(0,0,0,.6);color:#fff}
+  .wf-nthumb .play,.wf-othumb .play{position:absolute;inset:0;margin:auto;width:26px;height:26px;border-radius:50%;
+    background:rgba(0,0,0,.55);color:#fff;display:flex;align-items:center;justify-content:center}
+  .wf-io-output.has-run{cursor:pointer}
+  .wf-io-output .wf-io-more{font-size:11px;color:var(--text-3)}
+  /* The lightbox: one image or video, large. */
+  .wf-lb{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:1.5rem;
+    background:rgba(8,10,16,.82)}
+  .wf-lb[hidden]{display:none}
+  .wf-lb-box{position:relative;display:flex;flex-direction:column;align-items:center;gap:.6rem;max-width:100%;max-height:100%;min-width:0}
+  .wf-lb-box img,.wf-lb-box video{display:block;max-width:min(92vw,1400px);max-height:calc(100vh - 7rem);object-fit:contain;
+    border-radius:6px;background:#000}
+  .wf-lb-foot{display:flex;align-items:center;gap:.75rem;color:#e6e8ee;font-size:12.5px}
+  .wf-lb-foot a{display:inline-flex;align-items:center;gap:.3rem;color:#cfe0ff}
+  .wf-lb-x{position:fixed;top:.9rem;right:.9rem;background:rgba(0,0,0,.5);border-color:rgba(255,255,255,.25);color:#fff}
+  .wf-lb-x:hover{background:rgba(0,0,0,.75);color:#fff}
   @media (max-width:1100px){
     .wf-insp{flex-basis:16.5rem}
   }
@@ -2589,6 +2674,9 @@
   <symbol id="i-lg-clear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="m3.95 12.05 8.1-8.1"/></symbol>
   <symbol id="i-kb-book" viewBox="0 0 16 16"><path d="M3 3.25A1.25 1.25 0 0 1 4.25 2h8.25v9.5H4.25A1.25 1.25 0 0 0 3 12.75z"/><path d="M3 12.75A1.25 1.25 0 0 0 4.25 14h8.25v-2.5M6 5.25h4"/></symbol>
   <symbol id="i-wf-flow" viewBox="0 0 16 16"><rect x="1.75" y="2.75" width="4.5" height="3.5" rx="1"/><rect x="9.75" y="9.75" width="4.5" height="3.5" rx="1"/><path d="M6.25 4.5h1.5a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 0 1.5 1.5"/></symbol>
+  <symbol id="i-wf-ext" viewBox="0 0 16 16"><path d="M9 3h4v4M13 3 7.5 8.5"/><path d="M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/></symbol>
+  <symbol id="i-wf-audio" viewBox="0 0 16 16"><path d="M6 11.75V3.5l7-1.25v8.25"/><circle cx="4.25" cy="11.75" r="1.75"/><circle cx="11.25" cy="10.5" r="1.75"/></symbol>
+  <symbol id="i-wf-expand" viewBox="0 0 16 16"><path d="M9.5 2.75h3.75V6.5M6.5 13.25H2.75V9.5M13.25 2.75 9 7M2.75 13.25 7 9"/></symbol>
   <symbol id="i-wf-fit" viewBox="0 0 16 16"><path d="M2.75 5.75v-3h3M10.25 2.75h3v3M13.25 10.25v3h-3M5.75 13.25h-3v-3"/><rect x="5.75" y="5.75" width="4.5" height="4.5" rx="1"/></symbol>
 </defs></svg>
 <header>
@@ -3467,17 +3555,28 @@
               <button type="button" class="icon-btn wf-x" id="wf-insp-close" aria-label="Close step settings" title="Close"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
             </div>
             <div class="wf-insp-tool" id="wfInspTool"></div>
+            <details id="wfInspRun" class="wf-insp-run" open hidden></details>
             <label class="wf-f"><span>Step id</span>
               <input id="wfInspId" spellcheck="false" autocomplete="off">
               <small>Later steps read its output as <code>{{nodes.id}}</code>.</small></label>
             <div id="wfInspBody" class="wf-insp-body"></div>
             <details id="wfInspRawWrap" class="wf-raw">
               <summary>Arguments as JSON</summary>
-              <textarea id="wfInspArgs" rows="10" class="wf-code" spellcheck="false" aria-label="Arguments as JSON"></textarea>
+              <textarea id="wfInspArgs" rows="10" class="wf-code" spellcheck="false" aria-label="Arguments as JSON" aria-describedby="wfInspArgsErr"></textarea>
+              <div id="wfInspArgsErr" class="wf-json-err" role="alert" hidden></div>
             </details>
             <div class="wf-insp-foot">
               <button type="button" id="wfInspDel" class="icon-btn wf-danger"><svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg>Delete step</button>
             </div>
+          </aside>
+          <!-- The last run's output values: opened by clicking the Outputs box. -->
+          <aside id="wfOutPanel" class="wf-insp wf-outp" aria-labelledby="wf-outp-h" hidden>
+            <div class="wf-insp-head">
+              <span class="wf-kind k-out">Outputs</span>
+              <strong id="wf-outp-h">Last run</strong>
+              <button type="button" class="icon-btn wf-x" id="wf-outp-close" aria-label="Close the outputs" title="Close"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
+            </div>
+            <div id="wfOutPanelBody" class="wf-outp-body"></div>
           </aside>
         </div>
       </div>
@@ -10663,11 +10762,26 @@ async function wfInit() {
     on("wfRun", "click", wfRun);
     on("wfDelete", "click", () => wfDelete(wf.current, document.getElementById("wfName").value.trim()));
     on("wfInspId", "change", wfRenameSel);
+    /* The JSON side of a step's arguments: valid JSON refills the form;
+       invalid JSON says why and leaves the form as it was. */
     on("wfInspArgs", "input", e => {
-      const n = wf.nodes.find(x => x.id === wf.sel); if (n) n.args = e.target.value;
+      const n = wf.nodes.find(x => x.id === wf.sel); if (!n) return;
+      n.args = e.target.value;
+      const r = wfArgsParse(n.args);
+      wfArgsErr(r.err);
+      if (r.err) return;
+      wf.argsLast = r.obj;
+      if (wf.form) wf.form.fill(r.obj);
+      wfCardSub(n, r.obj);
     });
     on("wfInspDel", "click", () => { if (wf.sel) wfDeleteNode(wf.sel); });
     on("wf-insp-close", "click", () => wfSelect(null));
+    on("wf-outp-close", "click", () => { document.getElementById("wfOutPanel").hidden = true; });
+    /* Esc closes the media lightbox before anything else sees the key. */
+    document.addEventListener("keydown", e => {
+      const lb = document.getElementById("wf-lb");
+      if (e.key === "Escape" && lb && !lb.hidden) { e.preventDefault(); e.stopPropagation(); wfLightboxClose(); }
+    }, true);
     on("wf-run-close", "click", () => { document.getElementById("wfRunPanel").hidden = true; });
     /* Redraw the Input/Output boxes live as their fields are edited. */
     on("wfInputs", "input", wfRender);
@@ -10702,10 +10816,24 @@ async function wfInit() {
   await wfLoadList();
 }
 
-/* The step palette: the two built-in step kinds, then the MCP tools. */
-async function wfLoadTools() {
+/* The step palette: the two built-in step kinds, then the MCP tools. Also
+   every tool's input schema, for the step settings' argument form: MCP
+   tools' from GET /v1/mcp/tools (an object), the built-in tools' from
+   GET /v1/tools (a JSON string). */
+function wfLoadTools() {
+  wf.toolsReady = wfLoadToolsOnce();
+  return wf.toolsReady;
+}
+async function wfLoadToolsOnce() {
   try { wf.tools = (await (await gwFetch("/v1/mcp/tools")).json()).tools || []; }
   catch (e) { wf.tools = []; }
+  const schemas = {};
+  try {
+    ((await (await gwFetch("/v1/tools")).json()).tools || [])
+      .forEach(t => { const s = wfSchemaObj(t.schema); if (s) schemas[t.name] = s; });
+  } catch (e) {}
+  wf.tools.forEach(t => { const s = wfSchemaObj(t.schema); if (s) schemas[t.name] = s; });
+  wf.schemas = schemas;
   document.getElementById("wfPalette").innerHTML = '<option value="">Choose a step…</option>' +
     '<optgroup label="Steps"><option value="llm">LLM: call a model</option>' +
     '<option value="replicate">Model: run one on Replicate</option></optgroup>' +
@@ -10915,7 +11043,8 @@ function wfResetEditor() {
   wf.session = (wf.session || 0) + 1;   /* a save still on its way belongs to the last one */
   wf.current = null; wf.loadedName = ""; wf.savedSig = null;
   wf.nodes = []; wf.edges = []; wf.inputs = []; wf.sel = null; wf.ioMeta = { in: {}, out: {} };
-  wfRunStatus = {}; wfHidePalette();
+  wfRunStatus = {}; wf.lastRun = null; wfHidePalette();
+  document.getElementById("wfOutPanel").hidden = true;
   wfIO = { inx: null, iny: null, outx: null, outy: null };
   ["wfName", "wfDesc", "wfInputs", "wfOutputs", "wfLoop", "wfOutputDir"].forEach(id => document.getElementById(id).value = "");
   const panel = document.getElementById("wfRunPanel");
@@ -11121,10 +11250,13 @@ function wfRenameSel() {
 
 function wfSelect(id) {
   wf.sel = id;
+  wf.formTok = (wf.formTok || 0) + 1;   // a form still loading belongs to the last selection
+  wf.form = null;
   const insp = document.getElementById("wfInspect");
   const n = wf.nodes.find(x => x.id === id);
   if (!n) { insp.hidden = true; wfRender(); return; }
   insp.hidden = false;
+  document.getElementById("wfOutPanel").hidden = true;
   const [k, label] = wfKindOf(n.tool);
   const kind = document.getElementById("wf-insp-kind");
   kind.className = "wf-kind k-" + k; kind.textContent = label;
@@ -11132,28 +11264,67 @@ function wfSelect(id) {
   document.getElementById("wfInspTool").textContent = (k === "llm" || k === "model") ? "" : n.tool;
   document.getElementById("wfInspId").value = n.id;
   document.getElementById("wfInspArgs").value = n.args;
+  const parsed = wfArgsParse(n.args);
+  wf.argsLast = parsed.obj || {};
+  wfArgsErr(parsed.err);
+  wfRenderInspRun(n);
   const body = document.getElementById("wfInspBody");
   body.innerHTML = "";
+  const schema = wf.schemas && wf.schemas[n.tool];
   if (n.tool === "llm") wfRenderLlmForm(body, n);
   else if (n.tool === "replicate") wfRenderReplicateForm(body, n);
-  // Raw JSON is the primary editor only for tools without a custom form.
-  document.getElementById("wfInspRawWrap").open = (n.tool !== "llm" && n.tool !== "replicate");
+  else if (schema && Object.keys(schema.properties || {}).length)
+    wf.form = wfSchemaForm(body, schema, n, { root: schema });
+  else if (!wf.schemas && wf.toolsReady) {
+    /* The schemas are still on their way: draw the form when they land. */
+    const tok = wf.formTok;
+    wf.toolsReady.then(() => { if (wf.formTok === tok && wf.sel === n.id && wf.schemas && wf.schemas[n.tool]) wfSelect(n.id); });
+  }
+  /* Raw JSON is the primary editor only for tools without a form, and
+     whenever the arguments aren't valid JSON (so the error shows). */
+  document.getElementById("wfInspRawWrap").open =
+    !!parsed.err || (n.tool !== "llm" && n.tool !== "replicate" && !wf.form);
   wfRender();
 }
 
 // ----- inspector form helpers -----
 function wfParseArgs(n) { try { return JSON.parse(n.args || "{}"); } catch (e) { return {}; } }
+/* A step's arguments: {obj} when they're a JSON object, else {err}. */
+function wfArgsParse(text) {
+  let v;
+  try { v = JSON.parse(String(text || "").trim() || "{}"); }
+  catch (e) { return { err: "Not valid JSON: " + (e.message || e) + ". The form keeps the last valid arguments." }; }
+  if (!v || typeof v !== "object" || Array.isArray(v)) return { err: "The arguments must be a JSON object, in { }." };
+  return { obj: v };
+}
+/* What a form edit starts from: the JSON as it is, or (while it doesn't
+   parse) the last arguments that did. */
+function wfArgsBase(n) {
+  const r = wfArgsParse(n.args);
+  return JSON.parse(JSON.stringify(r.obj || (wf.sel === n.id && wf.argsLast) || {}));
+}
+function wfArgsErr(msg) {
+  const el = document.getElementById("wfInspArgsErr");
+  el.textContent = msg || ""; el.hidden = !msg;
+  document.getElementById("wfInspRawWrap").classList.toggle("wf-raw-bad", !!msg);
+}
 function wfSetArgs(n, obj) {
   n.args = JSON.stringify(obj, null, 2);
-  if (wf.sel === n.id) document.getElementById("wfInspArgs").value = n.args;
-  /* An LLM step's card shows the start of its prompt: keep it current. */
+  if (wf.sel === n.id) {
+    document.getElementById("wfInspArgs").value = n.args;
+    wf.argsLast = obj; wfArgsErr("");
+  }
+  wfCardSub(n, obj);
+  wfUpdateState();
+}
+/* An LLM step's card shows the start of its prompt: keep it current. */
+function wfCardSub(n, obj) {
   const card = n.tool === "llm" &&
     document.querySelector('#wfCanvas .wf-node[data-node="' + CSS.escape(n.id) + '"] .wf-ntool');
   if (card) {
     const p = String(obj.prompt || "").trim().split("\n")[0];
     card.textContent = p || n.tool; card.classList.toggle("p", !!p);
   }
-  wfUpdateState();
 }
 function wfField(label, el, hint) {
   const d = wfEl("label", "wf-f" + (el.type === "checkbox" ? " chk" : ""));
@@ -11164,11 +11335,13 @@ function wfField(label, el, hint) {
 }
 
 async function wfRenderLlmForm(body, n) {
-  const cur = wfParseArgs(n);
+  const tok = wf.formTok;
   if (!wf.providers) {
     try { wf.providers = await (await gwFetch("/v1/providers")).json(); }
     catch (e) { wf.providers = { providers: [] }; }
   }
+  if (tok !== wf.formTok) return;   // another step (or this one again) was selected meanwhile
+  const cur = wfArgsBase(n);
   const provs = wf.providers.providers || [];
   const sel = document.createElement("select");
   sel.innerHTML = '<option value="">The default provider</option>' +
@@ -11183,7 +11356,12 @@ async function wfRenderLlmForm(body, n) {
   // user typed. Only auto-filled defaults get replaced when the provider
   // changes, so switching providers doesn't leave the previous one's model.
   let modelAuto = !cur.model;
-  const upd = () => wfSetArgs(n, { provider: sel.value, model: model.value, prompt: prompt.value });
+  /* Other keys the JSON holds (a system prompt, a temperature) are kept. */
+  const upd = () => wfSetArgs(n, Object.assign(wfArgsBase(n), { provider: sel.value, model: model.value, prompt: prompt.value }));
+  /* The JSON side, edited: the three fields follow it. */
+  wf.form = { fill(o) {
+    sel.value = o.provider || ""; model.value = o.model || ""; prompt.value = typeof o.prompt === "string" ? o.prompt : "";
+  } };
   sel.addEventListener("change", () => {
     const p = provs.find(x => x.name === sel.value);
     if (modelAuto) model.value = (p && p.model) || "";
@@ -11238,50 +11416,280 @@ function wfRenderReplicateForm(body, n) {
 async function wfPickModel(m, n, formArea) {
   formArea.innerHTML = "";
   formArea.appendChild(wfEl("span", "wf-quiet", "Loading " + m.owner + "/" + m.name + "…"));
-  let schema = null, version = m.version;
+  const tok = wf.formTok;
+  let schema = null, version = m.version, root = null;
   try {
     const j = await (await gwFetch("/v1/replicate/model?owner=" + encodeURIComponent(m.owner) + "&name=" + encodeURIComponent(m.name))).json();
     let r = (j && j.result) || j || {}; r = r.structuredContent || r;
     const lv = r.latest_version || (r.model && r.model.latest_version) || {};
     version = lv.id || version;
-    schema = lv.openapi_schema && lv.openapi_schema.components && lv.openapi_schema.components.schemas && lv.openapi_schema.components.schemas.Input;
+    root = lv.openapi_schema || null;
+    schema = root && root.components && root.components.schemas && root.components.schemas.Input;
   } catch (e) {}
-  wfRenderModelForm(formArea, n, m, version, schema);
+  if (tok !== wf.formTok) return;   // another step was selected meanwhile
+  wfRenderModelForm(formArea, n, m, version, schema, root);
 }
 
-function wfRenderModelForm(formArea, n, m, version, schema) {
+/* A Replicate model's inputs: the same schema form as any tool, writing
+   under the arguments' "input". The model's defaults are the fields'
+   placeholders (Replicate applies them); only what is set is sent. */
+function wfRenderModelForm(formArea, n, m, version, schema, root) {
   formArea.innerHTML = "";
   formArea.appendChild(wfEl("div", "wf-sub-t", m.owner + "/" + m.name + (version ? " @ " + String(version).slice(0, 8) : "")));
-  const curInput = (wfParseArgs(n).input) || {};
+  const cur = wfArgsBase(n);
   const props = (schema && schema.properties) || {};
-  const req = (schema && schema.required) || [];
-  const keys = Object.keys(props).sort((a, b) => ((props[a]["x-order"] || 0) - (props[b]["x-order"] || 0)));
-  const fields = {};
-  if (!keys.length) formArea.appendChild(wfEl("div", "wf-quiet", "This model publishes no input schema. Set its inputs in the arguments as JSON."));
-  keys.forEach(k => {
-    const p = props[k]; let el;
-    if (p.enum) { el = document.createElement("select"); el.innerHTML = p.enum.map(v => `<option>${escapeHtml(String(v))}</option>`).join(""); }
-    else if (p.type === "boolean") { el = document.createElement("input"); el.type = "checkbox"; }
-    else if (p.type === "integer" || p.type === "number") { el = document.createElement("input"); el.type = "number"; }
-    else { el = document.createElement("input"); el.type = "text"; }
-    const init = (k in curInput) ? curInput[k] : p.default;
-    if (el.type === "checkbox") el.checked = !!init; else if (init !== undefined && init !== null) el.value = init;
-    if (p.description) el.title = p.description;
-    fields[k] = { el, p };
-    formArea.appendChild(wfField(k + (req.includes(k) ? " *" : ""), el));
-    el.addEventListener("input", collect); el.addEventListener("change", collect);
-  });
-  function collect() {
-    const input = {};
-    Object.keys(fields).forEach(k => {
-      const { el, p } = fields[k]; let v = el.type === "checkbox" ? el.checked : el.value;
-      if (v === "" || v === undefined) return;
-      if (p.type === "integer") v = parseInt(v, 10); else if (p.type === "number") v = parseFloat(v);
-      input[k] = v;
-    });
-    wfSetArgs(n, { version: version, input: input });
+  let input = (cur.input && typeof cur.input === "object" && !Array.isArray(cur.input)) ? cur.input : {};
+  /* Keep what the new model also takes; drop the last model's other inputs. */
+  if (Object.keys(props).length) input = Object.fromEntries(Object.entries(input).filter(([k]) => k in props));
+  wfSetArgs(n, Object.assign(cur, { version: version, input: input }));
+  if (!Object.keys(props).length) {
+    formArea.appendChild(wfEl("div", "wf-quiet", "This model publishes no input schema. Set its inputs in the arguments as JSON."));
+    return;
   }
-  collect();
+  wf.form = wfSchemaForm(formArea, schema, n, { base: ["input"], root: root || schema });
+}
+
+/* ===== A step's arguments as a form, from the tool's input schema =====
+   One field per property: text (a textarea for long text and prompts), a
+   number, a checkbox, a select for an enum, a list for an array of
+   scalars, a fieldset for a nested object, JSON for anything deeper. A
+   field holding a {{template}} is text whatever its type, and is saved as
+   typed. An edit writes only its own key, into the JSON as it stands
+   (keys the schema doesn't name are kept); an edit of the JSON comes back
+   through fill(). Names, hints and values are set as text. */
+const wfIsTpl = v => typeof v === "string" && /\{\{[\s\S]*?\}\}/.test(v);
+const wfIsObj = v => !!v && typeof v === "object" && !Array.isArray(v);
+const WF_UNSET = {};
+const WF_LONG = /prompt|text|content|body|message|instruction|system|markdown|template|script|code|caption/i;
+let wfSfSeq = 0;
+function wfSchemaObj(s) {
+  if (typeof s === "string") { try { s = JSON.parse(s); } catch (e) { return null; } }
+  return wfIsObj(s) ? s : null;
+}
+function wfSchemaRef(root, ref) {
+  if (!root || typeof ref !== "string" || !ref.startsWith("#/")) return null;
+  let cur = root;
+  for (const seg of ref.slice(2).split("/")) {
+    const k = seg.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (!wfIsObj(cur) || !(k in cur)) return null;
+    cur = cur[k];
+  }
+  return wfIsObj(cur) ? cur : null;
+}
+/* A property's schema with a $ref and a one-branch allOf/anyOf/oneOf (a
+   nullable type, Replicate's enum refs) folded in; its own keys win. */
+function wfSchemaEff(p, root, depth = 0) {
+  if (!wfIsObj(p)) return {};
+  if (depth > 6) return p;
+  let q = Object.assign({}, p);
+  if (q.$ref) {
+    const t = wfSchemaRef(root, q.$ref); delete q.$ref;
+    if (t) q = Object.assign({}, wfSchemaEff(t, root, depth + 1), q);
+  }
+  for (const k of ["allOf", "anyOf", "oneOf"]) {
+    if (!Array.isArray(q[k])) continue;
+    const alts = q[k].filter(a => wfIsObj(a) && a.type !== "null");
+    if (alts.length !== 1) continue;
+    delete q[k];
+    q = Object.assign({}, wfSchemaEff(alts[0], root, depth + 1), q);
+  }
+  return q;
+}
+function wfSchemaType(p) {
+  if (Array.isArray(p.enum) && p.enum.length) return "enum";
+  const t = Array.isArray(p.type) ? p.type.find(x => x !== "null") : p.type;
+  if (t) return t;
+  if (p.properties) return "object";
+  if (p.items) return "array";
+  return "string";
+}
+/* Text typed into a field of type t: [value, problem]. A template is kept
+   as the string it is; so is anything that isn't what t expects (it shows
+   as a problem, and the JSON still says what the field says). */
+function wfSchemaCoerce(s, t, p) {
+  const x = s.trim();
+  if (wfIsTpl(x)) return [x, ""];
+  if (t === "number" || t === "integer") {
+    if (!/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(x)) return [s, "Not a number. Type a number or a {{template}}."];
+    const v = Number(x);
+    return [v, t === "integer" && !Number.isInteger(v) ? "Expects a whole number." : ""];
+  }
+  if (t === "boolean") return x === "true" ? [true, ""] : x === "false" ? [false, ""] : [s, "Type true, false or a {{template}}."];
+  if (t === "enum") { const hit = p.enum.find(e => String(e) === x); return hit !== undefined ? [hit, ""] : [s, "Not one of: " + p.enum.join(", ") + "."]; }
+  return [s, ""];
+}
+
+function wfSchemaForm(box, schema, n, opts = {}) {
+  const base = opts.base || [];
+  const root = opts.root || schema;
+  const wrap = wfEl("div", "wf-sform");
+  box.appendChild(wrap);
+  const at = (o, path) => path.reduce((x, k) => (wfIsObj(x) ? x[k] : undefined), o);
+  /* One field's edit, into the arguments as they stand now. */
+  const write = (path, val) => {
+    const obj = wfArgsBase(n), full = base.concat(path);
+    let o = obj;
+    for (let i = 0; i < full.length - 1; i++) {
+      if (!wfIsObj(o[full[i]])) { if (val === WF_UNSET) return; o[full[i]] = {}; }
+      o = o[full[i]];
+    }
+    if (val === WF_UNSET) delete o[full[full.length - 1]]; else o[full[full.length - 1]] = val;
+    wfSetArgs(n, obj);
+  };
+  const reqMark = () => { const r = wfEl("span", "wf-req", "*"); r.title = "Required"; return r; };
+  const fields = (into, sch, cur, path, depth) => {
+    const props = wfIsObj(sch.properties) ? sch.properties : {};
+    const req = Array.isArray(sch.required) ? sch.required : [];
+    const ord = k => { const x = wfIsObj(props[k]) && props[k]["x-order"]; return typeof x === "number" ? x : 1e9; };
+    Object.keys(props).sort((a, b) => ord(a) - ord(b)).forEach(k =>
+      into.appendChild(field(k, wfSchemaEff(props[k], root), cur[k], path.concat(k), depth, req.includes(k), false)));
+  };
+  const field = (k, p, v, path, depth, required, forceText) => {
+    const t = wfSchemaType(p);
+    const hint = typeof p.description === "string" ? p.description : "";
+    const def = p.default;
+    const defText = def === undefined || def === null ? "" : typeof def === "object" ? JSON.stringify(def) : String(def);
+    const tpl = wfIsTpl(v);
+    /* A nested object, one level down: its own fields in a fieldset. */
+    if (t === "object" && depth === 0 && wfIsObj(p.properties) && Object.keys(p.properties).length && !tpl &&
+        (v === undefined || wfIsObj(v))) {
+      const fs = wfEl("fieldset", "wf-sf-set"); fs.dataset.key = path.join("."); fs.dataset.kind = "object";
+      const lg = wfEl("legend", "", k); if (required) lg.appendChild(reqMark());
+      fs.appendChild(lg);
+      if (hint) fs.appendChild(wfEl("small", "wf-quiet", hint));
+      fields(fs, p, wfIsObj(v) ? v : {}, path, depth + 1);
+      return fs;
+    }
+    const scalarItems = ["string", "number", "integer", "boolean", "enum"];
+    const itemsP = t === "array" ? wfSchemaEff(p.items || {}, root) : null;
+    let kind;
+    if (forceText || (tpl && t !== "string")) kind = "text";
+    else if (t === "boolean") kind = (v === undefined || typeof v === "boolean") ? "checkbox" : "text";
+    else if (t === "enum") kind = (v === undefined || p.enum.some(e => e === v)) ? "select" : "text";
+    else if (t === "number" || t === "integer") kind = "number";
+    else if (t === "string") kind = "text";
+    else if (t === "array" && scalarItems.includes(wfSchemaType(itemsP)) &&
+             (v === undefined || (Array.isArray(v) && v.every(x => x === null || typeof x !== "object")))) kind = "list";
+    else kind = "json";
+    if (kind === "text" && v !== null && typeof v === "object") kind = "json";   // a list or object where text was expected
+    const d = wfEl("div", "wf-f wf-sf"); d.dataset.key = path.join("."); d.dataset.kind = kind;
+    const id = "wf-sf-" + (++wfSfSeq);
+    const lab = wfEl("label", "wf-sf-l"); lab.htmlFor = id;
+    lab.appendChild(wfEl("span", "", k));
+    if (required) lab.appendChild(reqMark());
+    d.appendChild(lab);
+    const errEl = wfEl("small", "wf-bad-t"); errEl.hidden = true;
+    const bad = msg => { d.classList.toggle("wf-bad", !!msg); errEl.textContent = msg || ""; errEl.hidden = !msg; };
+    /* A checkbox or a list can't hold a template: a button turns the field
+       into text, and back (which clears what the text held). */
+    const swap = (label, title, toText) => {
+      const b = wfEl("button", "icon-btn wf-sf-tpl", label); b.type = "button"; b.title = title;
+      b.setAttribute("aria-label", title + ": " + k);
+      b.addEventListener("click", ev => {
+        ev.preventDefault();
+        if (!toText) write(path, WF_UNSET);
+        const nv = toText ? at(wfArgsBase(n), base.concat(path)) : undefined;
+        d.replaceWith(field(k, p, nv, path, depth, required, toText));
+      });
+      lab.appendChild(b);
+    };
+    let el;
+    if (kind === "checkbox") {
+      el = wfEl("input"); el.type = "checkbox";
+      el.checked = typeof v === "boolean" ? v : def === true;
+      el.addEventListener("change", () => write(path, el.checked));
+      lab.insertBefore(el, lab.firstChild);
+      swap("{{ }}", "Type a template instead", true);
+    } else if (kind === "select") {
+      el = document.createElement("select");
+      const none = wfEl("option", "", defText ? "Default: " + defText : "Not set"); none.value = "";
+      el.appendChild(none);
+      p.enum.forEach(e => { const o = wfEl("option", "", String(e)); o.value = String(e); el.appendChild(o); });
+      el.value = v === undefined ? "" : String(v);
+      el.addEventListener("change", () => write(path, el.value === "" ? WF_UNSET : p.enum.find(e => String(e) === el.value)));
+      swap("{{ }}", "Type a template instead", true);
+    } else if (kind === "list") {
+      el = wfEl("div", "wf-sf-list"); el.setAttribute("role", "group"); el.setAttribute("aria-labelledby", id + "-l");
+      lab.id = id + "-l"; lab.removeAttribute("for");
+      const it = wfSchemaType(itemsP);
+      const items = Array.isArray(v) ? v.map(x => x == null ? "" : String(x)) : [];
+      const commit = () => {
+        let msg = "";
+        const out = items.filter(s => s.trim() !== "").map(s => { const [val, e] = wfSchemaCoerce(s, it, itemsP); if (e) msg = e; return val; });
+        bad(msg);
+        write(path, out.length ? out : WF_UNSET);
+      };
+      const draw = () => {
+        el.innerHTML = "";
+        items.forEach((s, i) => {
+          const row = wfEl("div", "wf-sf-item");
+          const inp = wfEl("input"); inp.value = s; inp.spellcheck = false;
+          inp.setAttribute("aria-label", k + ", item " + (i + 1));
+          inp.addEventListener("input", () => { items[i] = inp.value; commit(); });
+          const x = wfEl("button", "icon-btn"); x.type = "button"; x.innerHTML = icon("x");
+          x.title = "Remove"; x.setAttribute("aria-label", "Remove item " + (i + 1) + " of " + k);
+          x.addEventListener("click", () => { items.splice(i, 1); draw(); commit(); });
+          row.append(inp, x);
+          el.appendChild(row);
+        });
+        const add = wfEl("button", "icon-btn wf-sf-add"); add.type = "button";
+        add.innerHTML = icon("plus"); add.appendChild(document.createTextNode("Add"));
+        add.setAttribute("aria-label", "Add an item to " + k);
+        add.addEventListener("click", () => { items.push(""); draw(); const ins = el.querySelectorAll("input"); ins[ins.length - 1].focus(); });
+        el.appendChild(add);
+      };
+      draw();
+      if (defText) lab.title = "Default: " + defText;
+    } else if (kind === "json") {
+      el = wfEl("textarea", "wf-code"); el.rows = 3; el.spellcheck = false;
+      el.value = v === undefined ? "" : (typeof v === "string" ? v : JSON.stringify(v, null, 2));
+      el.placeholder = defText || (t === "array" ? "[ ]" : "{ }");
+      el.addEventListener("input", () => {
+        const s = el.value.trim();
+        if (!s) { bad(""); return write(path, WF_UNSET); }
+        if (wfIsTpl(s) && !/^[[{"]/.test(s)) { bad(""); return write(path, s); }
+        let val;
+        try { val = JSON.parse(s); } catch (e) { return bad("Not valid JSON yet."); }
+        bad(""); write(path, val);
+      });
+    } else {
+      /* text, and numbers as text: a number field takes a template too */
+      const long = kind === "text" && t === "string" && (WF_LONG.test(k) || p.format === "textarea" || (p.maxLength || 0) > 200 ||
+                   (typeof v === "string" && (v.length > 60 || v.includes("\n"))));
+      el = long ? wfEl("textarea") : wfEl("input");
+      if (long) el.rows = 3;
+      el.spellcheck = false;
+      if (kind === "number") el.inputMode = t === "integer" ? "numeric" : "decimal";
+      el.value = v === undefined || v === null ? "" : typeof v === "string" ? v : typeof v === "object" ? JSON.stringify(v) : String(v);
+      el.placeholder = defText;
+      d.classList.toggle("wf-tplv", wfIsTpl(el.value));
+      el.addEventListener("input", () => {
+        const s = el.value;
+        d.classList.toggle("wf-tplv", wfIsTpl(s));
+        if (s.trim() === "") { bad(""); return write(path, WF_UNSET); }
+        const [val, e] = wfSchemaCoerce(s, t === "string" ? "string" : t, p);
+        bad(e); write(path, val);
+      });
+      if (t === "boolean") swap("☐", "Use the checkbox (clears the text)", false);
+      else if (t === "enum") swap("☰", "Use the list (clears the text)", false);
+    }
+    el.id = id;
+    if (required) el.setAttribute("aria-required", "true");
+    if (kind !== "checkbox") d.appendChild(el);
+    if (hint) d.appendChild(wfEl("small", "", hint));
+    d.appendChild(errEl);
+    return d;
+  };
+  const fill = obj => {
+    wrap.innerHTML = "";
+    const val = at(obj, base);
+    const cur = wfIsObj(val) ? val : {};
+    fields(wrap, schema, cur, [], 0);
+    const extra = Object.keys(cur).filter(k => !(k in (schema.properties || {})));
+    if (extra.length) wrap.appendChild(wfEl("div", "wf-quiet", "Also in the JSON: " + extra.join(", ") + "."));
+  };
+  fill(wfArgsBase(n));
+  return { fill };
 }
 
 /* ===== Input / Output boxes =====
@@ -11326,8 +11734,24 @@ function wfIOBox(canvas, kind, x, y, fields) {
       d.title = "Drag a step's right dot here to set " + nm + (f.value ? " (now: " + f.value + ")" : "");
       if (!f.value) d.appendChild(wfEl("span", "drop", " · drop"));
       el.appendChild(d);
+      /* After a run: the output's media, if it is any. */
+      const outs = wf.lastRun && wf.lastRun.outputs;
+      if (outs && Object.prototype.hasOwnProperty.call(outs, nm)) {
+        const media = wfFindMedia(wfParseMaybe(outs[nm]));
+        if (media.length) el.appendChild(wfThumb(media, "wf-othumb", wfShowOutputs));
+      }
     }
   });
+  if (kind === "output" && wf.lastRun) {
+    el.classList.add("has-run");
+    el.title = "Click to see what the last run's outputs hold";
+    if (fields.length) el.appendChild(wfEl("div", "wf-iofield-none wf-io-more", "Click for the values"));
+    el.addEventListener("click", ev => {
+      if (el.dataset.dragged) { el.dataset.dragged = ""; return; }
+      if (ev.target.closest(".wf-othumb")) return;
+      wfShowOutputs();
+    });
+  }
   if (!fields.length) el.appendChild(wfEl("div", "wf-iofield-none", kind === "input" ? "None yet" : "Drop a step here"));
   el.appendChild(wfEl("div", "wf-port"));
   canvas.appendChild(el);
@@ -11349,6 +11773,7 @@ function wfStartIODrag(ev, el) {
     if (kind === "input") { wfIO.inx = x; wfIO.iny = y; }
     else { wfIO.outx = x; wfIO.outy = y; }
     moved = true;
+    el.dataset.dragged = "1";   // the click that ends a drag doesn't open the outputs
     wfDrawEdges();
   }
   function up() {
@@ -11460,6 +11885,8 @@ function wfRender() {
       line.append(wfEl("span", "wf-dot"), wfEl("span", "", wfStatusLine(st)));
       line.title = wfStatusLine(st);
       el.appendChild(line);
+      /* What the step made, if it's media: a thumbnail that opens large. */
+      if (st.media && st.media.length) el.appendChild(wfThumb(st.media, "wf-nthumb", () => wfSelect(n.id)));
     }
     const pin = wfEl("div", "wf-port wf-in"); pin.dataset.node = n.id; pin.title = "Input: drop a connection here";
     const pout = wfEl("div", "wf-port wf-out"); pout.dataset.node = n.id; pout.title = "Output: drag to another step or to Outputs";
@@ -11762,7 +12189,7 @@ async function wfStartRun(inputs) {
   out.innerHTML = "";
   /* The route runs the whole workflow before it answers: until then every
      step shows as running. */
-  wfRunStatus = {};
+  wfRunStatus = {}; wf.lastRun = null;
   wf.nodes.forEach(n => wfRunStatus[n.id] = { st: "run" });
   wfRender();
   const t0 = Date.now();
@@ -11786,13 +12213,21 @@ async function wfStartRun(inputs) {
   const res = (j && j.nodes) || [];
   wfRunStatus = {};
   res.forEach(n => {
-    if (n.node) wfRunStatus[n.node] =
-      { st: n.ok ? "ok" : "err", line: String(n.error || n.text || "").split("\n")[0].slice(0, 80) };
+    if (!n.node) return;
+    if (!n.ok) { wfRunStatus[n.node] = { st: "err", line: String(n.error || n.text || "").split("\n")[0].slice(0, 80) }; return; }
+    const val = wfNodeValue(n);
+    wfRunStatus[n.node] = { st: "ok", line: wfValueLine(val), val, media: wfFindMedia(val) };
   });
   if (err) wfRunStatus = {};
   else wf.nodes.forEach(n => { if (!wfRunStatus[n.id]) wfRunStatus[n.id] = { st: "skip" }; });
+  /* The declared outputs' values (the run route's "outputs"), for the
+     Outputs box and its panel. */
+  wf.lastRun = err ? null : { outputs: wfIsObj(j && j.outputs) ? j.outputs : null, errors: (j && j.output_errors) || "" };
   wfRender();
   wfRenderResults(j, res, err, secs);
+  const sel = wf.nodes.find(x => x.id === wf.sel);
+  if (sel) wfRenderInspRun(sel);
+  if (!document.getElementById("wfOutPanel").hidden) wfShowOutputs();
 }
 
 function wfRenderResults(j, res, err, secs) {
@@ -11818,28 +12253,328 @@ function wfRenderResults(j, res, err, secs) {
   }
   sum.appendChild(d);
   out.appendChild(sum);
-  if (j && j.output) out.appendChild(wfEl("div", "wf-quiet", "Output: " + j.output));
-  if (j && j.output_dir) out.appendChild(wfEl("div", "wf-quiet", "Output files: " + j.output_dir));
-  if (j && j.output_dir_error) out.appendChild(wfEl("div", "wf-quiet", "Output files not written: " + j.output_dir_error));
   if (err) return;
+  /* The declared outputs first: what the run is for. */
+  const outs = wf.lastRun && wf.lastRun.outputs;
+  if (outs && Object.keys(outs).length) {
+    const box = wfEl("div", "wf-outs");
+    box.appendChild(wfEl("div", "wf-outs-h", "Outputs"));
+    wfOutputsInto(box, outs);
+    out.appendChild(box);
+  }
+  if (wf.lastRun && wf.lastRun.errors) out.appendChild(wfEl("div", "wf-quiet", "Outputs that didn't resolve: " + wf.lastRun.errors));
   const ol = wfEl("ol", "wf-steps");
   const seen = new Set();
-  const row = (id, tool, cls, pill, text) => {
+  const row = (id, tool, cls, pill, body) => {
     const li = wfEl("li", "wf-step " + cls);
     li.dataset.node = id;
     li.appendChild(wfEl("span", "wf-dot"));
     const l1 = wfEl("div", "wf-step-l1");
     l1.append(wfEl("b", "", id), wfEl("code", "", tool), wfEl("span", "wf-tag " + (cls === "ok" ? "ok" : cls === "err" ? "err" : ""), pill));
     li.appendChild(l1);
-    if (text) li.appendChild(wfEl("pre", "wf-step-out", text));
+    if (body) li.appendChild(body);
     ol.appendChild(li);
   };
   res.forEach(n => {
     seen.add(n.node);
-    row(n.node, n.tool || "", n.ok ? "ok" : "err", n.ok ? "Done" : "Failed", n.ok ? (n.text || "") : (n.error || n.text || ""));
+    const body = n.ok ? wfResultView(wfNodeValue(n))
+      : (n.error || n.text) ? wfEl("pre", "wf-step-out", n.error || n.text) : null;
+    row(n.node, n.tool || "", n.ok ? "ok" : "err", n.ok ? "Done" : "Failed", body);
   });
-  wf.nodes.forEach(n => { if (!seen.has(n.id)) row(n.id, n.tool, "skip", "Didn't run", ""); });
+  wf.nodes.forEach(n => { if (!seen.has(n.id)) row(n.id, n.tool, "skip", "Didn't run", null); });
   out.appendChild(ol);
+}
+
+/* ===== What a run produced: values, media, JSON =====
+   A step's value is its text, read as JSON when it is a JSON object or
+   array (Replicate's prediction arrives that way), else its structured
+   result. Media is found in it by URL: a string that is one, the usual
+   keys (output, url, image(s), video, audio) first, then any other
+   string or array, then data: URIs. Only http(s) and data:image/video/
+   audio URLs are used, and only through DOM properties, with no referrer;
+   anything else (javascript: included) stays text. */
+const WF_IMG_EXT = /\.(png|jpe?g|webp|gif|avif)$/i, WF_VID_EXT = /\.(mp4|webm|mov)$/i, WF_AUD_EXT = /\.(mp3|wav|ogg|m4a|flac)$/i;
+const WF_KEY_HINT = { image: "image", images: "image", img: "image", thumbnail: "image", video: "video", videos: "video", audio: "audio" };
+const WF_KEY_FIRST = ["output", "url", "image", "images", "video", "videos", "audio"];
+function wfParseMaybe(s) {
+  if (typeof s !== "string") return s;
+  const t = s.trim();
+  if (/^[[{]/.test(t)) { try { return JSON.parse(t); } catch (e) {} }
+  return s;
+}
+function wfNodeValue(r) {
+  if (r.text) return wfParseMaybe(r.text);
+  const j = r.result;
+  if (wfIsObj(j)) {
+    if (j.structuredContent !== undefined) return j.structuredContent;
+    if (typeof j.text === "string" && Object.keys(j).length === 1) return wfParseMaybe(j.text);
+  }
+  return j === undefined ? "" : j;
+}
+/* A URL that may be shown or linked, or null. */
+function wfSafeUrl(s) {
+  if (typeof s !== "string") return null;
+  const t = s.trim();
+  if (!t || t.length > 16e6) return null;
+  if (/^data:/i.test(t)) return /^data:(image|video|audio)\/[a-z0-9.+-]+(;[a-z0-9.=+-]+)*;base64,[a-z0-9+/=\s]+$/i.test(t) ? t : null;
+  if (!/^https?:\/\/\S+$/i.test(t)) return null;
+  try { const u = new URL(t); return (u.protocol === "http:" || u.protocol === "https:") ? u.href : null; }
+  catch (e) { return null; }
+}
+function wfMediaKind(url, hint) {
+  const m = /^data:(image|video|audio)\//i.exec(url);
+  if (m) return m[1].toLowerCase();
+  let p = "";
+  try { p = new URL(url).pathname; } catch (e) {}
+  if (WF_IMG_EXT.test(p)) return "image";
+  if (WF_VID_EXT.test(p)) return "video";
+  if (WF_AUD_EXT.test(p)) return "audio";
+  return hint || "";   // no telling extension: only a key such as "image" says what it is
+}
+function wfFindMedia(v) {
+  const out = [], seen = new Set();
+  const walk = (x, hint, depth) => {
+    if (out.length >= 24 || depth > 6) return;
+    if (typeof x === "string") {
+      const u = wfSafeUrl(x);
+      if (!u || seen.has(u)) return;
+      const kind = wfMediaKind(u, hint);
+      if (kind) { seen.add(u); out.push({ url: u, kind }); }
+      return;
+    }
+    if (Array.isArray(x)) { x.forEach(y => walk(y, hint, depth + 1)); return; }
+    if (!wfIsObj(x)) return;
+    const pred = typeof x.status === "string";
+    const rank = k => { const i = WF_KEY_FIRST.indexOf(k.toLowerCase()); return i < 0 ? 99 : i; };
+    Object.keys(x).sort((a, b) => rank(a) - rank(b)).forEach(k => {
+      if (pred && k === "input") return;   // a prediction's input is what it was given, not what it made
+      walk(x[k], WF_KEY_HINT[k.toLowerCase()] || hint, depth + 1);
+    });
+  };
+  walk(v, "", 0);
+  return out;
+}
+const wfIsPred = v => wfIsObj(v) && typeof v.status === "string" && ("output" in v || "model" in v || "version" in v);
+/* The line under a step's card after a run. */
+function wfValueLine(v) {
+  if (wfIsPred(v)) {
+    const t = v.metrics && typeof v.metrics.predict_time === "number" ? v.metrics.predict_time.toFixed(1) + " s" : "";
+    return [v.status, t].filter(Boolean).join(" · ");
+  }
+  if (v && typeof v === "object") { const m = wfFindMedia(v); return m.length ? wfPlural(m.length, m[0].kind) : "JSON result"; }
+  /* text: its first line, without the markdown's marks */
+  return String(v || "").split("\n")[0].replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`#>]+/g, "")
+    .trim().slice(0, 80) || "Done";
+}
+
+/* An <img>, <video> or <audio>: the policy is set before the URL. */
+function wfMediaEl(m, thumb) {
+  const el = document.createElement(m.kind === "image" ? "img" : m.kind === "video" ? "video" : "audio");
+  el.setAttribute("referrerpolicy", "no-referrer");
+  if (m.kind === "image") { el.alt = thumb ? "" : "Image the step made"; el.loading = "lazy"; el.decoding = "async"; }
+  else if (m.kind === "video") { el.controls = !thumb; el.preload = "metadata"; el.playsInline = true; el.muted = !!thumb; }
+  else { el.controls = true; el.preload = "metadata"; }
+  el.src = m.url;
+  return el;
+}
+function wfOpenLink(url, text) {
+  const a = wfEl("a", "", null);
+  a.innerHTML = icon("wf-ext");
+  a.appendChild(document.createTextNode(text || "Open the original"));
+  a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer"; a.referrerPolicy = "no-referrer";
+  return a;
+}
+function wfGallery(media) {
+  const g = wfEl("div", "wf-media");
+  media.forEach(m => {
+    const fig = wfEl("figure", "wf-mi"); fig.dataset.kind = m.kind;
+    const el = wfMediaEl(m, false);
+    if (m.kind === "image") {
+      const b = wfEl("button", "wf-mbtn"); b.type = "button"; b.title = "Open it large";
+      b.setAttribute("aria-label", "Open the image large");
+      b.appendChild(el); b.addEventListener("click", () => wfLightbox(m));
+      fig.appendChild(b);
+    } else fig.appendChild(el);
+    const cap = wfEl("figcaption", "wf-mcap");
+    cap.appendChild(wfEl("span", "", m.kind[0].toUpperCase() + m.kind.slice(1)));
+    if (m.kind === "video") {
+      const big = wfEl("button", ""); big.type = "button"; big.innerHTML = icon("wf-expand");
+      big.appendChild(document.createTextNode("Large")); big.addEventListener("click", () => wfLightbox(m));
+      cap.appendChild(big);
+    }
+    if (/^https?:/i.test(m.url)) cap.appendChild(wfOpenLink(m.url, "Original"));
+    fig.appendChild(cap);
+    g.appendChild(fig);
+  });
+  return g;
+}
+/* The first image or video as a small preview (a card, the Outputs box);
+   audio as a chip. Clicking opens it large; audio opens its panel. */
+function wfThumb(media, cls, onAudio) {
+  const vis = media.find(m => m.kind !== "audio");
+  const b = wfEl("button", cls + (vis ? "" : " aud")); b.type = "button";
+  b.addEventListener("mousedown", ev => ev.stopPropagation());   // not a drag of the card
+  b.addEventListener("click", ev => { ev.stopPropagation(); vis ? wfLightbox(vis) : onAudio(); });
+  if (vis) {
+    b.setAttribute("aria-label", vis.kind === "image" ? "Open the image large" : "Open the video large");
+    b.appendChild(wfMediaEl(vis, true));
+    if (vis.kind === "video") { const p = wfEl("span", "play"); p.innerHTML = icon("play"); b.appendChild(p); }
+    if (media.length > 1) b.appendChild(wfEl("span", "n", "+" + (media.length - 1)));
+  } else {
+    b.setAttribute("aria-label", "Audio: show the result");
+    b.innerHTML = icon("wf-audio");
+    b.appendChild(document.createTextNode(media.length > 1 ? wfPlural(media.length, "audio file") : "Audio"));
+  }
+  return b;
+}
+/* Pretty-printed JSON with collapsible objects and arrays; strings that
+   are safe http(s) URLs are links. */
+function wfJsonTree(v, key, depth = 0) {
+  const keyEl = () => typeof key === "string" ? wfEl("span", "wf-jk", JSON.stringify(key) + ": ") : null;
+  const big = v && typeof v === "object" && Object.keys(v).length;
+  if (!big) {
+    const line = wfEl("div", "wf-jl");
+    const k = keyEl(); if (k) line.appendChild(k);
+    let leaf;
+    if (typeof v === "string") {
+      const u = /^https?:/i.test(v) && wfSafeUrl(v);
+      if (u) { leaf = wfEl("a", "wf-js", JSON.stringify(v)); leaf.href = u; leaf.target = "_blank"; leaf.rel = "noopener noreferrer"; leaf.referrerPolicy = "no-referrer"; }
+      else leaf = wfEl("span", "wf-js", JSON.stringify(v.length > 4000 ? v.slice(0, 4000) + "…" : v));
+    } else if (typeof v === "number") leaf = wfEl("span", "wf-jnum", String(v));
+    else leaf = wfEl("span", "wf-jlit", Array.isArray(v) ? "[]" : v && typeof v === "object" ? "{}" : String(v));
+    line.appendChild(leaf);
+    return line;
+  }
+  const arr = Array.isArray(v), entries = arr ? v.map((x, i) => [i, x]) : Object.entries(v);
+  const d = wfEl("details", "wf-jd"); d.open = depth < 2;
+  const s = wfEl("summary");
+  const k = keyEl(); if (k) s.appendChild(k);
+  s.appendChild(wfEl("span", "wf-jb", arr ? "[" : "{"));
+  s.appendChild(wfEl("span", "wf-jn", " " + (arr ? wfPlural(v.length, "item") : wfPlural(entries.length, "key"))));
+  d.appendChild(s);
+  const kids = wfEl("div", "wf-jkids");
+  entries.slice(0, 300).forEach(([kk, x]) => kids.appendChild(wfJsonTree(x, kk, depth + 1)));
+  if (entries.length > 300) kids.appendChild(wfEl("div", "wf-jn", "… " + (entries.length - 300) + " more"));
+  d.appendChild(kids);
+  d.appendChild(wfEl("div", "wf-jc", arr ? "]" : "}"));
+  return d;
+}
+/* A value, shown: a prediction's summary line, its media, then the JSON;
+   or text through the page's markdown renderer. */
+function wfResultView(v) {
+  const box = wfEl("div", "wf-rv");
+  const media = wfFindMedia(v);
+  if (wfIsPred(v)) {
+    const p = wfEl("div", "wf-pred");
+    const st = String(v.status);
+    p.appendChild(wfEl("span", "wf-tag " + (st === "succeeded" ? "ok" : /fail|cancel|abort/.test(st) ? "err" : ""), st));
+    if (v.model || v.version) p.appendChild(wfEl("code", "", String(v.model || String(v.version).slice(0, 12))));
+    const t = v.metrics && v.metrics.predict_time;
+    if (typeof t === "number") p.appendChild(wfEl("span", "", "predict " + t.toFixed(2) + " s"));
+    if (v.error) p.appendChild(wfEl("span", "wf-bad-t", String(v.error)));
+    box.appendChild(p);
+  }
+  if (media.length) box.appendChild(wfGallery(media));
+  if (v && typeof v === "object") {
+    const d = wfEl("details", "wf-rv-json"); d.open = !media.length;
+    d.appendChild(wfEl("summary", "", "JSON"));
+    const tree = wfEl("div", "wf-jt"); tree.appendChild(wfJsonTree(v));
+    d.appendChild(tree);
+    box.appendChild(d);
+  } else if (typeof v === "string" && v.trim() && !(media.length === 1 && media[0].url === wfSafeUrl(v))) {
+    box.appendChild(wfMarkdown(v));
+  } else if (v === "" || v == null) box.appendChild(wfEl("div", "wf-quiet", "No output."));
+  return box;
+}
+/* Markdown, rendered in an inert template so no image loads before its
+   referrer policy is set; links and images that aren't http(s) go. */
+function wfMarkdown(text) {
+  const t = document.createElement("template");
+  t.innerHTML = renderMarkdown(text);
+  t.content.querySelectorAll("img").forEach(img => {
+    const u = wfSafeUrl(img.getAttribute("src") || "");
+    if (!u) { img.remove(); return; }
+    img.setAttribute("referrerpolicy", "no-referrer");
+  });
+  t.content.querySelectorAll("a").forEach(a => {
+    if (!wfSafeUrl(a.getAttribute("href") || "") || /^data:/i.test(a.getAttribute("href"))) { a.replaceWith(document.createTextNode(a.textContent)); return; }
+    a.rel = "noopener noreferrer"; a.referrerPolicy = "no-referrer";
+  });
+  const md = wfEl("div", "wf-step-out wf-md md");
+  md.appendChild(document.importNode(t.content, true));
+  md.querySelectorAll("img").forEach(img => img.addEventListener("click", () => wfLightbox({ url: img.src, kind: "image" })));
+  wireCopyButtons(md);
+  return md;
+}
+function wfOutputsInto(box, outs) {
+  Object.keys(outs).forEach(name => {
+    const row = wfEl("div", "wf-out1"); row.dataset.out = name;
+    row.appendChild(wfEl("b", "", name));
+    row.appendChild(wfResultView(wfParseMaybe(outs[name])));
+    box.appendChild(row);
+  });
+}
+/* The Outputs box, clicked after a run: each output's name and value. */
+function wfShowOutputs() {
+  const panel = document.getElementById("wfOutPanel"), body = document.getElementById("wfOutPanelBody");
+  if (!wf.lastRun) return;
+  if (wf.sel) wfSelect(null);
+  body.innerHTML = "";
+  const outs = wf.lastRun.outputs;
+  if (outs && Object.keys(outs).length) wfOutputsInto(body, outs);
+  else body.appendChild(wfEl("div", "wf-quiet", "The run returned no output values. Declare outputs under Description, inputs and outputs, or drag a step's right dot onto the Outputs box."));
+  if (wf.lastRun.errors) body.appendChild(wfEl("div", "wf-quiet", "Didn't resolve: " + wf.lastRun.errors));
+  panel.hidden = false;
+  if (window.matchMedia("(max-width:760px)").matches) panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+/* The selected step's last result, in its settings. */
+function wfRenderInspRun(n) {
+  const box = document.getElementById("wfInspRun"), st = wfRunStatus[n.id];
+  box.innerHTML = "";
+  if (!st || st.st === "run" || st.st === "skip") { box.hidden = true; return; }
+  const s = wfEl("summary", "", "Last run ");
+  s.appendChild(wfEl("span", "wf-tag " + (st.st === "ok" ? "ok" : "err"), st.st === "ok" ? "Done" : "Failed"));
+  box.appendChild(s);
+  box.appendChild(st.st === "ok" ? wfResultView(st.val) : wfEl("pre", "wf-step-out", st.line || "Failed"));
+  box.hidden = false;
+}
+
+/* One image or video, large. Esc, the close button or the backdrop
+   closes it; the original opens in a new tab (http(s) only). */
+function wfLightbox(m) {
+  let lb = document.getElementById("wf-lb");
+  if (!lb) {
+    lb = wfEl("div", "wf-lb"); lb.id = "wf-lb"; lb.hidden = true;
+    lb.setAttribute("role", "dialog"); lb.setAttribute("aria-modal", "true"); lb.setAttribute("aria-label", "Media, large");
+    const x = wfEl("button", "icon-btn wf-lb-x"); x.type = "button"; x.id = "wf-lb-close";
+    x.innerHTML = icon("x"); x.setAttribute("aria-label", "Close"); x.title = "Close (Esc)";
+    x.addEventListener("click", wfLightboxClose);
+    const boxEl = wfEl("div", "wf-lb-box");
+    boxEl.append(wfEl("div", "wf-lb-media"), wfEl("div", "wf-lb-foot"));
+    lb.append(x, boxEl);
+    lb.addEventListener("click", ev => { if (ev.target === lb || ev.target === boxEl) wfLightboxClose(); });
+    document.body.appendChild(lb);
+  }
+  const media = lb.querySelector(".wf-lb-media"), foot = lb.querySelector(".wf-lb-foot");
+  media.innerHTML = ""; foot.innerHTML = "";
+  const u = wfSafeUrl(m.url); if (!u) return;
+  const el = wfMediaEl({ url: u, kind: m.kind }, false);
+  if (m.kind === "image") el.alt = "The image, large";
+  media.appendChild(el);
+  foot.appendChild(wfEl("span", "", m.kind === "video" ? "Video" : "Image"));
+  if (/^https?:/i.test(u)) { const a = wfOpenLink(u, "Open the original in a new tab"); a.id = "wf-lb-open"; foot.appendChild(a); }
+  wf.lbReturn = document.activeElement;
+  lb.hidden = false;
+  document.getElementById("wf-lb-close").focus();
+}
+function wfLightboxClose() {
+  const lb = document.getElementById("wf-lb");
+  if (!lb || lb.hidden) return;
+  lb.querySelectorAll("video,audio").forEach(v => { try { v.pause(); } catch (e) {} });
+  lb.hidden = true;
+  lb.querySelector(".wf-lb-media").innerHTML = "";
+  if (wf.lbReturn && wf.lbReturn.isConnected) wf.lbReturn.focus();
+  wf.lbReturn = null;
 }
 
 /* The line under the editor's bar: what the last action did. kind: "", ok, err. */
