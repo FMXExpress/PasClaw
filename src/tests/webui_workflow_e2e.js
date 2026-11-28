@@ -265,6 +265,41 @@ if (shots) fs.mkdirSync(shots, { recursive: true });
       fail("the save did not reach the route: " + JSON.stringify(saved));
     ok("an edit marks the editor unsaved, Back asks first, Save sends the description, the moved and the added step, and keeps the rest");
 
+    /* ---- a slow save: an edit typed meanwhile stays unsaved, and saves
+       go one at a time (Codex P2 on #658) ---- */
+    let release = () => {}, held = 0;
+    await page.route("**/v1/workflows", async route => {
+      if (route.request().method() === "POST") { held++; await new Promise(r => { release = r; }); }
+      await route.continue();
+    });
+    const desc = async () => (await A.api("GET", "/v1/workflows/digest"))[1].description;
+    await page.fill("#wfDesc", "Sent with the slow save.");
+    await page.click("#wfSave");
+    await until(async () => held === 1, "the save to be on its way");
+    await page.fill("#wfDesc", "Typed while the save was on its way.");
+    release();
+    await until(async () => (await desc()) === "Sent with the slow save." && !(await page.isDisabled("#wfSave")), "the slow save to end");
+    if ((await page.textContent("#wf-state")) !== "Unsaved changes")
+      fail("an edit typed during a save was marked saved: " + await page.textContent("#wf-state"));
+    asked.length = 0; answer = false;
+    await page.click("#wf-back");
+    await sleep(200);
+    if (!asked.length || !(await page.isVisible("#wf-editor"))) fail("Back did not ask about the edit typed during the save");
+    held = 0;
+    await page.click("#wfSave");
+    await until(async () => held === 1, "a second slow save");
+    await page.fill("#wfDesc", "Typed during the second save.");
+    await page.keyboard.press("Control+s");
+    await sleep(250);
+    if (held !== 1) fail("Ctrl+S sent a save while one was still on its way");
+    release();
+    await until(async () => held === 2, "the waiting save, once the first ended");
+    release();
+    await until(async () => (await page.textContent("#wf-state")) === "Saved", "both saves");
+    if ((await desc()) !== "Typed during the second save.") fail("the last save is not what the server holds: " + await desc());
+    await page.unroute("**/v1/workflows");
+    ok("an edit typed during a save stays unsaved; a save asked for meanwhile waits, then sends the newer text");
+
     /* ---- a run: in flight, then each step ---- */
     await page.click('#wfInspect #wfInspDel');   // the added step reads an input digest doesn't have; drop it
     await page.click("#wfSave");
