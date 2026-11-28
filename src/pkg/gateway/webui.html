@@ -10905,12 +10905,14 @@ function wfConfirmDiscard() {
 }
 function wfBackToList() {
   if (!wfConfirmDiscard()) return;
+  wf.session = (wf.session || 0) + 1;
   wf.savedSig = null;
   wfShowView(false);
   wfLoadList({ quiet: true });
 }
 
 function wfResetEditor() {
+  wf.session = (wf.session || 0) + 1;   /* a save still on its way belongs to the last one */
   wf.current = null; wf.loadedName = ""; wf.savedSig = null;
   wf.nodes = []; wf.edges = []; wf.inputs = []; wf.sel = null; wf.ioMeta = { in: {}, out: {} };
   wfRunStatus = {}; wfHidePalette();
@@ -11663,18 +11665,34 @@ function wfBuildLoop() {
   return has ? loop : undefined;
 }
 
+/* One save at a time: Ctrl+S and Run can ask while one is on its way (only
+   the button is disabled). A second waits for the first, then saves only if
+   the editor changed since. */
 async function wfSave() {
+  while (wf.savePending) {
+    const ok = await wf.savePending;
+    if (!ok || !wfIsDirty()) return ok;
+  }
+  wf.savePending = wfSaveOnce();
+  try { return await wf.savePending; } finally { wf.savePending = null; }
+}
+async function wfSaveOnce() {
   let spec;
   try { spec = wfBuildSpec(); } catch (e) { wfMsg(e.message, "err"); return false; }
   if (!spec.name) { wfMsg("Give the workflow a name first.", "err"); document.getElementById("wfName").focus(); return false; }
+  /* What is saved is what was sent: an edit made while the request is on
+     its way stays unsaved (it was marked saved -- Codex P2 on #658). And if
+     the editor moved to another workflow meanwhile, it is left alone. */
+  const sentSig = wfSig(), session = wf.session;
   const btn = document.getElementById("wfSave");
   btn.disabled = true;
   try {
     const r = await gwFetch("/v1/workflows", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(spec) });
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.saved) {
+      if (session !== wf.session) return true;
       wf.current = j.id || spec.name; wf.loadedName = spec.name;
-      wfMarkSaved();
+      wf.savedSig = sentSig; wfUpdateState();
       wfMsg("Saved. Agents can call it as " + wfToolName(wf.current) + ".", "ok");
       return true;
     }
