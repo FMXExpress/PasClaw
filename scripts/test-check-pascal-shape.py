@@ -43,6 +43,37 @@ begin
 end;
 end.
 ''', {9, 13, 16, 23}),
+    # Rule 4: FPC-only integer types, any case, outside a guard.
+    'types.pas': ('''unit types;
+interface
+implementation
+procedure A;
+var
+  {$IFDEF FPC} I: SizeInt; {$ENDIF}
+  J: SizeInt;
+  K: sizeuint;
+  { a SizeInt in a comment is fine }
+  L: NativeInt;
+begin
+  {$IFNDEF FPC} P := PtrInt(nil); {$ENDIF}
+end;
+end.
+''', {7, 8, 12}),
+    # Rule 4 also runs on a file the other rules skip (onnxruntime.pas):
+    # its declarations shape is not checked, its guards are.
+    'localvector/onnxruntime.pas': ('''unit onnxruntime;
+interface
+implementation
+procedure A;
+var _out: Pointer; num_keys: Int64; i: SizeInt;
+begin
+end;
+{$ifdef fpc}
+procedure B; var z: SizeInt; begin end;
+{$endif}
+procedure C.D; begin end;
+end.
+''', {5}),
     # Rule 4, one line holding a call and a mention (Codex P2 on #649):
     # only the call counts, and only once.
     'mixed.pas': ('''unit mixed;
@@ -101,6 +132,7 @@ def main():
         paths = {}
         for name, (src, _) in CASES.items():
             paths[name] = os.path.join(d, name)
+            os.makedirs(os.path.dirname(paths[name]), exist_ok=True)
             with open(paths[name], 'w') as f:
                 f.write(src)
         out = subprocess.run([sys.executable, CHECKER] + list(paths.values()),
@@ -109,7 +141,7 @@ def main():
         for line in out.splitlines():
             m = re.match(r'(.*?):(\d+): ', line)
             if m:
-                got[os.path.basename(m.group(1))].add(int(m.group(2)))
+                got[os.path.relpath(m.group(1), d)].add(int(m.group(2)))
         for name, (_, want) in CASES.items():
             if got[name] != want:
                 print(f'FAIL: {name}: flagged lines {sorted(got[name])}, want {sorted(want)}')
