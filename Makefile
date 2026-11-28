@@ -1057,9 +1057,11 @@ test-fpos-build:
 
 # That pasclaw inside FreePascalOS, in QEMU (scripts/test-fpos-qemu.py):
 # version, a turn against a fake model on this machine over HTTP and
-# HTTPS, the file and shell tools, a saved session, and `pasclaw acp`
-# streaming. Needs QEMU, OVMF, e2fsprogs/fdisk and `make esp` in
-# FPOS_DIR; skips without them.
+# HTTPS, the file and shell tools, a saved session, `pasclaw acp`
+# streaming, and `pasclaw gateway` asked from this machine through a
+# forwarded port (its API, SSE, the web UI -- in Chromium when node has
+# Playwright -- and `agent --attach` inside). Needs QEMU, OVMF,
+# e2fsprogs/fdisk and `make esp` in FPOS_DIR; skips without them.
 test-fpos-qemu: test-fpos-build
 	@if [ ! -f $(FPOS_TEST_BIN) ]; then \
 		echo "  skip: test-fpos-qemu needs the FreePascalOS build (test-fpos-build)"; \

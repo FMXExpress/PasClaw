@@ -14,17 +14,29 @@ over the serial port the way the system's own tests do
   - a turn whose model asks for tools runs them inside FreePascalOS:
     write_file, read_file, shell_exec (a child process through the
     system's /bin/sh), shell_exec of a command that outlives its
-    timeout (ended, exit 124), and execute_code (a script run by sh),
-    and the answer after them comes back;
+    timeout (ended, exit 124), and execute_code (a script run by sh, which
+    calls back into the tools with `pasclaw __tool`), and the answer after
+    them comes back;
   - the session that turn was told to keep is saved on the system's disk;
   - over HTTPS too, to a server whose certificate comes from a CA made
     for the run: refused without that CA (libtls checks the chain and
     the name), answered with it (SSL_CERT_FILE);
-  - a command FreePascalOS cannot have (gateway) says so;
+  - a command FreePascalOS cannot have (tui) says so;
   - `pasclaw acp`, typed at on the console: the reply streams (SSE,
     HTTP/1.1 chunked) and reaches the editor while the model is still
     writing -- the fake model holds the rest of its stream until the first
-    piece has come out of the serial port.
+    piece has come out of the serial port;
+  - `pasclaw gateway --addr 0.0.0.0` in the background (Indy's HTTP server
+    on its FreePascalOS socket stack, src/fpos/indy), reached from this
+    machine through a port QEMU forwards to it: /v1/health, the web UI at
+    / (the embedded resource), /v1/config with its secrets masked, a
+    request refused without the gateway token, /v1/chat answered by the
+    fake model, /v1/chat/completions streaming (SSE: the tool's line reaches
+    this machine before the model is asked for the rest), the /v1/logs and
+    /v1/desktop/events feeds, /v1/background, the web UI in headless
+    Chromium sending a chat message (when node and Playwright are here,
+    scripts/fpos-webui-chat.js), and `pasclaw agent --attach` inside the
+    system talking to that gateway.
 
 usage: test-fpos-qemu.py <FPOS_DIR> <pasclaw-binary> <work-dir>
 
@@ -38,11 +50,13 @@ The system disk is made by FreePascalOS's own scripts/make-system-disk.sh
 from a folder this script assembles; nothing in FPOS_DIR's build is
 changed but the programs `make` adds there.
 """
+import http.client
 import http.server
 import json
 import os
 import re
 import shutil
+import socket
 import ssl
 import subprocess
 import sys
@@ -82,12 +96,16 @@ class Model(http.server.BaseHTTPRequestHandler):
     """OpenAI chat completions. A prompt with TOOLS-PLEASE in it is answered
     with tool calls, one round each, then a closing answer that quotes the
     tools' results; "stream check" gets STREAMED, the rest of it held back
-    until first_piece_seen; anything else gets "hi from the fake model".
+    until first_piece_seen; "gateway stream check" a write_file call, and
+    GATEWAY_STREAMED after it only once gateway_piece_seen; anything else
+    gets "hi from the fake model".
     Streams (SSE, chunked) when the request asks to."""
     protocol_version = 'HTTP/1.1'
     requests = []
     first_piece_seen = threading.Event()
     held_live = None
+    gateway_piece_seen = threading.Event()
+    gateway_held_live = None
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
@@ -105,16 +123,32 @@ class Model(http.server.BaseHTTPRequestHandler):
         if 'TOOLS-PLEASE' in prompt and len(tool_results) == 3:
             return self.answer(None, [('shell_exec', {'command': 'sleep 60', 'timeout_sec': 2})])
         if 'TOOLS-PLEASE' in prompt and len(tool_results) == 4:
-            return self.answer(None, [('execute_code', {'code': 'echo from-execute-code\nuname -s\n'})])
+            # The script calls back into pasclaw's tools (`pasclaw __tool`,
+            # a TCP connection to the parent's tool server).
+            return self.answer(None, [('execute_code', {'code': (
+                'echo from-execute-code\nuname -s\n'
+                'pasclaw __tool write_file \'{"path": "rpc-note.txt", '
+                '"content": "written-through-tool-rpc"}\'\n')})])
         if 'TOOLS-PLEASE' in prompt:
             seen = ' | '.join(str(m.get('content'))[:160].replace('\n', ' ') for m in tool_results)
             return self.answer('TOOLS-DONE: ' + seen, None)
         if not body.get('tools'):
             return self.answer('summary', None)
+        if 'gateway stream check' in prompt and len(tool_results) == 0:
+            return self.answer(None, [('write_file', {'path': 'gateway-note.txt',
+                                                      'content': 'written through the gateway\n'})])
+        if 'gateway stream check' in prompt:
+            # The answer after the tool waits until the tool's line, which
+            # the gateway streams as the call happens, has reached the
+            # client on this machine: proof that it streamed.
+            Model.gateway_held_live = Model.gateway_piece_seen.wait(60)
+            return self.answer(GATEWAY_STREAMED, None)
         if 'stream check' in prompt:
             return self.answer(STREAMED, None, hold=True)
         if 'over https' in prompt:
             return self.answer('hi over https from the fake model', None)
+        if 'attached' in prompt:
+            return self.answer('hi to the attached terminal', None)
         return self.answer('hi from the fake model', None)
 
     def answer(self, text, calls, hold=False):
@@ -176,6 +210,124 @@ class Model(http.server.BaseHTTPRequestHandler):
 
 
 STREAMED = 'Streaming works inside FreePascalOS: alpha beta gamma delta.'
+GATEWAY_STREAMED = 'The gateway streams out of FreePascalOS: one two three four five.'
+
+# `pasclaw gateway` inside FreePascalOS listens on GATEWAY_PORT; QEMU
+# forwards a free port on this machine's loopback to it.
+GATEWAY_PORT = 18790
+GATEWAY_TOKEN = 'fpos-gateway-test-token-7d1e'
+
+
+def free_port():
+    s = socket.socket()
+    s.bind(('127.0.0.1', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+class Gateway:
+    """The gateway inside FreePascalOS, reached from this machine through
+    the forwarded port: plain http.client requests, and SSE streams read
+    line by line as they arrive."""
+
+    def __init__(self, port, pump):
+        self.port = port
+        self.pump = pump        # keeps the serial port drained meanwhile
+
+    def request(self, method, path, body=None, token=GATEWAY_TOKEN, timeout=120):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=timeout)
+        headers = {}
+        if token:
+            headers['Authorization'] = 'Bearer ' + token
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            headers['Content-Type'] = 'application/json'
+        try:
+            conn.request(method, path, body=data, headers=headers)
+            r = conn.getresponse()
+            return r.status, r.getheader('Content-Type') or '', r.read()
+        finally:
+            conn.close()
+
+    def wait_up(self, seconds):
+        """Polls GET /v1/health until the gateway answers."""
+        end = time.time() + seconds
+        while time.time() < end:
+            self.pump()
+            try:
+                status, _, body = self.request('GET', '/v1/health', token=None, timeout=5)
+                if status == 200:
+                    return body
+            except (OSError, http.client.HTTPException):
+                pass
+            time.sleep(1)
+        return None
+
+    def open_stream(self, method, path, body=None, timeout=60):
+        """Starts a request whose answer is an SSE stream; returns the
+        connection and the response, headers read, body not yet."""
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=timeout)
+        headers = {'Authorization': 'Bearer ' + GATEWAY_TOKEN, 'Accept': 'text/event-stream'}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            headers['Content-Type'] = 'application/json'
+        conn.request(method, path, body=data, headers=headers)
+        return conn, conn.getresponse()
+
+    @staticmethod
+    def events(response, limit_seconds):
+        """The `data:` payloads of an SSE response, as they arrive."""
+        end = time.time() + limit_seconds
+        while time.time() < end:
+            line = response.readline()
+            if not line:
+                return
+            line = line.strip()
+            if line.startswith(b'data:'):
+                yield line[5:].strip()
+
+    def stream_chat(self):
+        """POST /v1/chat/completions with stream:true. The gateway streams
+        each tool call and result as it happens, the answer at the end;
+        the fake model asks for a tool, and answers after it only once the
+        first piece (the tool's line) has reached this client. Returns
+        (content type, the content deltas, [DONE] seen)."""
+        conn, r = self.open_stream('POST', '/v1/chat/completions', {
+            'model': 'm', 'stream': True,
+            'messages': [{'role': 'user', 'content': 'gateway stream check'}]})
+        deltas, done = [], False
+        try:
+            for payload in self.events(r, 120):
+                if payload == b'[DONE]':
+                    done = True
+                    break
+                try:
+                    chunk = json.loads(payload)
+                except ValueError:
+                    continue
+                for choice in chunk.get('choices') or []:
+                    piece = (choice.get('delta') or {}).get('content')
+                    if piece:
+                        deltas.append(piece)
+                        Model.gateway_piece_seen.set()
+        finally:
+            Model.gateway_piece_seen.set()
+            conn.close()
+        return r.getheader('Content-Type') or '', deltas, done
+
+    def first_event(self, path, seconds=30):
+        """The content type and first `data:` event of an SSE feed that
+        stays open (/v1/logs, /v1/desktop/events), then hangs up."""
+        conn, r = self.open_stream('GET', path, timeout=seconds)
+        try:
+            for payload in self.events(r, seconds):
+                return r.getheader('Content-Type') or '', payload
+            return r.getheader('Content-Type') or '', None
+        finally:
+            conn.close()
 
 SMOKE = r'''
 PASCLAW_HOME=/tmp/pch
@@ -201,6 +353,9 @@ echo SMOKE-TOOLS-BEGIN
 pasclaw agent -m "TOOLS-PLEASE write, read and run" --quiet --session fpos-smoke
 echo "SMOKE-TOOLS-EXIT=$?"
 cat /tmp/ws/note.txt
+echo SMOKE-RPC-BEGIN
+cat /tmp/ws/rpc-note.txt
+echo SMOKE-RPC-END
 ls /tmp/pch/workspace/sessions
 echo "10.0.2.2 fakemodel.test" >> /etc/hosts
 cat > /tmp/ca.pem <<'EOF'
@@ -212,9 +367,95 @@ echo SMOKE-HTTPS-BEGIN
 env SSL_CERT_FILE=/tmp/ca.pem pasclaw agent -m "say hi over https" --quiet --provider fakessl
 echo "SMOKE-HTTPS-EXIT=$?"
 echo SMOKE-UNAVAILABLE-BEGIN
-pasclaw gateway
+pasclaw tui
 echo "SMOKE-UNAVAILABLE-EXIT=$?"
 echo SMOKE-END
+'''
+
+
+def gateway_checks(gw):
+    """The checks of the gateway part, from what gateway_part() recorded."""
+    def answer(name):
+        got = gw.get(name)
+        if isinstance(got, tuple) and len(got) == 3:
+            return got
+        return (None, '', b'')
+
+    def as_json(body):
+        try:
+            return json.loads(body)
+        except ValueError:
+            return None
+    webui = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         'src', 'pkg', 'gateway', 'webui.html')
+    with open(webui, 'rb') as f:
+        webui_html = f.read()
+    health = as_json(gw.get('health') or b'') or {}
+    index, config, refused = answer('index'), answer('config'), answer('config-no-token')
+    chat, background = answer('chat'), answer('background')
+    stream = gw.get('stream')
+    if not (isinstance(stream, tuple) and len(stream) == 3):
+        stream = ('', [], False)
+    logs, desktop = gw.get('logs'), gw.get('desktop-events')
+    browser = gw.get('browser')
+    return [
+        ('gateway: GET /v1/health through the forwarded port', health.get('status') == 'ok'),
+        ('gateway: GET / serves the web UI (the embedded resource, byte for byte)',
+         index[0] == 200 and 'text/html' in index[1] and index[2] == webui_html),
+        ('gateway: GET /v1/config with the token, its secrets masked',
+         config[0] == 200 and as_json(config[2]) is not None and b'sk-test' not in config[2]
+         and GATEWAY_TOKEN.encode() not in config[2] and '•••'.encode() in config[2]),
+        ('gateway: a request without the token is refused (401)', refused[0] == 401),
+        ('gateway: POST /v1/chat answered by the fake model on 10.0.2.2',
+         chat[0] == 200 and (as_json(chat[2]) or {}).get('content') == 'hi from the fake model'),
+        ('gateway: /v1/chat/completions streams (SSE): the tool, then the answer',
+         'text/event-stream' in stream[0] and len(stream[1]) >= 3 and 'write_file' in stream[1][0]
+         and ''.join(stream[1]).endswith(GATEWAY_STREAMED) and stream[2]),
+        ('gateway: the tool\'s line reached this machine before the model answered',
+         Model.gateway_held_live is True),
+        ('gateway: GET /v1/logs streams the log (SSE)',
+         isinstance(logs, tuple) and 'text/event-stream' in logs[0] and logs[1] is not None),
+        ('gateway: GET /v1/desktop/events says hello',
+         isinstance(desktop, tuple) and desktop[1] is not None and b'"hello"' in desktop[1]),
+        ('gateway: GET /v1/background answers', background[0] == 200
+         and as_json(background[2]) is not None),
+        ('gateway: the web UI in Chromium sends a chat message and shows the reply',
+         None if browser is None else (isinstance(browser, tuple) and browser[0] is True)),
+        ('agent --attach inside FreePascalOS: a turn through the gateway there',
+         'hi to the attached terminal' in gw.get('attach', '')
+         and 'ATTACH-EXIT=0' in gw.get('attach', '')),
+    ]
+
+
+def browser_chat(port):
+    """The web UI the gateway serves, in headless Chromium (Playwright,
+    scripts/fpos-webui-chat.js): a chat message sent from the page gets the
+    fake model's reply. True / False, or None when node or Playwright is
+    not there."""
+    if not shutil.which('node'):
+        return None
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fpos-webui-chat.js')
+    r = subprocess.run(['node', script, 'http://127.0.0.1:%d' % port, GATEWAY_TOKEN,
+                        'hello from the browser', 'hi from the fake model'],
+                       capture_output=True, text=True, timeout=600)
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode == 0 and out.startswith('skip'):
+        return None
+    return (r.returncode == 0, out[:3000])
+
+
+# `pasclaw agent --attach` inside FreePascalOS, against the gateway running
+# there: Indy's client to Indy's server over the loopback interface. The
+# gateway's run file (run/gateway.json) says where it listens.
+ATTACH = r'''
+PASCLAW_HOME=/tmp/pch
+export PASCLAW_HOME
+NO_COLOR=1
+export NO_COLOR
+echo ATTACH-BEGIN
+env PASCLAW_GATEWAY_TOKEN=@TOKEN@ pasclaw agent --attach -m "say hi when attached" --quiet
+echo "ATTACH-EXIT=$?"
+echo ATTACH-END
 '''
 
 
@@ -299,6 +540,10 @@ def main():
     with open(os.path.join(user, 'bin', 'pasclaw-smoke'), 'w') as f:
         f.write(SMOKE.replace('@PORT@', str(port)).replace('@TLSPORT@', str(tls_port))
                 .replace('@CAPEM@', ca_pem).lstrip())
+    with open(os.path.join(user, 'bin', 'pasclaw-gateway-log'), 'w') as f:
+        f.write('echo GW-LOG-BEGIN\ncat /tmp/gw.log\necho GW-LOG-END\n')
+    with open(os.path.join(user, 'bin', 'pasclaw-attach'), 'w') as f:
+        f.write(ATTACH.replace('@TOKEN@', GATEWAY_TOKEN).lstrip())
 
     disk = os.path.join(work, 'system.img')
     r = subprocess.run([os.path.join(fpos_dir, 'scripts', 'make-system-disk.sh'), user, disk],
@@ -320,6 +565,8 @@ def main():
     for suffix in ('.in', '.out'):
         os.mkfifo(serial + suffix)
     accel = ['-accel', 'kvm', '-cpu', 'host'] if os.environ.get('ACCEL') == 'kvm' else ['-cpu', 'max']
+    # The gateway's port inside, reached from here on host_port.
+    host_port = free_port()
     qemu = subprocess.Popen(
         ['qemu-system-x86_64', '-machine', 'q35', *accel, '-m', '1G', '-smp', '2',
          '-drive', 'if=pflash,format=raw,readonly=on,file=' + code,
@@ -327,7 +574,8 @@ def main():
          '-drive', 'format=raw,file=fat:rw:' + os.path.join(work, 'esp'),
          '-drive', 'format=raw,cache=unsafe,file=' + disk,
          '-device', 'isa-debug-exit,iobase=0xf4,iosize=0x04',
-         '-netdev', 'user,id=net0', '-device', 'virtio-net-pci,netdev=net0',
+         '-netdev', 'user,id=net0,hostfwd=tcp:127.0.0.1:%d-:%d' % (host_port, GATEWAY_PORT),
+         '-device', 'virtio-net-pci,netdev=net0',
          '-serial', 'pipe:' + serial, '-display', 'none', '-no-reboot'],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=open(os.path.join(work, 'qemu-errors.log'), 'wb'))
@@ -373,6 +621,56 @@ def main():
         for byte in line.encode() + b'\r':
             serial_in.write(bytes([byte]))
             time.sleep(0.02)
+
+    gateway = {}
+
+    def gateway_part():
+        """`pasclaw gateway` in the background inside FreePascalOS (its
+        output in /tmp/gw.log), asked from this machine through the
+        forwarded port; then its log is shown on the console."""
+        start = len(received)
+        type_line('env PASCLAW_HOME=/tmp/pch NO_COLOR=1 PASCLAW_GATEWAY_TOKEN=%s '
+                  'pasclaw gateway --addr 0.0.0.0 --port %d > /tmp/gw.log 2>&1 &'
+                  % (GATEWAY_TOKEN, GATEWAY_PORT))
+        wait_for(PROMPT, 30, start)
+        gw = Gateway(host_port, lambda: collect(0.05))
+
+        gateway['seconds'] = {}
+
+        def attempt(name, fn):
+            began = time.time()
+            try:
+                gateway[name] = fn()
+            except Exception as e:      # recorded, and the check fails
+                gateway[name] = ('error', repr(e))
+            gateway['seconds'][name] = round(time.time() - began, 1)
+            collect(0.05)
+        attempt('health', lambda: gw.wait_up(300))
+        if gateway['health'] is not None:
+            attempt('index', lambda: gw.request('GET', '/', token=None))
+            attempt('config', lambda: gw.request('GET', '/v1/config'))
+            attempt('config-no-token', lambda: gw.request('GET', '/v1/config', token=None))
+            attempt('chat', lambda: gw.request('POST', '/v1/chat', {'message': 'say hi'}))
+            attempt('stream', gw.stream_chat)
+            attempt('logs', lambda: gw.first_event('/v1/logs'))
+            attempt('desktop-events', lambda: gw.first_event('/v1/desktop/events'))
+            attempt('background', lambda: gw.request('GET', '/v1/background'))
+            attempt('browser', lambda: browser_chat(host_port))
+            attach_start, began = len(received), time.time()
+            type_line('sh /bin/pasclaw-attach')
+            wait_for(b'ATTACH-END', 300, attach_start)
+            wait_for(PROMPT, 10, attach_start)
+            gateway['seconds']['attach'] = round(time.time() - began, 1)
+            gateway['attach'] = section(
+                received[attach_start:].decode('utf-8', 'replace').replace('\r', ''),
+                'ATTACH-BEGIN\n', 'ATTACH-END')
+        # (a script, so that the markers are not in the typing's echo)
+        log_start = len(received)
+        type_line('sh /bin/pasclaw-gateway-log')
+        wait_for(b'GW-LOG-END', 60, log_start)
+        wait_for(PROMPT, 10, log_start)
+        gateway['log'] = section(received[log_start:].decode('utf-8', 'replace').replace('\r', ''),
+                                 'GW-LOG-BEGIN\n', 'GW-LOG-END')
 
     log_path = os.path.join(work, 'serial.log')
     ok = serial_in is not None and wait_for(PROMPT, 600)
@@ -420,6 +718,7 @@ def main():
         if not wait_for(PROMPT, 60, len(received)):
             serial_in.write(b'\x03')
             wait_for(PROMPT, 30, len(received))
+        gateway_part()
         type_line('exit')
         wait_for(b'\x00never', 30)
     if qemu.poll() is None:
@@ -454,8 +753,10 @@ def main():
          and 'exit=0' in tools and 'FreePascalOS' in tools and 'SMOKE-TOOLS-EXIT=0' in smoke),
         ('shell_exec past its timeout is ended (exit=124)', 'exit=124' in tools),
         ('execute_code ran its script with sh', 'from-execute-code' in tools),
+        ('execute_code\'s script called back into the tools (pasclaw __tool, TCP)',
+         'written-through-tool-rpc' in section(smoke, 'SMOKE-RPC-BEGIN', 'SMOKE-RPC-END')),
         ('the session was saved', 'fpos-smoke.json' in smoke),
-        ('gateway says it is not available', 'not available on FreePascalOS' in smoke
+        ('tui says it is not available', 'not available on FreePascalOS' in smoke
          and 'SMOKE-UNAVAILABLE-EXIT=1' in smoke),
         ('acp: the model was asked to stream (SSE)',
          any(r.get('stream') for r in Model.requests)),
@@ -463,16 +764,22 @@ def main():
          len(chunks) >= 2 and '"stopReason":"end_turn"' in acp),
         ('acp: the first piece reached the console while the model was still writing',
          Model.held_live is True),
-    ]
-    failed = [name for name, good in checks if not good]
+    ] + gateway_checks(gateway)
+    failed = [name for name, good in checks if good is False]
     if failed or os.environ.get('FPOS_QEMU_VERBOSE'):
         print('---- inside FreePascalOS (serial console) ----')
         print(smoke)
         print('---- pasclaw acp, typed on the console ----')
         print(acp[:6000])
+        print('---- pasclaw gateway, asked from this machine ----')
+        for name in ('health', 'chat', 'stream', 'logs', 'desktop-events', 'browser', 'attach'):
+            print('%s: %s' % (name, str(gateway.get(name))[:1500]))
+        print('seconds: %s' % gateway.get('seconds'))
+        print('---- its log (/tmp/gw.log) ----')
+        print(gateway.get('log', '')[:6000])
         print('----------------------------------------------')
     for name, good in checks:
-        print(('  ok    ' if good else '  FAIL  ') + name)
+        print(('  ok    ' if good else '  skip  ' if good is None else '  FAIL  ') + name)
     if failed:
         print('FAIL: %d check(s) failed (serial log: %s)' % (len(failed), log_path))
         sys.exit(1)
