@@ -178,7 +178,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test test-all test-updater-versions test-advisor test-advisor-e2e test-mcp-client test-mcp-client-e2e dos dos-host dos-toolchain test-dos test-dos-dosbox xp xp-toolchain test-xp test-gateway-listen-fail test-config-save-env-markers test-provider-models-e2e test-webui-model-picker-e2e test-verify test-verify-routes test-steering-fastpath test-workspace-listing test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-memory-tiers test-backup test-maintain openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape lint-version lint-utf8-file-io test-workspaces test-projects test-tool-schema test-teams test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser test-background-view test-background-view-e2e test-webui-background-e2e test-webui-settings-e2e test-webui-relay-e2e
+.PHONY: all clean run test test-all test-updater-versions test-advisor test-advisor-e2e test-mcp-client test-mcp-client-e2e dos dos-host dos-toolchain test-dos test-dos-dosbox xp xp-toolchain test-xp test-gateway-listen-fail test-config-save-env-markers test-provider-models-e2e test-webui-model-picker-e2e test-verify test-verify-routes test-steering-fastpath test-workspace-listing test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-memory-tiers test-backup test-maintain openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape lint-version lint-utf8-file-io test-workspaces test-projects test-tool-schema test-teams test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser test-background-view test-background-view-e2e test-webui-background-e2e test-webui-settings-e2e test-webui-relay-e2e test-webui-mcp-e2e test-webui-cron-e2e test-webui-chat-e2e test-webui-files-e2e test-webui-stats-e2e test-webui-vault-e2e test-webui-checkpoints-e2e test-webui-logs-e2e test-webui-skills-e2e test-webui-kb-e2e test-webui-memory-e2e
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -1014,6 +1014,102 @@ test-webui-relay-e2e: $(BIN)
 	@if command -v node >/dev/null 2>&1; then node src/tests/webui_relay_e2e.js $(BIN); \
 	else echo "  skip: test-webui-relay-e2e needs node"; fi
 
+# The web UI's MCP tab against $(BIN) in headless Chromium, with the fake MCP
+# server ready, one still connecting, a command that fails and one turned
+# off: a row per server with the route's state, the ready one's protocol,
+# server and tool names, the failed one's error drawn as text, and the empty
+# state (and its Settings button) with none. Needs node with Playwright and
+# python3; skips without node or Playwright.
+test-webui-mcp-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_mcp_e2e.js $(BIN); \
+	else echo "  skip: test-webui-mcp-e2e needs node"; fi
+# The web UI's Cron tab against a real gateway: rows match GET /v1/cron,
+# simple schedules read in plain words, HTML in a job is text, the empty
+# state. Needs node with Playwright and a Chromium; skips without them.
+test-webui-cron-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_cron_e2e.js $(BIN); \
+	else echo "  skip: test-webui-cron-e2e needs node"; fi
+# The web UI's Checkpoints tab against a real gateway and a fake provider
+# whose chat turns write files: rows match GET /v1/checkpoints, newest
+# first; Undo, Redo and a confirmed Restore change the file on disk; HTML in
+# a file name is text; the empty state; no sideways scroll at phone width.
+# Needs node with Playwright and a Chromium; skips without them.
+test-webui-checkpoints-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_checkpoints_e2e.js $(BIN); \
+	else echo "  skip: test-webui-checkpoints-e2e needs node"; fi
+# The web UI's Logs tab against a real gateway: the buffer then live lines,
+# level chips and the text filter, Pause and Resume, HTML in a line as text,
+# the 2000-line cap, a reconnect after a restart, the error state, phone
+# width. Needs node with Playwright and a Chromium; skips without them.
+test-webui-logs-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_logs_e2e.js $(BIN); \
+	else echo "  skip: test-webui-logs-e2e needs node"; fi
+# The web UI's Skills tab against a real gateway: rows match GET /v1/skills
+# (kind, provenance and integrity pills), HTML in a skill is text, approve,
+# reject and remove (each destructive step confirmed in the row), install
+# and catalog posts, the empty state, no sideways scroll on a phone. Needs
+# node with Playwright and a Chromium; skips without them.
+test-webui-skills-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_skills_e2e.js $(BIN); \
+	else echo "  skip: test-webui-skills-e2e needs node"; fi
+# The web UI's Chat page against $(BIN) in headless Chromium, with a fake
+# provider: the empty-chat welcome, markdown tables (cells drawn as text),
+# a code block's Copy, a failed tool card, a distinct Stop, and a streaming
+# reply that leaves a reader who scrolled up where they are (with a Latest
+# button to come back). Needs node with Playwright; skips without them.
+test-webui-chat-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_chat_e2e.js $(BIN); \
+	else echo "  skip: test-webui-chat-e2e needs node"; fi
+# The web UI's Files tab against $(BIN) in headless Chromium: the listing is
+# GET /v1/fs's (folders first, then by name, with size and modified time,
+# config.json hidden), the breadcrumb and keyboard move between folders, a
+# text file opens with line numbers and Copy, Markdown renders, an HTML name
+# and content are drawn as text, a file over the 256 KB cap and a binary file
+# say so, a folder that cannot be listed shows why, phone width stacks. Needs
+# node with Playwright; skips without them.
+test-webui-files-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_files_e2e.js $(BIN); \
+	else echo "  skip: test-webui-files-e2e needs node"; fi
+# The web UI's KB tab against $(BIN) in headless Chromium: the empty state,
+# then a file uploaded through the tab, one through POST /v1/kb/upload and a
+# folder from `pasclaw kb add`: the strip, document and source rows are
+# GET /v1/kb's, a search lists GET /v1/kb/search's hits in order with chunk,
+# score and the matches marked, an HTML name and snippet are drawn as text,
+# replacing an upload asks first, phone width has no sideways scroll.
+# KB_SHOTS=<dir> saves screenshots. Needs node with Playwright; skips without.
+test-webui-kb-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_kb_e2e.js $(BIN); \
+	else echo "  skip: test-webui-kb-e2e needs node"; fi
+# The web UI's Memory tab against $(BIN) in headless Chromium: Notes lists
+# GET /v1/memory's files newest first with size and age, a note renders and
+# its Source and Copy are the route's text, search marks its matches and
+# Clear restores the list, Facts match GET /v1/memory/facts and Remember,
+# Forget and Export work, Search setup loads, HTML in a name, note or fact is
+# drawn as text, an unreadable note shows why, both empty states show, phone
+# width stacks. MEMORY_SHOTS=<dir> saves screenshots. Needs node with
+# Playwright; skips without them.
+test-webui-memory-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_memory_e2e.js $(BIN); \
+	else echo "  skip: test-webui-memory-e2e needs node"; fi
+# The web UI's Stats tab against $(BIN) in headless Chromium, with saved
+# conversations seeded: the strip and tables match /v1/stats, names holding
+# HTML drawn as text, the empty state, the counters-off banner, Reset's
+# confirm (Cancel keeps, confirm empties), phone width. Needs node with
+# Playwright; skips without them.
+test-webui-stats-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_stats_e2e.js $(BIN); \
+	else echo "  skip: test-webui-stats-e2e needs node"; fi
+# The web UI's Vault tab (the pasclaw.dev Code Vault) against $(BIN) in
+# headless Chromium, with /v1/vault answered from fixtures: rows match the
+# route, HTML in an entry is text and a javascript: URL is no link, an
+# entry's facts, Copy and Build with this, flagged and blocked entries, the
+# empty, no-match and error states, and no secret (gateway token, provider
+# key) anywhere in the page's HTML, inputs or console; phone width. Needs
+# node with Playwright; skips without them. VAULT_SHOTS=<dir> saves shots.
+test-webui-vault-e2e: $(BIN)
+	@if command -v node >/dev/null 2>&1; then node src/tests/webui_vault_e2e.js $(BIN); \
+	else echo "  skip: test-webui-vault-e2e needs node"; fi
+
 # The web pages' markdown renderer (webui.html, desktop.html) must finish on
 # any text: CRLF once froze the browser tab. Needs node; skips without it.
 test-webui-markdown:
@@ -1809,7 +1905,7 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 # that falls back to the default home never writes to ~/.pasclaw.
 # `make test TEST_JOBS=1` runs them one at a time; `make test-all` runs
 # them with whatever -j you give it, without those steps.
-TEST_TARGETS = smoke test-updater-versions test-advisor test-advisor-e2e test-mcp-client test-mcp-client-e2e test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-verify-routes test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-code-outline test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-gateway-local-only test-gateway-listen-fail test-config-save-env-markers test-provider-models-e2e test-webui-model-picker-e2e test-acp test-streaming test-stale-units test-context-usage test-context-usage-e2e test-provider-error-e2e test-provider-usage test-usage-stats-e2e test-stats-reset-e2e test-oneshot-session-e2e test-fs-relative-path-e2e test-webui-sessions-e2e test-decision-models test-decision-models-e2e test-workflows-e2e test-dos test-dos-dosbox test-xp test-webui-markdown test-acp-e2e test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version test-background-view test-background-view-e2e test-webui-background-e2e test-webui-settings-e2e test-webui-relay-e2e
+TEST_TARGETS = smoke test-updater-versions test-advisor test-advisor-e2e test-mcp-client test-mcp-client-e2e test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-verify-routes test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-code-outline test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-gateway-local-only test-gateway-listen-fail test-config-save-env-markers test-provider-models-e2e test-webui-model-picker-e2e test-acp test-streaming test-stale-units test-context-usage test-context-usage-e2e test-provider-error-e2e test-provider-usage test-usage-stats-e2e test-stats-reset-e2e test-oneshot-session-e2e test-fs-relative-path-e2e test-webui-sessions-e2e test-decision-models test-decision-models-e2e test-workflows-e2e test-dos test-dos-dosbox test-xp test-webui-markdown test-acp-e2e test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version test-background-view test-background-view-e2e test-webui-background-e2e test-webui-settings-e2e test-webui-relay-e2e test-webui-mcp-e2e test-webui-cron-e2e test-webui-chat-e2e test-webui-files-e2e test-webui-stats-e2e test-webui-vault-e2e test-webui-checkpoints-e2e test-webui-logs-e2e test-webui-skills-e2e test-webui-kb-e2e test-webui-memory-e2e
 TEST_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 # --output-sync is GNU make 4's; make 3.81 (macOS) interleaves instead.
 TEST_SYNC = $(if $(filter 3.%,$(MAKE_VERSION)),,--output-sync=target)

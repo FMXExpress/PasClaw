@@ -328,7 +328,7 @@ type
                                        ARequest: TIdHTTPRequestInfo;
                                        AResp: TIdHTTPResponseInfo);
     { Knowledge-base browse + ingest for the web UI. GET /v1/kb lists the
-      indexed sources and totals; POST /v1/kb/upload writes a document into
+      indexed sources, the documents (first 500) and totals; POST /v1/kb/upload writes a document into
       workspace/kb-files and (re)indexes it; GET /v1/kb/search?q= runs the
       same FTS/vector search the kb_search tool uses. }
     { GET /v1/workspace/export -- stream $PASCLAW_HOME/workspace as a zip
@@ -759,6 +759,7 @@ uses
   PasClaw.Tools.Types,        { TTool -- MCP tool enumeration for the palette }
   PasClaw.Skills.Zip,       { PackDirToZip -- workspace export download }
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
+  PasClaw.Skills.Provenance, { ReadProvenance / VerifySkill -- GET /v1/skills }
   PasClaw.Skills.ClawHub,  { SearchClawHub -- catalog search (clawhub.ai) }
   PasClaw.Skills.PasClawHub, { SearchPasClawHub -- catalog search (pasclaw.dev) }
   PasClaw.KB.Index,        { IKBIndex -- /v1/kb list / upload / search }
@@ -792,6 +793,7 @@ uses
   PasClaw.Vault.Client,     { SearchVault / GetVaultEntry -- /v1/vault browse }
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.Background, { /v1/background -- the background-jobs view }
+  PasClaw.Cron.State,       { last_fired on GET /v1/cron }
   PasClaw.Gateway.WebUI,
   PasClaw.Gateway.Desktop,  { desktop client surface: workspaces, projects,
                               tasks, jobs, apps, pages }
@@ -2678,10 +2680,18 @@ var
   Root: TJsonObject;
   Arr: TJsonArray;
   Item: TJsonObject;
+  State: TCronState;
+  Fired: Int64;
   i: Integer;
 begin
+  { last_fired: the slot the scheduler last handled, from its state file
+    (read-only -- the scheduler thread owns the file). It stores the
+    slot's local wall-clock time in unix form; send a true unix time, or
+    null for a job that has not fired. }
+  State := TCronState.Create(DefaultCronStatePath);
   Root := TJsonObject.Create;
   try
+    State.Peek;
     Arr := TJsonArray.Create;
     for i := 0 to High(FCfg.Crons) do
     begin
@@ -2692,13 +2702,24 @@ begin
       Item.PutStr ('args',           FCfg.Crons[i].Args);
       Item.PutBool('enabled',        FCfg.Crons[i].Enabled);
       Item.PutStr ('channel_kind',   FCfg.Crons[i].ChannelKind);
-      Item.PutStr ('channel_target', FCfg.Crons[i].ChannelTarget);
+      { A webhook URL carries its own credential: masked, as /v1/config
+        masks it. Nothing reads the real one from here. }
+      if FCfg.Crons[i].ChannelTarget <> '' then
+        Item.PutStr('channel_target', MaskedSecretPlaceholder)
+      else
+        Item.PutStr('channel_target', '');
+      Fired := State.GetLastFired(FCfg.Crons[i].Id);
+      if Fired > 0 then
+        Item.PutInt('last_fired', DateTimeToUnix(UnixToDateTime(Fired), False))
+      else
+        Item.PutRaw('last_fired', 'null');
       Arr.AddObject(Item);
     end;
     Root.PutArray('entries', Arr);
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
+    State.Free;
   end;
 end;
 
@@ -2734,8 +2755,11 @@ procedure TGatewayServer.HandleSkillsList(AResp: TIdHTTPResponseInfo);
 var
   Root: TJsonObject;
   Arr: TJsonArray;
-  Item: TJsonObject;
+  Item, ProvObj: TJsonObject;
   Skills: TSkillSpecArray;
+  Prov: TSkillProvenance;
+  Ver: TSkillVerifyResult;
+  ProvErr: string;
   i: Integer;
 begin
   Root := TJsonObject.Create;
@@ -2751,6 +2775,27 @@ begin
       Item.PutStr('kind',        Skills[i].Kind);
       Item.PutStr('path',        Skills[i].Source);
       Item.PutStr('dir',         Skills[i].Dir);
+      { Where a skill came from and whether its files still match, when an
+        install recorded it (.provenance.json, see PasClaw.Skills.
+        Provenance). Absent for skills with no record: installed by hand,
+        from GitHub, or before records existed. Legacy .json skills sit in
+        the skills root itself, which has no record of its own. }
+      if not HasSuffix(LowerCase(Skills[i].Source), '.json') then
+      begin
+        Ver := VerifySkill(Skills[i].Dir);
+        if Ver.Status <> svNoRecord then
+          Item.PutStr('integrity', LowerCase(VerifyStatusText(Ver.Status)));
+        if ReadProvenance(Skills[i].Dir, Prov, ProvErr) then
+        begin
+          ProvObj := TJsonObject.Create;
+          ProvObj.PutStr('source',         Prov.Source);
+          ProvObj.PutStr('slug',           Prov.Slug);
+          ProvObj.PutStr('version',        Prov.Version);
+          ProvObj.PutStr('installed_at',   Prov.InstalledAt);
+          ProvObj.PutStr('archive_sha256', Prov.ArchiveSha256);
+          Item.PutObject('provenance', ProvObj);
+        end;
+      end;
       Arr.AddObject(Item);
     end;
     Root.PutArray('skills', Arr);
@@ -3220,14 +3265,16 @@ procedure TGatewayServer.HandleKBList(AResp: TIdHTTPResponseInfo);
 var
   Idx: IKBIndex;
   Sources: TKBSourceArray;
+  Docs: TKBFileArray;
   St: TKBStats;
   Root, Stats, Item: TJsonObject;
-  Arr: TJsonArray;
+  Arr, DocArr: TJsonArray;
   i: Integer;
 begin
   Root := TJsonObject.Create;
   try
     Arr := TJsonArray.Create;
+    DocArr := TJsonArray.Create;
     Stats := TJsonObject.Create;
     Idx := NewKBIndex;
     if Idx.Open(DefaultKBDbPath) then
@@ -3241,6 +3288,18 @@ begin
         Item.PutInt('chunks',   Sources[i].Chunks);
         Item.PutInt('added_at', Sources[i].AddedAt);
         Arr.AddObject(Item);
+      end;
+      { The documents themselves, for the tab's list: the first 500 by
+        path (stats.files is the full count). }
+      Docs := Idx.GetFiles(500);
+      for i := 0 to High(Docs) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr('path',   Docs[i].Path);
+        Item.PutStr('root',   Docs[i].Root);
+        Item.PutInt('chunks', Docs[i].Chunks);
+        Item.PutInt('mtime',  Docs[i].Mtime);
+        DocArr.AddObject(Item);
       end;
       St := Idx.Stats;
       Stats.PutInt ('sources',      St.Sources);
@@ -3258,6 +3317,7 @@ begin
     end;
     Root.PutObject('stats',   Stats);
     Root.PutArray ('sources', Arr);
+    Root.PutArray ('documents', DocArr);
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
@@ -3479,6 +3539,7 @@ var
   Item: TJsonObject;
   Dir: string;
   SR: TSearchRec;
+  Mt: TDateTime;
 begin
   Root := TJsonObject.Create;
   try
@@ -3493,6 +3554,14 @@ begin
           Item := TJsonObject.Create;
           Item.PutStr('name', SR.Name);
           Item.PutInt('size', SR.Size);
+          { Last modified, Unix seconds UTC -- the Memory tab's list shows it
+            and sorts by it. Same FPC / Delphi split as /v1/fs. }
+          {$IFDEF FPC}
+          Mt := FileDateToDateTime(SR.Time);
+          {$ELSE}
+          Mt := SR.TimeStamp;
+          {$ENDIF}
+          Item.PutInt('mtime', DateTimeToUnix(Mt, False));
           Arr.AddObject(Item);
         until FindNext(SR) <> 0;
       finally
@@ -5598,6 +5667,7 @@ var
   Arr: TJsonArray;
   Item: TJsonObject;
   SR: TSearchRec;
+  Mt: TDateTime;
 begin
   { Ensure the agent workspace exists so the Files tab can default to (and
     offer a switch to) it even on a fresh web-only / Docker boot where no
@@ -5698,6 +5768,15 @@ begin
         Item.PutStr ('name', SR.Name);
         Item.PutInt ('size', SR.Size);
         Item.PutBool('dir',  (SR.Attr and faDirectory) <> 0);
+        { Modified time, Unix seconds (UTC), for the Files tab's Modified
+          column. Read from the search record already in hand -- no extra
+          stat per entry. Same FPC / Delphi split as PasClaw.Permissions. }
+        {$IFDEF FPC}
+        Mt := FileDateToDateTime(SR.Time);
+        {$ELSE}
+        Mt := SR.TimeStamp;
+        {$ENDIF}
+        Item.PutInt ('mtime', DateTimeToUnix(Mt, False));
         Arr.AddObject(Item);
       until FindNext(SR) <> 0;
     finally

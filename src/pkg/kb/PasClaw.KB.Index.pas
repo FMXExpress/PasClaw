@@ -66,6 +66,16 @@ type
   end;
   TKBSourceArray = array of TKBSource;
 
+  { One indexed document: a file with at least one chunk. Mtime is the
+    file's modification time (unix seconds) when it was last indexed. }
+  TKBFile = record
+    Path:   string;
+    Root:   string;
+    Mtime:  Int64;
+    Chunks: Integer;
+  end;
+  TKBFileArray = array of TKBFile;
+
   TKBStats = record
     Sources: Integer;
     Files:   Integer;
@@ -83,6 +93,9 @@ type
     function  AddSource(const Root: string; out Err: string): Boolean;
     function  RemoveSource(const Root: string; out Err: string): Boolean;
     function  GetSources: TKBSourceArray;
+    { The indexed documents, by path, at most Limit of them (the web
+      UI's document list; Stats.Files is the full count). }
+    function  GetFiles(Limit: Integer): TKBFileArray;
     { Walk all sources; (re)index added/changed files, drop vanished
       ones. Returns how many files were (re)indexed and how many chunks
       they produced. Cheap when nothing changed (mtime comparisons). }
@@ -430,6 +443,7 @@ type
     function  AddSource(const Root: string; out Err: string): Boolean;
     function  RemoveSource(const Root: string; out Err: string): Boolean;
     function  GetSources: TKBSourceArray;
+    function  GetFiles(Limit: Integer): TKBFileArray;
     procedure Sync(out FilesIndexed, ChunksIndexed: Integer);
     function  Search(const Query: string; K: Integer): TKBHitArray;
     function  GetChunks(const Path: string; ChunkNo, Window: Integer): string;
@@ -814,6 +828,39 @@ begin
     end;
   finally
     Roots.Free;
+  end;
+end;
+
+function TKBIndexImpl.GetFiles(Limit: Integer): TKBFileArray;
+var
+  Paths, R: TStringList;
+  i: Integer;
+  V: Int64;
+begin
+  SetLength(Result, 0);
+  if (not FOpen) or (Limit <= 0) then Exit;
+  { nchunks > 0 for the same reason as GetSources: 0-chunk rows are skip
+    markers, not documents. }
+  Paths := QueryStrings('SELECT path FROM kb_files WHERE nchunks > 0 ' +
+                        'ORDER BY path LIMIT ' + IntToStr(Limit), [], []);
+  try
+    SetLength(Result, Paths.Count);
+    for i := 0 to Paths.Count - 1 do
+    begin
+      Result[i].Path := Paths[i];
+      R := QueryStrings('SELECT root FROM kb_files WHERE path = :p', ['p'], [Paths[i]]);
+      try
+        if R.Count > 0 then Result[i].Root := R[0];
+      finally
+        R.Free;
+      end;
+      if QueryI64('SELECT mtime FROM kb_files WHERE path = :p',
+                  ['p'], [Paths[i]], V) then Result[i].Mtime := V;
+      if QueryI64('SELECT nchunks FROM kb_files WHERE path = :p',
+                  ['p'], [Paths[i]], V) then Result[i].Chunks := V;
+    end;
+  finally
+    Paths.Free;
   end;
 end;
 
