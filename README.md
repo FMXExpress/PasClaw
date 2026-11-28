@@ -43,7 +43,7 @@ The web UI that `pasclaw serve` / `pasclaw gateway` serves on the same port as t
 | **Workflow editor** | **Phone width** |
 | ![A two-node workflow in the editor](docs/screenshots/web-ui-workflow.png) | ![The chat tab at phone width](docs/screenshots/web-ui-phone.png) |
 
-More, and how they are made, in [docs/screenshots](docs/screenshots/README.md); every redesigned tab (Chat, Stats, MCP, Cron, Files, Relay, Memory, KB, Skills, Vault, Logs, Checkpoints) in dark, light and phone width in [screenshots](screenshots/README.md). The web UI's content is fixture data written by the capture script, not a real session.
+More, and how they are made, in [docs/screenshots](docs/screenshots/README.md); every web UI tab, redesigned (Chat, Stats, MCP, Cron, Files, Relay, Memory, KB, Skills, Vault, Logs, Checkpoints, Workflow), in dark, light and phone width in [screenshots](screenshots/README.md). The web UI's content is fixture data written by the capture script, not a real session.
 
 ### DOS and Windows XP
 

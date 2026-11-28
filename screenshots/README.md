@@ -1,6 +1,6 @@
 # Web UI screenshots
 
-Every redesigned tab of the embedded web UI (all of them but Workflow), captured with headless Chromium against a real gateway and fake providers and servers. All names, numbers and conversations are fixture data, not a real session. Files named `*-phone*` are 390×844; the rest are 1280×900 unless named `full-*` (the whole page).
+Every tab of the embedded web UI, redesigned, captured with headless Chromium against a real gateway and fake providers and servers. All names, numbers and conversations are fixture data, not a real session. Files named `*-phone*` are 390×844; the rest are 1280×900 unless named `full-*` (the whole page).
 
 The README's own screenshots, and the script that makes them, are in [docs/screenshots](../docs/screenshots/README.md).
 
@@ -123,3 +123,13 @@ Checkpoints: a row per turn that changed files, newest first, with the files tag
 | ![Checkpoints, checkpoints-list-desktop-dark.png](checkpoints/checkpoints-list-desktop-dark.png) | ![Checkpoints, checkpoints-list-desktop-light.png](checkpoints/checkpoints-list-desktop-light.png) |
 
 All 11: [checkpoints-after-undo-dark](checkpoints/checkpoints-after-undo-dark.png), [checkpoints-desktop-dark](checkpoints/checkpoints-desktop-dark.png), [checkpoints-empty-desktop-dark](checkpoints/checkpoints-empty-desktop-dark.png), [checkpoints-empty-desktop-light](checkpoints/checkpoints-empty-desktop-light.png), [checkpoints-empty-phone-dark](checkpoints/checkpoints-empty-phone-dark.png), [checkpoints-empty-phone-light](checkpoints/checkpoints-empty-phone-light.png), [checkpoints-list-desktop-dark](checkpoints/checkpoints-list-desktop-dark.png), [checkpoints-list-desktop-light](checkpoints/checkpoints-list-desktop-light.png), [checkpoints-list-phone-dark](checkpoints/checkpoints-list-phone-dark.png), [checkpoints-list-phone-light](checkpoints/checkpoints-list-phone-light.png), [checkpoints-phone-light](checkpoints/checkpoints-phone-light.png).
+
+## Workflow
+
+Workflows: staged workflows to approve, a row per saved workflow, the editor (typed step cards, connections, the step settings panel, Fit, the save state) and a run with each step's result, a failed one naming its step.
+
+| | |
+|---|---|
+| ![Workflow, workflow-editor-desktop-dark.png](workflow/workflow-editor-desktop-dark.png) | ![Workflow, workflow-run-failed-desktop-dark.png](workflow/workflow-run-failed-desktop-dark.png) |
+
+All 10: [workflow-editor-desktop-dark](workflow/workflow-editor-desktop-dark.png), [workflow-editor-phone-light](workflow/workflow-editor-phone-light.png), [workflow-empty-desktop-light](workflow/workflow-empty-desktop-light.png), [workflow-empty-phone-light](workflow/workflow-empty-phone-light.png), [workflow-list-desktop-dark](workflow/workflow-list-desktop-dark.png), [workflow-list-phone-light](workflow/workflow-list-phone-light.png), [workflow-new-desktop-light](workflow/workflow-new-desktop-light.png), [workflow-run-desktop-dark](workflow/workflow-run-desktop-dark.png), [workflow-run-failed-desktop-dark](workflow/workflow-run-failed-desktop-dark.png), [workflow-run-phone-light](workflow/workflow-run-phone-light.png).
