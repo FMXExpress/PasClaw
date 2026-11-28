@@ -2650,7 +2650,7 @@ begin
       Item := TJsonObject.Create;
       Item.PutStr ('name',    Saved.MCPServers[i].Name);
       Item.PutStr ('cmd',     Saved.MCPServers[i].Cmd);
-      Item.PutStr ('args',    Saved.MCPServers[i].Args);
+      Item.PutStr ('args',    MaskMCPArgs(Saved.MCPServers[i].Cmd, Saved.MCPServers[i].Args));
       Item.PutBool('enabled', Saved.MCPServers[i].Enabled);
       Found := False;
       for j := 0 to High(Live) do

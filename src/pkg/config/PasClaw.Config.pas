@@ -1283,6 +1283,13 @@ const
    input. Exposed for tests. *)
 function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): string;
 
+(* An HTTP MCP server's args are its Authorization header value, sent as
+   is ("Bearer r8_..."): `pasclaw mcp install` writes the token there. The
+   scheme word stays and the credential becomes MaskedSecretPlaceholder
+   ("Bearer •••"); a ${VAR} marker is shown as it is (not a secret). A
+   stdio server's args are its command line and come back unchanged. *)
+function MaskMCPArgs(const Cmd, Args: string): string;
+
 (* The read side of the same contract: a config JSON with every populated
    secret -- providers[].api_key, mcp_servers[].env, gateway.token,
    web_search.api_key, decision_models.backends[].api_key, channels[].
@@ -3751,6 +3758,27 @@ begin
   end;
 end;
 
+function MaskMCPArgs(const Cmd, Args: string): string;
+var
+  T, Lower: string;
+  p, i: Integer;
+  Scheme: Boolean;
+begin
+  Result := Args;
+  T := Trim(Args);
+  Lower := LowerCase(Trim(Cmd));
+  if (T = '') or not ((Copy(Lower, 1, 7) = 'http://') or (Copy(Lower, 1, 8) = 'https://')) then Exit;
+  if Pos('${', T) > 0 then Exit;
+  p := Pos(' ', T);
+  Scheme := p > 1;
+  for i := 1 to p - 1 do
+    if not CharInSet(T[i], ['A'..'Z', 'a'..'z', '-']) then Scheme := False;
+  if Scheme then
+    Result := EnvCat(Copy(T, 1, p), MaskedSecretPlaceholder)   { EnvCat: keeps the placeholder's bytes UTF-8 }
+  else
+    Result := MaskedSecretPlaceholder;
+end;
+
 function MaskConfigSecretsJSON(const JSON: string): string;
 var
   Root, Item, Item2: TJsonObject;
@@ -3797,6 +3825,9 @@ begin
             bearer token. Every value is masked; the names stay (MaskMCPEnv). }
           if Item.GetStr('env', '') <> '' then
             Item.PutStr('env', MaskMCPEnv(Item.GetStr('env', '')));
+          { an HTTP server's args are its Authorization header value }
+          if Item.GetStr('args', '') <> '' then
+            Item.PutStr('args', MaskMCPArgs(Item.GetStr('cmd', ''), Item.GetStr('args', '')));
         finally
           Item.Free;
         end;
@@ -4054,6 +4085,9 @@ function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): stri
           if HasMask(It.GetStr('env', '')) then
             It.PutStr('env', RestoreMCPEnv(It.GetStr('env', ''),
               LookupBy(CurArr, 'name', It.GetStr('name', ''), 'env')));
+          { args come back masked whole ("Bearer •••"): keep the saved value }
+          if HasMask(It.GetStr('args', '')) then
+            It.PutStr('args', LookupBy(CurArr, 'name', It.GetStr('name', ''), 'args'));
         finally
           It.Free;
         end;
