@@ -78,7 +78,11 @@ uses
   PasClaw.Cmd.Permissions,  (* `pasclaw permissions list|test` -- the ordered rule list *)
   PasClaw.Cmd.Workflow,     (* `pasclaw workflow` -- saved workflows, approve agent-saved ones *)
   PasClaw.Cmd.Bridge,       (* `pasclaw bridge` -- the DOS client's serial link to the gateway *)
+  {$IFDEF FREEPASCALOS}
+  PasClaw.Cmd.Unavailable;  (* tui says why it is missing there (src/fpos) *)
+  {$ELSE}
   PasClaw.Cmd.TUI;
+  {$ENDIF}
 
 type
   TSubCmd = record

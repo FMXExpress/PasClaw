@@ -40,7 +40,9 @@ reader might not:
   GetTickCount64 once (the relay). Use PasClaw.Utils' NowIsoUtc /
   IsoUtcInMinutes, or guard the call with {$IFDEF FPC} ... {$ELSE}
   TTimeZone.Local.ToUniversalTime ... {$ENDIF}. Test programs under
-  src/tests/ are built by FPC only and are not checked. Only the {$...}
+  src/tests/ and the FreePascalOS-only units under src/fpos/ are built
+  by FPC only and are not checked; an {$IFDEF FREEPASCALOS} branch (that
+  target exists only in FPC) counts as an FPC one. Only the {$...}
   directive form is read; the tree has no (*$...*) directives.
 
 The cases each rule must flag, and must leave alone, are in
@@ -252,9 +254,11 @@ def check(path, guards_only=False):
     #    string -- one line can hold both, Codex P2 on #649), and a
     #    directive only where its brace opens a comment (not quoted in a
     #    string or inside another comment). Each frame of the stack is
-    #    'fpc' (FPC compiles this), 'dcc' (only dcc64 does) or 'any' (a
-    #    condition this check does not read).
-    if '/src/tests/' not in '/' + path.replace('\\', '/'):
+    #    'fpc' (FPC compiles this), 'dcc' (only dcc64 does), 'fpos' (only
+    #    the FreePascalOS target, so FPC), 'nfpos' (anything but it) or
+    #    'any' (a condition this check does not read).
+    norm = '/' + path.replace('\\', '/')
+    if '/src/tests/' not in norm and '/src/fpos/' not in norm:
         kinds = char_kinds(raw)
         raw_lines, kind_lines = raw.split('\n'), kinds.split('\n')
         stack = []
@@ -269,16 +273,18 @@ def check(path, guards_only=False):
                 if kind == 'd':
                     word, arg = m.group(1).upper(), m.group(2).strip().upper()
                     if word == 'IFDEF':
-                        stack.append('fpc' if arg == 'FPC' else 'any')
+                        stack.append({'FPC': 'fpc', 'FREEPASCALOS': 'fpos'}.get(arg, 'any'))
                     elif word == 'IFNDEF':
-                        stack.append('dcc' if arg == 'FPC' else 'any')
+                        stack.append({'FPC': 'dcc', 'FREEPASCALOS': 'nfpos'}.get(arg, 'any'))
                     elif word == 'IF':
                         stack.append('any')
                     elif word in ('ELSE', 'ELSEIF') and stack:
-                        stack[-1] = {'fpc': 'dcc', 'dcc': 'fpc'}.get(stack[-1], 'any')
+                        stack[-1] = ({'fpc': 'dcc', 'dcc': 'fpc', 'nfpos': 'fpos'}.get(stack[-1], 'any')
+                                     if word == 'ELSE' else
+                                     {'fpc': 'dcc', 'dcc': 'fpc'}.get(stack[-1], 'any'))
                     elif word in ('ENDIF', 'IFEND') and stack:
                         stack.pop()
-                elif 'fpc' not in stack:
+                elif 'fpc' not in stack and 'fpos' not in stack:
                     problems.append(
                         f'{path}:{i + 1}: {m.group(0)} is FPC-only (dcc64 E2003) -- use '
                         f'{FPC_ONLY_INSTEAD[m.group(0).lower()]}, or put it in an {{$IFDEF FPC}} branch')

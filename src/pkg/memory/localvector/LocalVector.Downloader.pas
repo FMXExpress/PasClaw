@@ -106,9 +106,16 @@ begin
     Client.AddHeader('User-Agent', 'localvector/1.0');
     FS := TFileStream.Create(ADestPath, fmCreate);
     try
-      Client.Get(AUrl, FS);
-    finally
-      FS.Free;
+      try
+        Client.Get(AUrl, FS);
+      finally
+        FS.Free;
+      end;
+    except
+      { What arrived must not pass for the whole file: EnsureFiles skips a
+        vocabulary file that exists. }
+      DeleteFile(ADestPath);
+      raise;
     end;
   finally
     Client.Free;
@@ -131,12 +138,17 @@ begin
     Client.ResponseTimeout := 1800000; // up to 30 min for big models
     FS := TFileStream.Create(ADestPath, fmCreate);
     try
-      Response := Client.Get(AUrl, FS);
-      if Response.StatusCode <> 200 then
-        raise Exception.CreateFmt('Download failed (%d %s) for %s',
-          [Response.StatusCode, Response.StatusText, AUrl]);
-    finally
-      FS.Free;
+      try
+        Response := Client.Get(AUrl, FS);
+        if Response.StatusCode <> 200 then
+          raise Exception.CreateFmt('Download failed (%d %s) for %s',
+            [Response.StatusCode, Response.StatusText, AUrl]);
+      finally
+        FS.Free;
+      end;
+    except
+      DeleteFile(ADestPath);   { as above: no part passing for the whole }
+      raise;
     end;
   finally
     Client.Free;

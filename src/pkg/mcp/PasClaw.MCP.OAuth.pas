@@ -172,7 +172,9 @@ implementation
 
 uses
   DateUtils,
+  {$IFNDEF FREEPASCALOS}   { FreePascalOS: no browser to sign in with, see RunOAuthFlow }
   IdHTTPServer, IdContext, IdCustomHTTPServer, IdGlobal, IdSocketHandle,
+  {$ENDIF}
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.JSON,
@@ -751,6 +753,7 @@ end;
 
 { ---------- Loopback callback server ------------------------------ }
 
+{$IFNDEF FREEPASCALOS}
 type
   TLoopbackServer = class
   private
@@ -873,6 +876,7 @@ begin
   end;
   Result := FGot;
 end;
+{$ENDIF}
 
 { ---------- Browser open ------------------------------------------ }
 
@@ -980,6 +984,21 @@ end;
 
 { ---------- High-level entry points ------------------------------- }
 
+{$IFDEF FREEPASCALOS}
+(* The browser sign-in sends a browser on this machine back to a loopback
+   HTTP server, and FreePascalOS has no browser to send (a browser on
+   another machine cannot reach its loopback address). Tokens made
+   elsewhere work: refresh (GetAccessToken / ForceRefresh) is plain HTTPS. *)
+function RunOAuthFlow(const ServerName, ServerURL: string;
+                      out ErrMsg: string;
+                      const ClientMetadataURL: string): Boolean;
+begin
+  Result := False;
+  ErrMsg := 'the OAuth sign-in is not available on FreePascalOS (it needs a ' +
+            'web browser on this machine): run `pasclaw mcp auth ' + ServerName +
+            '` on another machine and copy ' + OAuthTokenPath(ServerName) + ' here';
+end;
+{$ELSE}
 function RunOAuthFlow(const ServerName, ServerURL: string;
                       out ErrMsg: string;
                       const ClientMetadataURL: string): Boolean;
@@ -1166,6 +1185,7 @@ begin
     Server.Free;
   end;
 end;
+{$ENDIF}
 
 function ForceRefresh(const ServerName: string; out ErrMsg: string): Boolean;
 var

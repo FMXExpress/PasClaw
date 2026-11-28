@@ -73,7 +73,9 @@ uses
   PasClaw.Channels.WhatsApp,
   PasClaw.Channels.Matrix,
   PasClaw.Channels.IRC,
+  {$IFNDEF FREEPASCALOS}     { FreePascalOS: no OpenSSL for SMTP/IMAP over TLS }
   PasClaw.Channels.Email,
+  {$ENDIF}
   PasClaw.Config.Profile,   { ResolveProfileName -- the boot-vs-binding check }
   PasClaw.Utils;            { ReadFileText }
 
@@ -247,7 +249,9 @@ var
   WhatsApp: TWhatsAppBot;
   Matrix:   TMatrixBot;
   IRC:      TIRCBot;
+  {$IFNDEF FREEPASCALOS}
   Email:    TEmailChannel;
+  {$ENDIF}
   Scheduler: TCronScheduler;
   Skills: TSkillSpecArray;
   KindSelected: TShellBackendKind;
@@ -464,7 +468,9 @@ begin
     WhatsApp := nil;
     Matrix   := nil;
     IRC      := nil;
+    {$IFNDEF FREEPASCALOS}
     Email    := nil;
+    {$ENDIF}
     try
       if Args.Line then
       begin
@@ -526,8 +532,14 @@ begin
 
       if Args.Email then
       begin
+        {$IFDEF FREEPASCALOS}
+        LogError('email: the email channel is not available on FreePascalOS ' +
+                 '(SMTP and IMAP over TLS need OpenSSL, which it does not have)');
+        Exit(1);
+        {$ELSE}
         Email := TEmailChannel.Create(Cfg, Provider, Reg);
         Email.Spawn;  { runs Email.Run on a dedicated TThread }
+        {$ENDIF}
       end;
 
       if not StartListener(Server, Args.Addr, Args.Port, '') then Exit(1);
@@ -616,7 +628,9 @@ begin
       if WhatsApp <> nil then WhatsApp.Free;
       if Matrix   <> nil then begin Matrix.RequestStop; Matrix.WaitForStop; Matrix.Free; end;
       if IRC      <> nil then IRC.Free;
+      {$IFNDEF FREEPASCALOS}
       if Email    <> nil then begin Email.Stop; Email.Free; end;
+      {$ENDIF}
       RemoveGatewayRunFile(GetHome);
       Server.Stop;
       if MCPServer <> nil then MCPServer.Stop;

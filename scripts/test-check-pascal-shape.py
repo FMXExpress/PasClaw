@@ -101,6 +101,33 @@ begin
 end;
 end.
 ''', {6, 7}),
+    # Rule 4: a FreePascalOS branch is an FPC one; its ELSE, and an
+    # {$IFNDEF FREEPASCALOS}, are not.
+    'fpos.pas': ('''unit fpos;
+interface
+implementation
+procedure A;
+var
+  {$IFDEF FREEPASCALOS} I: PtrUInt; {$ELSE} J: PtrUInt; {$ENDIF}
+  {$IFNDEF FREEPASCALOS} K: PtrUInt; {$ELSE} L: PtrUInt; {$ENDIF}
+begin
+end;
+end.
+''', {6, 7}),
+    # Rule 4: the FreePascalOS-only units (src/fpos) are FPC-only, like
+    # src/tests; the same unit anywhere else is checked.
+    'src/fpos/onlyfpos.pas': ('''unit onlyfpos;
+interface
+function W(Count: PtrUInt): SizeInt;
+implementation
+end.
+''', set()),
+    'src/pkg/notfpos.pas': ('''unit notfpos;
+interface
+function W(Count: PtrUInt): SizeInt;
+implementation
+end.
+''', {3}),
     # Rule 3: Copy into a bare `array of` from another declaration (E2008).
     'copies.pas': ('''unit copies;
 interface

@@ -78,7 +78,11 @@ function URLIsLocal(const URL: string; out Reason: string): Boolean;
 implementation
 
 uses
+  {$IFDEF FREEPASCALOS}
+  PasClaw.Platform.FreePascalOS;   { the system's resolver }
+  {$ELSE}
   IdStack, IdGlobal;
+  {$ENDIF}
 
 function ParseIPv4(const S: string; out V: UInt32): Boolean;
 var
@@ -464,6 +468,13 @@ begin
     timeout) return False -- the request itself will fail at
     connect time with a clearer network error, no need to
     pre-mask it as SSRF. }
+  {$IFDEF FREEPASCALOS}
+  if not FposResolveIPv4(Host, Resolved, Reason) then
+  begin
+    Reason := 'dns lookup failed: ' + Reason;
+    Exit(False);
+  end;
+  {$ELSE}
   try
     Resolved := GStack.ResolveHost(Host, Id_IPv4);
   except
@@ -473,6 +484,7 @@ begin
       Exit(False);
     end;
   end;
+  {$ENDIF}
   if Resolved = '' then Exit(False);
   if not ParseIPv4(Resolved, IP) then Exit(False);
   Result := IPv4Blocked(IP, Reason);
@@ -561,6 +573,7 @@ begin
   Result := HostIsLocal(Host, Reason);
 end;
 
+{$IFNDEF FREEPASCALOS}
 initialization
   TIdStack.IncUsage;
 
@@ -570,5 +583,6 @@ finalization
   except
     { Shutting down. }
   end;
+{$ENDIF}
 
 end.

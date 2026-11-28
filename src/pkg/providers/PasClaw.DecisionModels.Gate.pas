@@ -261,11 +261,14 @@ begin
   Result := MoveFileEx(PChar(Src), PChar(Dest),
                        MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH);
   {$ELSE}
-    {$IFDEF FPC}
+    {$IFDEF FREEPASCALOS}
+  { The system's rename replaces Dest in one step, as POSIX's does. }
+  Result := RenameFile(Src, Dest);
+    {$ELSE}{$IFDEF FPC}
   Result := FpRename(Src, Dest) = 0;
     {$ELSE}
   Result := Posix.Stdio.rename(PAnsiChar(UTF8Encode(Src)), PAnsiChar(UTF8Encode(Dest))) = 0;
-    {$ENDIF}
+    {$ENDIF}{$ENDIF}
   {$ENDIF}
 end;
 

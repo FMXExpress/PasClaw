@@ -68,8 +68,10 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Apps,
-  PasClaw.Projects.Store,
-  IdIMAP4, IdMessage, IdText, IdSSLOpenSSL, IdExplicitTLSClientServerBase;
+  PasClaw.Projects.Store
+  {$IFNDEF FREEPASCALOS}   { FreePascalOS: no OpenSSL for Indy's TLS, so no IMAP (see FetchHeaders) }
+  , IdIMAP4, IdMessage, IdText, IdSSLOpenSSL, IdExplicitTLSClientServerBase
+  {$ENDIF};
 
 const
   { Newest N. Small on purpose: see the RetrievePeek note below -- each one
@@ -136,6 +138,14 @@ type
    what is a preview. A message we cannot read plainly gets an empty excerpt
    rather than a wall of markup, and the draft action says it has little to
    go on instead of pretending. *)
+{$IFDEF FREEPASCALOS}
+function FetchHeaders(out Items: TMailItems; out Err: string): Boolean;
+begin
+  SetLength(Items, 0);
+  Err := 'IMAP is not available on FreePascalOS (IMAP over TLS needs OpenSSL)';
+  Result := False;
+end;
+{$ELSE}
 function ExcerptOf(Msg: TIdMessage): string;
 const
   MaxExcerpt = 1500;
@@ -242,6 +252,7 @@ begin
     IMAP.Free;
   end;
 end;
+{$ENDIF}
 
 function MergeMail(const UIDs, Subjects, Froms, Excerpts: array of string;
   out Filed: Integer; out Err: string): Boolean;

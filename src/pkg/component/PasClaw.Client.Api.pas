@@ -613,7 +613,9 @@ uses
   PasClaw.JSON,
   PasClaw.Utils,
   DateUtils,                 { MilliSecondsBetween -- request timing }
-  IdHTTP, IdGlobal, IdSSLOpenSSL, IdComponent;
+  IdHTTP, IdGlobal,
+  {$IFNDEF FREEPASCALOS}IdSSLOpenSSL,{$ENDIF}   { FreePascalOS: no OpenSSL, see NewHttp }
+  IdComponent;
 
 function ParseChatMessages(const ArrayJSON: string): TChatMessages;
 var
@@ -1213,8 +1215,12 @@ begin
   if Token <> '' then
     Result.Request.CustomHeaders.AddValue('Authorization', 'Bearer ' + Token);
   { A gateway reached over https (a tunnel, a remote box) needs the TLS
-    handler; a local http gateway never touches it. }
+    handler; a local http gateway never touches it. FreePascalOS has no
+    OpenSSL for Indy's: there the client speaks http only, and an https
+    URL fails with Indy's "IOHandler value is not valid". }
+  {$IFNDEF FREEPASCALOS}
   Result.IOHandler := TIdSSLIOHandlerSocketOpenSSL.Create(Result);
+  {$ENDIF}
 end;
 
 constructor TLogStream.Create(AOnLine: TLogLineProc);

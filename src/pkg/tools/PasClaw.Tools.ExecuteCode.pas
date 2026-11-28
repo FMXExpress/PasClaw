@@ -292,7 +292,11 @@ begin
   if Lang = 'bash' then
   begin
     SetLength(Argv, 2);
+    {$IFDEF FREEPASCALOS}
+    Argv[0] := 'sh';     { FreePascalOS has no bash; its POSIX-style sh runs the script }
+    {$ELSE}
     Argv[0] := 'bash';
+    {$ENDIF}
     Argv[1] := ScriptPath;
     Exit(True);
   end;
