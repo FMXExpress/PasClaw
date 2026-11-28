@@ -567,7 +567,10 @@ begin
     if Spec.Nodes[i].Await.Enabled and (Trim(Spec.Nodes[i].Await.PollTool) <> '') then
     begin
       T := Trim(Spec.Nodes[i].Await.PollTool);
-      if Pos('__', T) > 0 then RequireMCP(Result, T, Cfg)
+      { a `replicate` step's own poll, written out: the Python export answers
+        it over Replicate's HTTP API like the create, so it is sugar too }
+      if Pos('__', T) > 0 then
+        RequireMCP(Result, T, Cfg, (L = 'replicate') and (Spec.Nodes[i].Await.PollTool = 'replicate__get_predictions'))
       else AddUnique(Result.Tools, T);
     end;
   end;

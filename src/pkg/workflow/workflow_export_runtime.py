@@ -345,12 +345,20 @@ def llm_call(args_json):
 
 
 # --------------------------------------------------------------- replicate
-def replicate_run(args_json):
-    """A `replicate` step over Replicate's HTTP API: create, poll until done."""
+# A `replicate` step runs over Replicate's HTTP API: the create here, then the
+# step's await plan -- PasClaw's own (plan_node) or the one written on the step
+# -- polls, its replicate__get_predictions answered by the HTTP API as well.
+def _replicate_api():
     token = os.environ.get("REPLICATE_API_TOKEN", "")
     if not token:
         raise StepError("replicate step: set REPLICATE_API_TOKEN")
     base = os.environ.get("REPLICATE_API_BASE", "https://api.replicate.com").rstrip("/")
+    return base, {"Authorization": "Bearer " + token}
+
+
+def replicate_create(args_json):
+    """A `replicate` step's create: the prediction, as JSON text."""
+    base, headers = _replicate_api()
     a = _parse(args_json, dict) or {}
     inp = a.get("input") if isinstance(a.get("input"), dict) else {}
     model, version = _str_arg(a, "model"), _str_arg(a, "version")
@@ -362,26 +370,22 @@ def replicate_run(args_json):
         url, body = base + "/v1/models/" + model + "/predictions", {"input": inp}
     else:
         raise StepError('replicate step: "model" or "version" is required')
-    headers = {"Authorization": "Bearer " + token}
     status, text = http_json("POST", url, body, headers)
     if status >= 400:
         raise StepError("replicate: create returned %d: %s" % (status, text[:300]))
-    pred = _parse(text, dict) or {}
-    waited = 0
-    while pred.get("status") not in ("succeeded", "failed", "canceled", "aborted"):
-        if waited >= 300000:
-            raise StepError('await: timed out after %d ms (last status "%s")' % (waited, pred.get("status")))
-        time.sleep(2)
-        waited += 2000
-        status, text = http_json("GET", base + "/v1/predictions/" + str(pred.get("id", "")), None, headers)
-        if status >= 400:
-            raise StepError("replicate: poll returned %d: %s" % (status, text[:300]))
-        pred = _parse(text, dict) or {}
-    if pred.get("status") != "succeeded":
-        raise StepError('await: terminal failure status "%s"' % pred.get("status"))
-    js = json.dumps(pred)
-    out = eval_selector(js, "output[0]")
-    return (out if out is not None else js), js
+    return text
+
+
+def replicate_get(args_json):
+    """replicate__get_predictions over the HTTP API: the prediction, as JSON text."""
+    base, headers = _replicate_api()
+    pid = _str_arg(_parse(args_json, dict) or {}, "prediction_id")
+    if not pid:
+        raise StepError('replicate__get_predictions: "prediction_id" is required')
+    status, text = http_json("GET", base + "/v1/predictions/" + pid, None, headers)
+    if status >= 400:
+        raise StepError("replicate: poll returned %d: %s" % (status, text[:300]))
+    return text, text
 
 
 # --------------------------------------------------------------- MCP
@@ -510,7 +514,15 @@ def builtin_call(tool, args_json):
             f.write(content)
         return "wrote %d bytes to %s" % (len(content.encode("utf-8")), path)
     if tool == "shell_exec":
-        r = subprocess.run(_str_arg(a, "command"), shell=True, capture_output=True, text=True)
+        # PasClaw's shell_exec: "cwd" resolves against the directory relative paths
+        # do (here the current one), and one that does not exist is reported as
+        # exit code 1 -- never a silent run in another directory.
+        cwd = pas_trim(_str_arg(a, "cwd"))
+        if cwd:
+            cwd = os.path.abspath(cwd)
+            if not os.path.isdir(cwd):
+                return "shell_exec: cwd does not exist: %s\n[exit code 1]" % cwd
+        r = subprocess.run(_str_arg(a, "command"), shell=True, capture_output=True, text=True, cwd=cwd or None)
         out = r.stdout + r.stderr
         if r.returncode != 0:
             out += "\n[exit code %d]" % r.returncode
@@ -531,7 +543,7 @@ def call_tool(tool, args_json):
 
 
 # --------------------------------------------------------------- the run
-def poll_until_done(aw, create_json, inputs, results):
+def poll_until_done(aw, create_json, inputs, results, replicate=False):
     if not pas_trim(aw.get("tool", "")):
         raise StepError("await: no poll tool")
     elapsed = polls = 0
@@ -539,7 +551,10 @@ def poll_until_done(aw, create_json, inputs, results):
     while True:
         args = resolve(aw.get("args", "{}"), inputs, results, create_json)
         try:
-            ptext, pjson = call_tool(aw["tool"], args)
+            if replicate and aw["tool"] == "replicate__get_predictions":
+                ptext, pjson = replicate_get(args)
+            else:
+                ptext, pjson = call_tool(aw["tool"], args)
         except StepError as e:
             raise StepError("await: poll call failed: %s" % e)
         pjson = unwrap_result(pjson, ptext)
@@ -575,16 +590,16 @@ def run_workflow(spec, inputs):
         except StepError as e:
             return False, results, 'node "%s": %s' % (nid, e)
         eff, aw = plan_node(node)
+        sugar = pas_trim(node["tool"]).lower() == "replicate"
         r = {"node": nid, "tool": node["tool"], "ok": True, "text": "", "json": "", "error": ""}
         try:
-            if pas_trim(node["tool"]).lower() == "replicate":
-                text, js = replicate_run(args)
-                aw = None
+            if sugar:
+                text = js = replicate_create(args)
             else:
                 text, js = call_tool(eff, args)
             r["text"], r["json"] = text, unwrap_result(js, text)
             if aw:
-                r["text"], r["json"] = poll_until_done(aw, r["json"], inputs, results)
+                r["text"], r["json"] = poll_until_done(aw, r["json"], inputs, results, sugar)
                 if aw.get("output_selector"):
                     v = eval_selector(r["json"], aw["output_selector"])
                     if v is not None:
