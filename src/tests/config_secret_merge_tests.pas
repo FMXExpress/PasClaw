@@ -168,6 +168,40 @@ begin
   AssertEqS(ObjField(Merged, 'web_search', 'api_key'), 'WS-KEY',
             'masked web_search key restored from server');
 
+  { mcp env, per variable: GET shows the names and masks each value; a
+    masked value comes back from the same-named variable, a typed one is
+    kept, a new one is added, and one left out is dropped. }
+  Current := '{"mcp_servers":[{"name":"gh","env":"GITHUB_TOKEN=ghp_x;DEBUG=1;GONE=z;EMPTY="}]}';
+  AssertEqS(ArrField(MaskConfigSecretsJSON(Current), 'mcp_servers', 'gh', 'env'),
+            'GITHUB_TOKEN=' + M + ';DEBUG=' + M + ';GONE=' + M + ';EMPTY=',
+            'mcp env: each value masked, the names kept');
+  Edited := '{"mcp_servers":[{"name":"gh","env":"GITHUB_TOKEN=' + M + ';DEBUG=2;NEW=n;EMPTY="}]}';
+  Merged := RestoreMaskedConfigSecrets(Edited, Current);
+  AssertEqS(ArrField(Merged, 'mcp_servers', 'gh', 'env'), 'GITHUB_TOKEN=ghp_x;DEBUG=2;NEW=n;EMPTY=',
+            'mcp env: kept, typed, added and removed variables merge per name');
+
+  (* An HTTP MCP server's args are its Authorization header value, which
+     `pasclaw mcp install` writes in full ("Bearer r8_..."): /v1/config and
+     /v1/mcp served it as is. Masked to "Bearer •••" on read and restored
+     on write; a ${VAR} marker and a stdio server's command line stay. *)
+  Current := '{"mcp_servers":[' +
+    '{"name":"rep","cmd":"https://mcp.replicate.com/sse","args":"Bearer r8_SECRET"},' +
+    '{"name":"raw","cmd":"https://mcp.example/","args":"tok-SECRET"},' +
+    '{"name":"envd","cmd":"https://mcp.example/","args":"Bearer ${REP_TOKEN}"},' +
+    '{"name":"fs","cmd":"npx","args":"-y @mcp/server-filesystem /data"}]}';
+  Merged := MaskConfigSecretsJSON(Current);
+  AssertEqS(ArrField(Merged, 'mcp_servers', 'rep', 'args'), 'Bearer ' + M, 'http mcp args: the scheme kept, the token masked');
+  AssertEqS(ArrField(Merged, 'mcp_servers', 'raw', 'args'), M, 'http mcp args without a scheme masked whole');
+  AssertEqS(ArrField(Merged, 'mcp_servers', 'envd', 'args'), 'Bearer ${REP_TOKEN}', 'a ${VAR} marker in http mcp args is shown');
+  AssertEqS(ArrField(Merged, 'mcp_servers', 'fs', 'args'), '-y @mcp/server-filesystem /data', 'a stdio server''s args are its command line, unmasked');
+  if (Pos('r8_SECRET', Merged) > 0) or (Pos('tok-SECRET', Merged) > 0) then Fail_('masked config still carries an MCP bearer token');
+  Merged := RestoreMaskedConfigSecrets(Merged, Current);
+  AssertEqS(ArrField(Merged, 'mcp_servers', 'rep', 'args'), 'Bearer r8_SECRET', 'masked http mcp args restored on save');
+  AssertEqS(ArrField(Merged, 'mcp_servers', 'raw', 'args'), 'tok-SECRET', 'masked scheme-less http mcp args restored on save');
+  Edited := '{"mcp_servers":[{"name":"rep","cmd":"https://mcp.replicate.com/sse","args":"Bearer r8_NEW"}]}';
+  AssertEqS(ArrField(RestoreMaskedConfigSecrets(Edited, Current), 'mcp_servers', 'rep', 'args'), 'Bearer r8_NEW',
+            'a typed new token is kept');
+
   { A placeholder for a name with no server match clears (can't invent a
     secret) -- the client still never reads one. }
   Edited := '{"providers":[{"name":"ghost","api_key":"' + M + '"}]}';

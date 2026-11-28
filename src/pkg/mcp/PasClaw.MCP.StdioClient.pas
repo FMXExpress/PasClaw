@@ -45,6 +45,8 @@ type
   private
     FProcess: TStdioProcess;
     FCmd, FArgs: string;
+    FEnv: string;   { mcp_servers[].env: KEY=value pairs separated by ';',
+                      added to the inherited environment (theirs win) }
     { One request on the pipe at a time: two threads interleaving writes
       and reads on one stdout would take each other's responses. }
     FIOLock:  TCriticalSection;
@@ -62,7 +64,7 @@ type
     function CanAnswerServerRequests: Boolean; override;
     function TransportAlive: Boolean; override;
   public
-    constructor Create(const Name, Cmd, Args: string);
+    constructor Create(const Name, Cmd, Args: string; const Env: string = '');
     destructor  Destroy; override;
     procedure Close;
   end;
@@ -74,11 +76,12 @@ uses
   PasClaw.JSON,
   PasClaw.Logger;
 
-constructor TMCPStdioClient.Create(const Name, Cmd, Args: string);
+constructor TMCPStdioClient.Create(const Name, Cmd, Args: string; const Env: string);
 begin
   inherited Create(Name);
   FCmd    := Cmd;
   FArgs   := Args;
+  FEnv    := Env;
   FBuffer := '';
   FIOLock := TCriticalSection.Create;
   FCallTimeoutMs := 30000;
@@ -191,9 +194,30 @@ begin
   end;
 end;
 
+{ `KEY=value;KEY2=value2` as environment lines; nil when there are none,
+  so the child simply inherits. }
+function EnvLines(const Env: string): TStringList;
+var
+  Rest, Part: string;
+  p: Integer;
+begin
+  Result := nil;
+  Rest := Env;
+  while Rest <> '' do
+  begin
+    p := Pos(';', Rest);
+    if p > 0 then begin Part := Copy(Rest, 1, p - 1); Rest := Copy(Rest, p + 1, MaxInt); end
+    else begin Part := Rest; Rest := ''; end;
+    Part := Trim(Part);
+    if Pos('=', Part) <= 1 then Continue;
+    if Result = nil then Result := TStringList.Create;
+    Result.Add(Part);
+  end;
+end;
+
 function TMCPStdioClient.OpenTransport(TimeoutMs: Integer; out ErrMsg: string): Boolean;
 var
-  ArgList: TStringList;
+  ArgList, EnvList: TStringList;
 begin
   Result := False;
   ErrMsg := '';
@@ -202,8 +226,9 @@ begin
   FBuffer := '';
   FProcess := TStdioProcess.Create;
   ArgList := SplitArgs(FArgs);
+  EnvList := EnvLines(FEnv);
   try
-    if not FProcess.Spawn(FCmd, ArgList) then
+    if not FProcess.Spawn(FCmd, ArgList, False, '', EnvList) then
     begin
       ErrMsg := 'failed to spawn ' + FCmd;
       FreeAndNil(FProcess);
@@ -211,6 +236,7 @@ begin
     end;
   finally
     ArgList.Free;
+    EnvList.Free;
   end;
   Result := TimeoutMs >= 0;
 end;

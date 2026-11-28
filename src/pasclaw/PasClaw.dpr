@@ -62,6 +62,10 @@ begin
   if Cmd = '__tool' then Exit(True);
   { `pasclaw acp`: the editor reads ACP JSON-RPC from our stdout. }
   if Cmd = 'acp' then Exit(True);
+  { `pasclaw workflow export|run`: stdout is the exported source or the
+    run's outputs, for a pipe or a file. }
+  if (Cmd = 'workflow') and (ParamCount >= 2) and
+     ((ParamStr(2) = 'export') or (ParamStr(2) = 'run')) then Exit(True);
   if Cmd <> 'mcp' then Exit;
   for i := 2 to ParamCount do
   begin
