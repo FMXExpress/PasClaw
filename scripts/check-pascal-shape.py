@@ -30,9 +30,12 @@ reader might not:
   source is a different variable. Declare a named type, or TArray<T>,
   for both.
 
-  An FPC-only routine outside an {$IFDEF FPC} branch: FPC's RTL has
-  LocalTimeToUniversal, UniversalTimeToLocal and GetTickCount64, dcc64's
-  does not (E2003 Undeclared identifier). LocalTimeToUniversal reached
+  An FPC-only routine or type outside an {$IFDEF FPC} branch: FPC's RTL has
+  LocalTimeToUniversal, UniversalTimeToLocal and GetTickCount64, and the
+  integer types SizeInt, SizeUInt, PtrInt, PtrUInt, ValSInt and ValUInt;
+  dcc64's does not (E2003 Undeclared identifier). SizeInt reached dcc64 in
+  onnxruntime.pas, put there for the 32-bit FPC builds; NativeInt is in
+  both. LocalTimeToUniversal reached
   dcc64 twice (the run file, the decision-model bench record) and
   GetTickCount64 once (the relay). Use PasClaw.Utils' NowIsoUtc /
   IsoUtcInMinutes, or guard the call with {$IFDEF FPC} ... {$ELSE}
@@ -169,78 +172,81 @@ def blank_strings(text):
     return ''.join(out)
 
 
-def check(path):
+def check(path, guards_only=False):
     raw = open(path, encoding='utf-8', errors='replace').read()
     problems = []
 
     code = strip_comments_and_strings(raw)
 
-    # 1. Declared vs implemented methods.
-    declared = set()
-    # `<` so a generic method (`function At<T>(...)`) counts as declared.
-    for m in re.finditer(r'^\s*(?:procedure|function)\s+([A-Za-z_]\w*)\s*[(;:<]',
-                         code, re.M):
-        declared.add(m.group(1))
-    implemented = set()
-    for m in re.finditer(r'^(?:procedure|function)\s+(\w+(?:<[^>]*>)?)\.(\w+)',
-                         code, re.M):
-        implemented.add(m.group(2))
-    missing = sorted(implemented - declared)
-    for name in missing:
-        problems.append(f'{path}: {name} is implemented but never declared')
+    # Rules 1-3 read a unit's declarations; a file on SKIP is one they cannot
+    # follow, and gets rule 4 alone (guards_only).
+    if not guards_only:
+        # 1. Declared vs implemented methods.
+        declared = set()
+        # `<` so a generic method (`function At<T>(...)`) counts as declared.
+        for m in re.finditer(r'^\s*(?:procedure|function)\s+([A-Za-z_]\w*)\s*[(;:<]',
+                             code, re.M):
+            declared.add(m.group(1))
+        implemented = set()
+        for m in re.finditer(r'^(?:procedure|function)\s+(\w+(?:<[^>]*>)?)\.(\w+)',
+                             code, re.M):
+            implemented.add(m.group(2))
+        missing = sorted(implemented - declared)
+        for name in missing:
+            problems.append(f'{path}: {name} is implemented but never declared')
 
-    # 2. A statement stranded at the top level of the implementation
-    #    section. Comments and directives are already blanked by
-    #    strip_comments_and_strings, so they neither trip the rule nor
-    #    hide a line that should.
-    lines = code.split('\n')
-    start = None
-    for i, line in enumerate(lines):
-        if re.match(r'^implementation\b', line, re.I):
-            start = i + 1
-            break
-    # No implementation section: a program's main block legitimately has
-    # statements at the top level, so the rule does not apply there.
-    after_end = 0
-    for i in range(len(lines) if start is None else start, len(lines)):
-        line = lines[i].rstrip()
-        if not line.strip():
-            continue
-        if after_end and (line[0] in ' \t'):
-            problems.append(
-                f'{path}:{i + 1}: statement stranded at the top level '
-                f'(indented code after a column-0 "end;") -- '
-                f'{line.strip()[:60]}')
-        after_end = line == 'end;'
+        # 2. A statement stranded at the top level of the implementation
+        #    section. Comments and directives are already blanked by
+        #    strip_comments_and_strings, so they neither trip the rule nor
+        #    hide a line that should.
+        lines = code.split('\n')
+        start = None
+        for i, line in enumerate(lines):
+            if re.match(r'^implementation\b', line, re.I):
+                start = i + 1
+                break
+        # No implementation section: a program's main block legitimately has
+        # statements at the top level, so the rule does not apply there.
+        after_end = 0
+        for i in range(len(lines) if start is None else start, len(lines)):
+            line = lines[i].rstrip()
+            if not line.strip():
+                continue
+            if after_end and (line[0] in ' \t'):
+                problems.append(
+                    f'{path}:{i + 1}: statement stranded at the top level '
+                    f'(indented code after a column-0 "end;") -- '
+                    f'{line.strip()[:60]}')
+            after_end = line == 'end;'
 
-    # 3. `A := Copy(B)` with A declared as a bare `array of T`. Declarations
-    #    are read from the comment-free text: `Name[, Name]: array of T;` on
-    #    its own line (a local, a field). Parameters are open arrays, not
-    #    this, and sit inside parentheses on a routine line, so they never
-    #    match the line-anchored pattern.
-    decls = []   # (line index, name, is_bare_array)
-    for i, line in enumerate(lines):
-        m = re.match(r'^\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*:\s*(.+?);\s*$', line)
-        if not m or re.match(r'^\s*(procedure|function|property|const|var|out)\b', line, re.I):
-            continue
-        bare = bool(re.match(r'array\s+of\b', m.group(2).strip(), re.I))
-        for name in re.split(r'\s*,\s*', m.group(1)):
-            decls.append((i, name.lower(), bare))
-    for i, line in enumerate(lines):
-        m = re.search(r'\b([A-Za-z_]\w*)\s*:=\s*Copy\(\s*([A-Za-z_][\w.^]*)\s*\)', line)
-        if not m:
-            continue
-        target, source = m.group(1).lower(), m.group(2).lower()
-        if source.split('.')[-1] == target:
-            continue
-        above = [d for d in decls if d[1] == target and d[0] < i]
-        if above and above[-1][2]:
-            problems.append(
-                f'{path}:{i + 1}: {m.group(1)} is a bare `array of`, so dcc64 will not '
-                f'take Copy({m.group(2)}) of another declaration (E2008) -- declare '
-                f'both with one named type or TArray<T>')
+        # 3. `A := Copy(B)` with A declared as a bare `array of T`. Declarations
+        #    are read from the comment-free text: `Name[, Name]: array of T;` on
+        #    its own line (a local, a field). Parameters are open arrays, not
+        #    this, and sit inside parentheses on a routine line, so they never
+        #    match the line-anchored pattern.
+        decls = []   # (line index, name, is_bare_array)
+        for i, line in enumerate(lines):
+            m = re.match(r'^\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*:\s*(.+?);\s*$', line)
+            if not m or re.match(r'^\s*(procedure|function|property|const|var|out)\b', line, re.I):
+                continue
+            bare = bool(re.match(r'array\s+of\b', m.group(2).strip(), re.I))
+            for name in re.split(r'\s*,\s*', m.group(1)):
+                decls.append((i, name.lower(), bare))
+        for i, line in enumerate(lines):
+            m = re.search(r'\b([A-Za-z_]\w*)\s*:=\s*Copy\(\s*([A-Za-z_][\w.^]*)\s*\)', line)
+            if not m:
+                continue
+            target, source = m.group(1).lower(), m.group(2).lower()
+            if source.split('.')[-1] == target:
+                continue
+            above = [d for d in decls if d[1] == target and d[0] < i]
+            if above and above[-1][2]:
+                problems.append(
+                    f'{path}:{i + 1}: {m.group(1)} is a bare `array of`, so dcc64 will not '
+                    f'take Copy({m.group(2)}) of another declaration (E2008) -- declare '
+                    f'both with one named type or TArray<T>')
 
-    # 4. FPC-only RTL routines outside an {$IFDEF FPC} branch. Walked on
+    # 4. FPC-only RTL routines and types outside an {$IFDEF FPC} branch. Walked on
     #    the raw text with char_kinds alongside it, position for position:
     #    a hit counts only where the name is code (not in a comment or a
     #    string -- one line can hold both, Codex P2 on #649), and a
@@ -275,28 +281,37 @@ def check(path):
                 elif 'fpc' not in stack:
                     problems.append(
                         f'{path}:{i + 1}: {m.group(0)} is FPC-only (dcc64 E2003) -- use '
-                        f'NowIsoUtc / IsoUtcInMinutes, or put it in an {{$IFDEF FPC}} branch')
+                        f'{FPC_ONLY_INSTEAD[m.group(0).lower()]}, or put it in an {{$IFDEF FPC}} branch')
 
     return problems
 
 
-FPC_ONLY = re.compile(r'\b(LocalTimeToUniversal|UniversalTimeToLocal|GetTickCount64)\b')
+# Pascal is case-insensitive, and so is the match. What to write instead:
+FPC_ONLY_INSTEAD = {
+    'localtimetouniversal': 'NowIsoUtc / IsoUtcInMinutes',
+    'universaltimetolocal': 'NowIsoUtc / IsoUtcInMinutes',
+    'gettickcount64': 'DateUtils.MilliSecondsBetween',
+    'sizeint': 'NativeInt', 'ptrint': 'NativeInt', 'valsint': 'NativeInt',
+    'sizeuint': 'NativeUInt', 'ptruint': 'NativeUInt', 'valuint': 'NativeUInt',
+}
+FPC_ONLY = re.compile(r'\b(' + '|'.join(FPC_ONLY_INSTEAD) + r')\b', re.I)
 
 
 # Vendored/generated headers whose declarations this scanner cannot follow.
 # onnxruntime.pas is a machine-translated C++ header with class helpers whose
 # declarations do not match the shape a hand-written unit uses; it compiles,
 # and rewriting the scanner to understand it would be work spent on a file
-# nobody edits.
+# nobody edits. Rules 1-3 skip it; rule 4 does not -- dcc64 compiles it, and
+# a SizeInt put in it for the 32-bit FPC builds reached dcc64 (E2003)
+# because the whole file was skipped.
 SKIP = ('localvector/onnxruntime.pas',)
 
 
 def main(argv):
     bad = []
     for path in argv[1:]:
-        if any(path.replace('\\', '/').endswith(x) for x in SKIP):
-            continue
-        bad.extend(check(path))
+        skipped = any(path.replace('\\', '/').endswith(x) for x in SKIP)
+        bad.extend(check(path, guards_only=skipped))
     for line in bad:
         print(line)
     return 1 if bad else 0

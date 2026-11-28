@@ -2755,7 +2755,7 @@ end;
 
 function TORTModelMetadataHelper.GetCustomMetadataMapKeysAllocated(
   allocator: TOrtAllocator): TArray<AllocatedStringPtr>;
-var _out:PPOrtChar; num_keys:int64_t; i:SizeInt;   { i: an ordinal on 32-bit targets too }
+var _out:PPOrtChar; num_keys:int64_t; i:NativeInt;   { i: an ordinal on 32-bit targets too; NativeInt is FPC's and dcc64's (SizeInt is FPC's only: E2003) }
 begin
   ThrowOnError(GetApi().ModelMetadataGetCustomMetadataMapKeys(p_, allocator.p_, @_out, @num_keys));
   if num_keys <= 0 then
@@ -3512,7 +3512,7 @@ end;
 
 function OrtException.what: ortstring;
 begin
-  result:=Message;
+  result:=ortstring(Message);   { explicit: Message is string, ortstring AnsiString (dcc64 W1058) }
 end;
 
 constructor OrtException.Create(const str: ortstring; code: OrtErrorCode);
