@@ -984,8 +984,11 @@ test-xp:
 #      port of it), with the packages' own settings, into $(FPOSDIR)/pkg
 #      -- what an FPC install ships precompiled on the other targets;
 #   2. PasClaw itself, -MDelphi -Sh as everywhere, into $(FPOSDIR)/lib,
-#      src/fpos (the FreePascalOS-only units) on its path;
-#   3. ld, as FreePascalOS links its own programs (userland/userland.mk).
+#      src/fpos (the FreePascalOS-only units) on its path, and Indy with
+#      src/fpos/indy ahead of $(INDY_DIR): the Indy units with a
+#      FreePascalOS branch, and its socket stack (IdStackFreePascalOS);
+#   3. ld, as FreePascalOS links its own programs (userland/userland.mk),
+#      with the web UI's resource object.
 # Always a clean build: the compiler leaves objects only (-Cn) and ld
 # takes every one of them, so none may be left from an earlier build.
 FPOS_DIR        ?= /home/user/xeons/freepascalos
@@ -1009,8 +1012,9 @@ FPOS_PKGFLAGS    = $(FPOS_COMMON) -S2h -Fusrc/fpos \
 	-Fi$(FPOS_FPC_SOURCE)/packages/fcl-process/src \
 	$(foreach p,$(FPOS_PACKAGES),-Fu$(FPOS_FPC_SOURCE)/packages/$(p) -Fi$(FPOS_FPC_SOURCE)/packages/$(p)) \
 	-FU$(FPOSDIR)/pkg
-FPOS_FPCFLAGS    = $(FPOS_COMMON) -MDelphi -Sh -Fu$(FPOSDIR)/pkg -Fusrc/fpos \
+FPOS_FPCFLAGS    = $(FPOS_COMMON) -MDelphi -Sh -Fu$(FPOSDIR)/pkg -Fusrc/fpos -Fusrc/fpos/indy \
 	$(foreach d,$(UNIT_DIRS),-Fu$(d)) $(foreach d,$(ZPAQ_UNIT_DIRS),-Fu$(d)) \
+	$(foreach d,$(INDY_UNIT_DIRS),-Fu$(d)) $(foreach d,$(INDY_INC_DIRS),-Fi$(d)) \
 	-FU$(FPOSDIR)/lib -FE$(FPOSDIR)
 FPOS_LDFLAGS     = -pie --no-dynamic-linker --hash-style=sysv -z max-page-size=4096 -z noexecstack -e _start
 
@@ -1020,7 +1024,7 @@ FPOS_READY = test -x $(FPOS_PPC) && test -f $(FPOS_RTL)/si_prc.o && \
 
 .PHONY: fpos test-fpos-build test-fpos-qemu
 
-fpos:
+fpos: $(WEBUI_RES)
 	@$(FPOS_READY) || { echo "no FreePascalOS toolchain at $(FPOS_DIR): build its compiler and userland there"; \
 		echo "  (make; make build/$(FPOS_ARCH)/user/lib/libhttp.so), or set FPOS_DIR -- see docs/freepascalos.md"; exit 1; }
 	@rm -rf $(FPOSDIR) && mkdir -p $(FPOSDIR)/lib $(FPOSDIR)/pkg
@@ -1028,15 +1032,18 @@ fpos:
 	@# uuchar: the RTL unit {$mode delphiunicode} loads (the PDF reader).
 	$(FPOS_PPC) $(FPOS_PKGFLAGS) $(FPOS_FPC_SOURCE)/rtl/inc/uuchar.pp
 	PASCLAW_VERSION='$(VERSION)' $(FPOS_PPC) $(FPOS_FPCFLAGS) src/pasclaw/PasClaw.dpr
-	ld $(FPOS_LDFLAGS) -o $(FPOSDIR)/pasclaw $(FPOSDIR)/pkg/*.o $(FPOSDIR)/lib/*.o $(FPOS_RTL)/si_prc.o \
+	@# *.or: the resources ({$$R webui.res}), which the compiler puts in an
+	@# object of their own (fpcres) when it collects them for the program.
+	ld $(FPOS_LDFLAGS) -o $(FPOSDIR)/pasclaw $(FPOSDIR)/pkg/*.o $(FPOSDIR)/lib/*.o \
+		$$(find $(FPOSDIR)/lib -name '*.or') $(FPOS_RTL)/si_prc.o \
 		-L$(FPOS_USER)/lib $(foreach l,$(FPOS_LIBS),-l$(l))
 	@echo "built $(FPOSDIR)/pasclaw for FreePascalOS -- it links GPLv3 libraries, see docs/freepascalos.md"
 
 # Builds pasclaw for FreePascalOS (in a build folder of its own) and
 # checks the result is a position independent x86-64 ELF program that
-# needs the system's libraries and nothing of Indy's or OpenSSL's: the
-# guard that keeps the FreePascalOS build building. Skips without the
-# FreePascalOS toolchain.
+# needs the system's libraries, carries Indy's FreePascalOS stack and the
+# web UI, and nothing of OpenSSL's: the guard that keeps the FreePascalOS
+# build building. Skips without the FreePascalOS toolchain.
 FPOS_TEST_BIN = $(BUILDDIR)/fpos-test/fpos/pasclaw
 test-fpos-build:
 	@if ! { $(FPOS_READY); } 2>/dev/null; then \
