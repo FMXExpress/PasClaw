@@ -11987,7 +11987,10 @@ function wfSchemaForm(box, schema, n, opts = {}) {
       el.addEventListener("input", () => {
         const s = el.value.trim();
         if (!s) { bad(""); return write(path, WF_UNSET); }
-        if (wfIsTpl(s) && !/^[[{"]/.test(s)) { bad(""); return write(path, s); }
+        /* A template is kept as text, like every other field's. JSON text
+           never opens with "{{" (an object's first key is quoted), so a
+           value that does is the template, not an object. */
+        if (wfIsTpl(s) && (s.startsWith("{{") || !/^[[{"]/.test(s))) { bad(""); return write(path, s); }
         let val;
         try { val = JSON.parse(s); } catch (e) { return bad("Not valid JSON yet."); }
         bad(""); write(path, val);

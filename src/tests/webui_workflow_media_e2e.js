@@ -13,7 +13,8 @@
        the property's type asks for, marked required, with the description
        as a hint and the default as the placeholder;
      - a form edit reaches the JSON and the save; a template in a number
-       field is saved as the template; an edit of the JSON reaches the
+       field, and a bare {{template}} in a JSON-backed field, is saved as
+       the template; an edit of the JSON reaches the
        form; invalid JSON shows its error and leaves the form;
      - after a run: a thumbnail on each step's card and on the Outputs box,
        <img>/<video controls>/<audio controls> in the results, the
@@ -189,19 +190,23 @@ function spec(M) {
     await field("size.width").locator("input").fill("640");
     await field("guidance").locator("input").fill("{{inputs.cfg}}");
     await field("enhance").locator("input[type=checkbox]").uncheck();
+    await field("extra.lora").locator("textarea").fill("{{inputs.prompt}}");
     let a = await argsJSON();
     if (a.steps !== 30 || a.style !== "anime" || JSON.stringify(a.tags) !== '["neon"]' || JSON.stringify(a.size) !== '{"width":640}' ||
         a.guidance !== "{{inputs.cfg}}" || a.enhance !== false || a.prompt !== "{{inputs.prompt}}" || a.output[0] !== M + "/img.png")
       fail("a form edit didn't reach the JSON: " + JSON.stringify(a));
     if (!(await field("guidance").evaluate(e => e.classList.contains("wf-tplv")))) fail("the template isn't marked as one");
+    if (!a.extra || a.extra.lora !== "{{inputs.prompt}}" || (await field("extra.lora").evaluate(e => e.classList.contains("wf-bad"))))
+      fail("a bare template in a JSON field: " + JSON.stringify(a.extra) + " / " + await field("extra.lora").locator(".wf-bad-t").textContent());
     await shot("workflow-args-form-desktop-dark.png");
     await page.click("#wfSave");
     await until(async () => (await page.textContent("#wf-state")) === "Saved", "the save");
     const saved = (await api("GET", "/v1/workflows/media"))[1].nodes.find(n => n.id === "gen").args;
     if (saved.steps !== 30 || saved.guidance !== "{{inputs.cfg}}" || saved.style !== "anime" || saved.enhance !== false ||
-        JSON.stringify(saved.tags) !== '["neon"]' || saved.size.width !== 640 || saved.output.length !== 2)
+        JSON.stringify(saved.tags) !== '["neon"]' || saved.size.width !== 640 || saved.output.length !== 2 ||
+        saved.extra.lora !== "{{inputs.prompt}}")
       fail("the saved args: " + JSON.stringify(saved));
-    ok("a form edit reaches the JSON and the save; a template in a number field is saved as the template");
+    ok("a form edit reaches the JSON and the save; a template in a number field, and a bare one in a JSON field, is saved as the template");
 
     /* ---- JSON -> form; invalid JSON ---- */
     await page.click("#wfInspRawWrap > summary");

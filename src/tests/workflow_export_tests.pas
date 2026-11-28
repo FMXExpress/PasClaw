@@ -254,6 +254,40 @@ begin
   Cfg.Free;
 end;
 
+{ A `replicate` step with its await written out: the Python export embeds the
+  plan, and the step's own poll (replicate__get_predictions) goes over the
+  HTTP API like the create -- no Replicate MCP server, no mcp package. The
+  Pascal export runs PasClaw's engine on the spec, await and all. }
+procedure TestReplicateAwait;
+var
+  Spec, Back: TWorkflowSpec;
+  Cfg: TConfig;
+  Src, Err: string;
+begin
+  Cfg := NewCfg;
+  Check(ParseWorkflow('{"id":"rw","name":"rw","nodes":[{"id":"pic","tool":"replicate",' +
+    '"args":{"model":"owner/flux","input":{"prompt":"p"}},' +
+    '"await":{"tool":"replicate__get_predictions","args":{"prediction_id":"{{self.id}}"},' +
+    '"status_selector":"status","output_selector":"output[1]","interval_ms":10,"timeout_ms":5000,' +
+    '"success":["succeeded"],"failure":["failed"]}}]}', Spec, Err), 'replicate await spec: ' + Err);
+  Src := ExportWorkflowPython(Spec, Cfg);
+  Check(Has('"await": {"tool": "replicate__get_predictions",', Src) and Has('"output_selector": "output[1]"', Src) and
+        Has('"interval_ms": 10, "timeout_ms": 5000, "success": ["succeeded"], "failure": ["failed"]}', Src),
+        'the replicate step''s await is embedded');
+  Check(not Has('#   MCP steps also need', Src), 'a replicate step''s own poll needs no mcp package');
+  Check(not Has('# replicate:', Src) and not Has('"replicate": {', Src), 'a replicate step''s own poll needs no MCP server');
+  Check(Has('"name" : "replicate"', RequirementsToJSON(CollectWorkflowRequirements(Spec, Cfg))),
+        'requires: PasClaw still runs it through the Replicate MCP server');
+  Check(ParseWorkflow(EmbeddedSpec(ExportWorkflowPascal(Spec)), Back, Err), 'pascal: embedded spec parses: ' + Err);
+  Check(Back.Nodes[0].Await.Enabled and (Back.Nodes[0].Await.OutputSelector = 'output[1]') and
+        (Back.Nodes[0].Await.IntervalMs = 10), 'pascal: the replicate step keeps its await');
+  { a poll tool on another server still needs that server }
+  Spec.Nodes[0].Await.PollTool := 'fk__status';
+  Src := ExportWorkflowPython(Spec, Cfg);
+  Check(Has('#   MCP steps also need', Src) and Has('"fk": {"command": "python3"', Src), 'another poll tool needs its MCP server');
+  Cfg.Free;
+end;
+
 procedure TestRequirementsAndFile;
 var
   Spec, Back: TWorkflowSpec;
@@ -376,6 +410,7 @@ begin
   TestEscaping;
   TestPascalExport;
   TestPythonExport;
+  TestReplicateAwait;
   TestRequirementsAndFile;
   TestImport;
   TestExportAs;

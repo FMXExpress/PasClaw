@@ -19,6 +19,9 @@ its prompt has quotes, backslashes, a newline, an unclosed "{{" and a
   - the Python export, run with python3 in a venv with the `mcp` package
     (pip install mcp; without it the run is skipped and the reason said),
     prints the same outputs, and the provider saw the same prompt;
+  - a second Python export, against a fake Replicate HTTP API: a shell step
+    runs in its cwd and a missing cwd is exit code 1; a replicate step's
+    await, written out, is the plan it polls with (selector, interval);
   - the Pascal export compiles with FPC against this build's units and
     prints the same outputs.
 
@@ -100,6 +103,38 @@ class Provider(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         self.wfile.write(out)
+
+    def log_message(self, *a):
+        pass
+
+
+REPL = []
+
+
+class FakeReplicate(http.server.BaseHTTPRequestHandler):
+    """Replicate's HTTP API for one prediction: starting when created, then
+    processing on the first poll and succeeded, with two outputs, after."""
+
+    def answer(self, obj):
+        out = json.dumps(obj).encode()
+        self.send_response(201 if self.command == "POST" else 200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        REPL.append(("POST", self.path, self.headers.get("Authorization", ""), time.time()))
+        self.answer({"id": "pred-1", "status": "starting", "output": None})
+
+    def do_GET(self):
+        REPL.append(("GET", self.path, self.headers.get("Authorization", ""), time.time()))
+        if sum(1 for r in REPL if r[0] == "GET") < 2:
+            self.answer({"id": "pred-1", "status": "processing", "output": None})
+        else:
+            self.answer({"id": "pred-1", "status": "succeeded",
+                         "output": ["https://media.test/a.png", "https://media.test/b.png"]})
 
     def log_message(self, *a):
         pass
@@ -328,6 +363,59 @@ def main():
             if r.returncode != 0 or not os.path.exists(os.path.join(work, "workflows", "demo")):
                 fail("the Python export did not write its outputs: %s" % r.stderr)
             ok("--help lists the inputs; a run writes its outputs under workflows/demo/")
+
+        # ---- the Python export: a shell step's cwd, a replicate step's own await
+        # (standard library only: no MCP step). The shell steps run in sub/ and
+        # in a directory that is not there; the replicate step's await, written
+        # out, picks output[1] and polls every 10 ms.
+        rhttpd = http.server.ThreadingHTTPServer(("127.0.0.1", free_port()), FakeReplicate)
+        threading.Thread(target=rhttpd.serve_forever, daemon=True).start()
+        steps = {"id": "steps", "name": "steps", "inputs": [],
+                 "outputs": [{"name": "here", "value": "{{nodes.here}}", "type": "string"},
+                             {"name": "nowhere", "value": "{{nodes.nowhere}}", "type": "string"},
+                             {"name": "pic", "value": "{{nodes.pic}}", "type": "string"}],
+                 "nodes": [{"id": "here", "tool": "shell_exec", "args": {"command": "cat marker.txt", "cwd": "sub"}},
+                           {"id": "nowhere", "tool": "shell_exec", "args": {"command": "echo ran", "cwd": "no-such-dir"}},
+                           {"id": "pic", "tool": "replicate", "args": {"model": "owner/flux", "input": {"prompt": "p"}},
+                            "await": {"tool": "replicate__get_predictions", "args": {"prediction_id": "{{self.id}}"},
+                                      "status_selector": "status", "output_selector": "output[1]",
+                                      "interval_ms": 10, "timeout_ms": 5000,
+                                      "success": ["succeeded"], "failure": ["failed"]}}],
+                 "edges": []}
+        st, j = ga.api("POST", "/v1/workflows", steps)
+        if st != 200:
+            fail("save steps: %d %r" % (st, j))
+        st, text, _ = ga.raw("GET", "/v1/workflows/steps/export?lang=python")
+        if st != 200:
+            fail("export steps: %d %s" % (st, text))
+        steps_py = os.path.join(work, "wf_steps.py")
+        with open(steps_py, "w", encoding="utf-8") as f:
+            f.write(text)
+        run_dir = os.path.join(work, "run")
+        os.makedirs(os.path.join(run_dir, "sub"))
+        for d, s in ((run_dir, "the launch directory"), (os.path.join(run_dir, "sub"), "sub/")):
+            with open(os.path.join(d, "marker.txt"), "w") as f:
+                f.write(s)
+        env = dict(os.environ, REPLICATE_API_TOKEN="r8-dummy",
+                   REPLICATE_API_BASE="http://127.0.0.1:%d" % rhttpd.server_address[1])
+        r = subprocess.run([sys.executable, steps_py, "--json", "--no-files"], cwd=run_dir, env=env,
+                           capture_output=True, text=True, timeout=120)
+        rhttpd.shutdown()
+        if r.returncode != 0:
+            fail("the steps export failed: rc=%d\n%s\n%s" % (r.returncode, r.stdout, r.stderr))
+        got = json.loads(r.stdout)
+        gone = os.path.join(run_dir, "no-such-dir")
+        if got["here"] != "sub/" or got["nowhere"] != "shell_exec: cwd does not exist: %s\n[exit code 1]" % gone:
+            fail("a shell step's cwd: %r" % got)
+        ok("a shell step runs in its cwd (relative to the launch directory); a missing one is exit code 1")
+        calls = [(m, p, a) for m, p, a, _ in REPL]
+        gap = REPL[-1][3] - REPL[-2][3] if len(REPL) > 1 else 0
+        if got["pic"] != "https://media.test/b.png" or calls != [
+                ("POST", "/v1/models/owner/flux/predictions", "Bearer r8-dummy"),
+                ("GET", "/v1/predictions/pred-1", "Bearer r8-dummy"),
+                ("GET", "/v1/predictions/pred-1", "Bearer r8-dummy")] or gap > 1.0:
+            fail("a replicate step's own await: %r, calls %r, %.2f s between the polls" % (got["pic"], calls, gap))
+        ok("a replicate step's await, written out: its output selector and poll interval (%.3f s)" % gap)
 
         # ---- the Pascal export compiles and runs
         fpc = shutil.which("fpc")
