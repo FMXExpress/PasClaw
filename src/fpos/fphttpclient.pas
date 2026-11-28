@@ -38,7 +38,10 @@ type
   public
     constructor Create(AOwner: TComponent); override;
     procedure AddHeader(const AHeader, AValue: string);
-    { GET URL into Stream; a status other than 2xx raises EHTTPClient. }
+    { GET URL into Stream; a status other than 2xx raises EHTTPClient,
+      and so does a 2xx whose body did not arrive whole (cut off, timed
+      out, or the stream would not take it): Stream then holds part of
+      it. }
     procedure Get(const AURL: string; Stream: TStream); overload;
     procedure Get(const AURL: string; const LocalFileName: string); overload;
     function Get(const AURL: string): RawByteString; overload;
@@ -106,10 +109,15 @@ begin
     Refuser.Free;
   end;
   FResponseStatusCode := X.StatusCode;
-  if (X.StatusCode < 200) or (X.StatusCode >= 300) then
+  { FposHttpExecute keeps a 2xx status when the body fails after the
+    headers, and says so in ErrorMsg. }
+  if (X.StatusCode < 200) or (X.StatusCode >= 300) or (X.ErrorMsg <> '') then
   begin
     if X.StatusCode = 0 then
       E := EHTTPClient.Create(X.ErrorMsg)
+    else if (X.StatusCode >= 200) and (X.StatusCode < 300) then
+      E := EHTTPClient.CreateFmt('Status %d, but the body did not arrive whole: %s',
+                                 [X.StatusCode, X.ErrorMsg])
     else
       E := EHTTPClient.CreateFmt('Unexpected response status code: %d', [X.StatusCode]);
     E.StatusCode := X.StatusCode;

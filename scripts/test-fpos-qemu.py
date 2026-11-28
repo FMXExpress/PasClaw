@@ -18,6 +18,9 @@ over the serial port the way the system's own tests do
     calls back into the tools with `pasclaw __tool`), and the answer after
     them comes back;
   - the session that turn was told to keep is saved on the system's disk;
+  - `pasclaw memory provision` against a stand-in for huggingface.co whose
+    vocab.txt is cut off after a 200: the download fails and leaves no
+    part of the file (fphttpclient over libhttp);
   - over HTTPS too, to a server whose certificate comes from a CA made
     for the run: refused without that CA (libtls checks the chain and
     the name), answered with it (SSL_CERT_FILE);
@@ -225,6 +228,33 @@ class Model(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class Downloads(http.server.BaseHTTPRequestHandler):
+    """Stands in for huggingface.co and github.com (over TLS on port 443,
+    the names in the system's /etc/hosts): a vocab.txt is answered 200
+    with a Content-Length its body never reaches -- the connection is cut
+    after the first bytes; everything else is 404."""
+    protocol_version = 'HTTP/1.1'
+    cut = 0
+
+    def do_GET(self):
+        if self.path.endswith('/vocab.txt'):
+            Downloads.cut += 1
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Content-Length', '100000')
+            self.end_headers()
+            self.wfile.write(b'[PAD]\n[UNK]\n[CLS]\n[SEP]\n' * 4)
+            self.wfile.flush()
+            self.close_connection = True
+            return
+        self.send_response(404)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def log_message(self, *a):
+        pass
+
+
 STREAMED = 'Streaming works inside FreePascalOS: alpha beta gamma delta.'
 GATEWAY_STREAMED = 'The gateway streams out of FreePascalOS: one two three four five.'
 SERVE_REPLY = 'hi from the fake model, through pasclaw serve'
@@ -404,6 +434,14 @@ echo "SMOKE-HTTPS-UNTRUSTED-EXIT=$?"
 echo SMOKE-HTTPS-BEGIN
 env SSL_CERT_FILE=/tmp/ca.pem pasclaw agent -m "say hi over https" --quiet --provider fakessl
 echo "SMOKE-HTTPS-EXIT=$?"
+echo "10.0.2.2 huggingface.co" >> /etc/hosts
+echo "10.0.2.2 github.com" >> /etc/hosts
+echo SMOKE-DOWNLOAD-BEGIN
+env SSL_CERT_FILE=/tmp/ca.pem pasclaw memory provision
+echo "SMOKE-DOWNLOAD-EXIT=$?"
+echo SMOKE-DOWNLOAD-LS
+ls /tmp/pch/cache/localvector/models/all-MiniLM-L6-v2
+echo SMOKE-DOWNLOAD-END
 echo SMOKE-UNAVAILABLE-BEGIN
 pasclaw tui
 echo "SMOKE-UNAVAILABLE-EXIT=$?"
@@ -528,7 +566,8 @@ def make_tls_server(work):
             print('FAIL: openssl ' + ' '.join(argv))
             sys.exit(1)
     with open(os.path.join(tls, 'server.ext'), 'w') as f:
-        f.write('subjectAltName=DNS:fakemodel.test\nbasicConstraints=CA:FALSE\n'
+        f.write('subjectAltName=DNS:fakemodel.test,DNS:huggingface.co,DNS:github.com\n'
+                'basicConstraints=CA:FALSE\n'
                 'keyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n')
     run('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=PasClaw test CA',
         '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign',
@@ -541,8 +580,16 @@ def make_tls_server(work):
     context.load_cert_chain(os.path.join(tls, 'server.pem'), os.path.join(tls, 'server.key'))
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Model)
     server.socket = context.wrap_socket(server.socket, server_side=True)
+    # The download hosts, where the system looks for them: port 443 (the
+    # guest's 10.0.2.2:443 is this machine's loopback). None when that
+    # port cannot be had here; the check is skipped then.
+    try:
+        downloads = http.server.ThreadingHTTPServer(('127.0.0.1', 443), Downloads)
+        downloads.socket = context.wrap_socket(downloads.socket, server_side=True)
+    except OSError:
+        downloads = None
     with open(os.path.join(tls, 'ca.pem')) as f:
-        return f.read(), server
+        return f.read(), server, downloads
 
 
 def main():
@@ -590,9 +637,11 @@ def main():
     # The same model over TLS, with a certificate for fakemodel.test from
     # a CA made for this run (the smoke script puts the name in /etc/hosts
     # and the CA in /tmp/ca.pem).
-    ca_pem, tls_server = make_tls_server(work)
+    ca_pem, tls_server, downloads = make_tls_server(work)
     tls_port = tls_server.server_address[1]
     threading.Thread(target=tls_server.serve_forever, daemon=True).start()
+    if downloads:
+        threading.Thread(target=downloads.serve_forever, daemon=True).start()
     with open(os.path.join(user, 'bin', 'pasclaw-smoke'), 'w') as f:
         f.write(SMOKE.replace('@PORT@', str(port)).replace('@TLSPORT@', str(tls_port))
                 .replace('@CAPEM@', ca_pem).lstrip())
@@ -817,6 +866,8 @@ def main():
     qemu.wait()
     server.shutdown()
     tls_server.shutdown()
+    if downloads:
+        downloads.shutdown()
     with open(log_path, 'wb') as f:
         f.write(received)
     text = received.decode('utf-8', 'replace').replace('\r', '')
@@ -828,6 +879,8 @@ def main():
     smoke = text[text.rfind('SMOKE-VERSION-BEGIN'):]
     smoke = smoke[:smoke.find('SMOKE-END') + len('SMOKE-END')]
     tools = section(smoke, 'TOOLS-DONE', 'SMOKE-TOOLS-EXIT')
+    download = section(smoke, 'SMOKE-DOWNLOAD-BEGIN', 'SMOKE-DOWNLOAD-LS')
+    download_left = section(smoke, 'SMOKE-DOWNLOAD-LS', 'SMOKE-DOWNLOAD-END')
     chunks = re.findall(r'"sessionUpdate":"agent_message_chunk"', acp)
     checks = [
         ('pasclaw version', 'SMOKE-VERSION-EXIT=0' in smoke and 'PasClaw' in smoke),
@@ -847,6 +900,10 @@ def main():
         ('execute_code\'s script called back into the tools (pasclaw __tool, TCP)',
          'written-through-tool-rpc' in section(smoke, 'SMOKE-RPC-BEGIN', 'SMOKE-RPC-END')),
         ('the session was saved', 'fpos-smoke.json' in smoke),
+        ('a download cut off after its 200 fails (memory provision), no part of it left',
+         None if downloads is None else
+         (Downloads.cut >= 1 and 'did not arrive whole' in download
+          and 'saved' not in download and 'vocab.txt' not in download_left)),
         ('tui says it is not available', 'not available on FreePascalOS' in smoke
          and 'SMOKE-UNAVAILABLE-EXIT=1' in smoke),
         ('acp: the model was asked to stream (SSE)',

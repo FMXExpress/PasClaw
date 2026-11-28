@@ -63,6 +63,11 @@ Indy over the system's sockets.
 >   gateway (Indy's client to Indy's server over the loopback interface).
 > - `execute_code`'s script calls back into the tools with `pasclaw __tool`
 >   (a TCP connection to the turn's tool server) and writes a file.
+> - `pasclaw memory provision` against stand-ins for huggingface.co and
+>   github.com (TLS, on the host): a `vocab.txt` answered 200 whose body is
+>   cut off fails the download (`fphttpclient` over `libhttp` checks the
+>   body arrived whole), and no part of the file is left to pass for it on
+>   the next run.
 > - `pasclaw serve` (the OpenAI-compatible server), started in the
 >   background with a home of its own and asked through a second forwarded
 >   port: `GET /v1/health`, a `POST /v1/chat/completions` answered through
