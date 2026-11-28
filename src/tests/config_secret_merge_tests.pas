@@ -168,6 +168,18 @@ begin
   AssertEqS(ObjField(Merged, 'web_search', 'api_key'), 'WS-KEY',
             'masked web_search key restored from server');
 
+  { mcp env, per variable: GET shows the names and masks each value; a
+    masked value comes back from the same-named variable, a typed one is
+    kept, a new one is added, and one left out is dropped. }
+  Current := '{"mcp_servers":[{"name":"gh","env":"GITHUB_TOKEN=ghp_x;DEBUG=1;GONE=z;EMPTY="}]}';
+  AssertEqS(ArrField(MaskConfigSecretsJSON(Current), 'mcp_servers', 'gh', 'env'),
+            'GITHUB_TOKEN=' + M + ';DEBUG=' + M + ';GONE=' + M + ';EMPTY=',
+            'mcp env: each value masked, the names kept');
+  Edited := '{"mcp_servers":[{"name":"gh","env":"GITHUB_TOKEN=' + M + ';DEBUG=2;NEW=n;EMPTY="}]}';
+  Merged := RestoreMaskedConfigSecrets(Edited, Current);
+  AssertEqS(ArrField(Merged, 'mcp_servers', 'gh', 'env'), 'GITHUB_TOKEN=ghp_x;DEBUG=2;NEW=n;EMPTY=',
+            'mcp env: kept, typed, added and removed variables merge per name');
+
   { A placeholder for a name with no server match clears (can't invent a
     secret) -- the client still never reads one. }
   Edited := '{"providers":[{"name":"ghost","api_key":"' + M + '"}]}';

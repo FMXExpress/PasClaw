@@ -199,7 +199,8 @@ begin
           PrintLn('Spawning ' + Cfg.MCPServers[i].Cmd + ' ' + Cfg.MCPServers[i].Args + '...');
           Client := TMCPStdioClient.Create(Cfg.MCPServers[i].Name,
                                            Cfg.MCPServers[i].Cmd,
-                                           Cfg.MCPServers[i].Args);
+                                           Cfg.MCPServers[i].Args,
+                                           Cfg.MCPServers[i].Env);
         end;
         try
           if not Client.Connect(5000, Err) then

@@ -145,6 +145,10 @@ type
     FMCPInboundLock: TCriticalSection;
     FMCPAllowMutating: Boolean;
     FMCPAllowList:     array of string;
+    { True when this process connected the configured MCP servers at boot
+      (the gateway without --no-mcp): a saved config may then connect a
+      server it adds or turns on, live (SetMCPLive). }
+    FMCPLive:          Boolean;
     FMCPOnly:          Boolean;
     (* Apps-only listener. When a gateway is spun up with --apps-port, this
        second listener serves ONLY generated app content -- /apps/*, /pages/*,
@@ -206,6 +210,13 @@ type
     procedure HandleContext(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
     procedure HandleMCPList(AResp: TIdHTTPResponseInfo);
+    { GET /v1/mcp/catalog: the bundled catalog, for the MCP tab's "Add from
+      catalog". }
+    procedure HandleMCPCatalog(AResp: TIdHTTPResponseInfo);
+    { After a saved config: connect each enabled server this process has not
+      started (when FMCPLive), and name the saved MCP changes that wait for
+      a restart. Both lists are JSON arrays of names. }
+    procedure ApplyMCPServers(NewCfg, OldCfg: TConfig; out NowJSON, LaterJSON: string);
     (* Run ONE agent turn with a caller-supplied system prompt, outside any
        HTTP request. This is what the desktop's injected callbacks use: page
        generation and task runs need the same provider + registry + fallback
@@ -622,6 +633,11 @@ type
       request sees the new policy. }
     procedure SetMCPAllowMutating(V: Boolean);
     procedure SetMCPAllowList(const Names: array of string);
+    { The gateway turns this on when it connected the MCP servers itself:
+      PUT /v1/config then connects a server that is added or turned on,
+      without a restart. Off (the default, and --no-mcp): every MCP change
+      waits for a restart. }
+    procedure SetMCPLive(V: Boolean);
     { When True, this gateway responds only to /mcp / /v1/mcp/rpc
       (and the bare GET / health probes); every other route 404s.
       Used when --mcp-port spins up a second listener dedicated to
@@ -761,6 +777,7 @@ uses
   PasClaw.Workflow.Export,    { GET /v1/workflows/<id>/export }
   PasClaw.Workflow.Share,     { POST /v1/workflows/import }
   PasClaw.MCP.Bridge,         { MCPCallStructured -- replicate search/model proxy }
+  PasClaw.MCP.Catalog,        { KnownMCPServers -- GET /v1/mcp/catalog }
   PasClaw.Tools.Types,        { TTool -- MCP tool enumeration for the palette }
   PasClaw.Skills.Zip,       { PackDirToZip -- workspace export download }
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
@@ -2251,6 +2268,7 @@ begin
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows') then HandleWorkflowCreate(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows/import') then HandleWorkflowImport(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp/tools') then HandleMCPTools(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp/catalog') then HandleMCPCatalog(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/providers') then HandleProvidersList(AResponse)
     else if (ARequest.Command = 'GET') and (Copy(Doc, 1, 14) = '/v1/providers/') and
             (Length(Doc) > 21) and (Copy(Doc, Length(Doc) - 6, 7) = '/models') then
@@ -2562,6 +2580,11 @@ begin
   end;
 end;
 
+procedure TGatewayServer.SetMCPLive(V: Boolean);
+begin
+  FMCPLive := V;
+end;
+
 procedure TGatewayServer.HandleMCPList(AResp: TIdHTTPResponseInfo);
 var
   Root: TJsonObject;
@@ -2569,38 +2592,229 @@ var
   Item: TJsonObject;
   i, j: Integer;
   Live: TMCPServerStatusArray;
+  Seen: array of Boolean;
+  Body: string;
+  Saved, Resolved: TConfig;
+  Found: Boolean;
+
+  procedure PutLive(const L: TMCPServerStatus);
+  begin
+    Item.PutStr('state',            L.State);
+    Item.PutStr('protocol_version', L.ProtocolVersion);
+    Item.PutStr('negotiation',      L.Negotiation);
+    Item.PutStr('server_name',      L.ServerName);
+    Item.PutStr('server_version',   L.ServerVersion);
+    if L.Error <> '' then Item.PutStr('error', L.Error);
+  end;
+
 begin
-  { What each server negotiated, for the web UI's MCP tab. Only servers
-    this gateway connected have an entry; a disabled one has none. }
+  { What each server negotiated, for the web UI's MCP tab. The servers are
+    config.json's as saved now, not the startup copy, so one added since
+    the gateway started (Settings, the MCP tab, the CLI) is listed too.
+    Only servers this gateway started have a state.
+
+    `apply: "restart"` marks a saved entry the running process has not
+    taken up: enabled but never started here, or started with another
+    command, arguments, environment or code mode, or turned off while it
+    runs. A server removed from config.json that is still running is
+    listed after the others with `removed: true`. env is never sent. }
   Live := MCPServerStatuses;
+  SetLength(Seen, Length(Live));
+  for j := 0 to High(Seen) do Seen[j] := False;
+  FApplyLock.Acquire;
+  try
+    Body := FCfg.ToJSON;
+  finally
+    FApplyLock.Release;
+  end;
+  Body := SavedConfigJSON(Body);
+  Saved := TConfig.Create;
+  Resolved := TConfig.Create;
+  Root := TJsonObject.Create;
+  try
+    try
+      Saved.FromJSON(Body);
+      (* What a start would get: the ${VAR} markers resolved, as LoadConfig
+         resolves them. Compared with the running spec, never sent. *)
+      Resolved.FromJSON(ExpandEnvVarsInJSON(Body));
+    except
+      on E: Exception do
+      begin
+        WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
+        Exit;
+      end;
+    end;
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Saved.MCPServers) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr ('name',    Saved.MCPServers[i].Name);
+      Item.PutStr ('cmd',     Saved.MCPServers[i].Cmd);
+      Item.PutStr ('args',    Saved.MCPServers[i].Args);
+      Item.PutBool('enabled', Saved.MCPServers[i].Enabled);
+      Found := False;
+      for j := 0 to High(Live) do
+        if (not Seen[j]) and SameText(Live[j].Name, Saved.MCPServers[i].Name) then
+        begin
+          Seen[j] := True;
+          Found := True;
+          PutLive(Live[j]);
+          if (not Saved.MCPServers[i].Enabled) or
+             ((i <= High(Resolved.MCPServers)) and
+              (Live[j].Spec <> MCPServerSpec(Resolved.MCPServers[i]))) then
+            Item.PutStr('apply', 'restart');
+          Break;
+        end;
+      if (not Found) and Saved.MCPServers[i].Enabled then
+        Item.PutStr('apply', 'restart');
+      Arr.AddObject(Item);
+    end;
+    for j := 0 to High(Live) do
+      if not Seen[j] then
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr ('name',    Live[j].Name);
+        Item.PutStr ('cmd',     '');
+        Item.PutStr ('args',    '');
+        Item.PutBool('enabled', True);
+        PutLive(Live[j]);
+        Item.PutBool('removed', True);
+        Item.PutStr ('apply',   'restart');
+        Arr.AddObject(Item);
+      end;
+    Root.PutArray('servers', Arr);
+    Root.PutBool('live_apply', FMCPLive and (FRegistry <> nil));
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+    Resolved.Free;
+    Saved.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleMCPCatalog(AResp: TIdHTTPResponseInfo);
+var
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+  E: TMCPCatalogEntryArray;
+  i: Integer;
+begin
+  { The bundled catalog only: offline and instant, the same on every
+    machine. `pasclaw mcp catalog` and `mcp search` are the way to the
+    pasclaw.dev hub. Nothing secret is in it -- env_var names the variable
+    a token is read from, never its value. }
+  E := KnownMCPServers;
   Root := TJsonObject.Create;
   try
     Arr := TJsonArray.Create;
-    for i := 0 to High(FCfg.MCPServers) do
+    for i := 0 to High(E) do
     begin
       Item := TJsonObject.Create;
-      Item.PutStr ('name',    FCfg.MCPServers[i].Name);
-      Item.PutStr ('cmd',     FCfg.MCPServers[i].Cmd);
-      Item.PutStr ('args',    FCfg.MCPServers[i].Args);
-      Item.PutBool('enabled', FCfg.MCPServers[i].Enabled);
-      for j := 0 to High(Live) do
-        if SameText(Live[j].Name, FCfg.MCPServers[i].Name) then
-        begin
-          Item.PutStr('state',            Live[j].State);
-          Item.PutStr('protocol_version', Live[j].ProtocolVersion);
-          Item.PutStr('negotiation',      Live[j].Negotiation);
-          Item.PutStr('server_name',      Live[j].ServerName);
-          Item.PutStr('server_version',   Live[j].ServerVersion);
-          if Live[j].Error <> '' then Item.PutStr('error', Live[j].Error);
-          Break;
-        end;
+      Item.PutStr('name', E[i].Name);
+      Item.PutStr('description', E[i].Desc);
+      if CatalogEntryIsStdio(E[i]) then
+      begin
+        Item.PutStr('transport', 'stdio');
+        Item.PutStr('cmd', E[i].Cmd);
+        Item.PutStr('args', E[i].CmdArgs);
+      end
+      else
+      begin
+        Item.PutStr('transport', 'http');
+        Item.PutStr('cmd', E[i].URL);
+        Item.PutStr('args', '');
+      end;
+      Item.PutStr ('env_var', E[i].EnvVar);
+      Item.PutStr ('auth_format', E[i].AuthFmt);
+      Item.PutBool('requires_oauth', E[i].RequiresOAuth);
+      Item.PutStr ('docs', E[i].Docs);
       Arr.AddObject(Item);
     end;
     Root.PutArray('servers', Arr);
+    Root.PutStr('source', 'built-in');
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
   end;
+end;
+
+procedure TGatewayServer.ApplyMCPServers(NewCfg, OldCfg: TConfig; out NowJSON, LaterJSON: string);
+var
+  Live: TMCPServerStatusArray;
+  i, j: Integer;
+  Found: Boolean;
+
+  { Did this save change the entry? Only a change is reported as waiting
+    for a restart: a server that was already waiting is not news. }
+  function Changed(const S: TMCPServer): Boolean;
+  var
+    k: Integer;
+  begin
+    Result := True;
+    if OldCfg = nil then Exit;
+    for k := 0 to High(OldCfg.MCPServers) do
+      if SameText(OldCfg.MCPServers[k].Name, S.Name) then
+        Exit((OldCfg.MCPServers[k].Enabled <> S.Enabled) or
+             (MCPServerSpec(OldCfg.MCPServers[k]) <> MCPServerSpec(S)));
+  end;
+
+  function WasSaved(const Name: string): Boolean;
+  var
+    k: Integer;
+  begin
+    Result := OldCfg = nil;
+    if OldCfg <> nil then
+      for k := 0 to High(OldCfg.MCPServers) do
+        if SameText(OldCfg.MCPServers[k].Name, Name) then Exit(True);
+  end;
+
+  procedure AddTo(var L: string; const Name: string);
+  begin
+    if L <> '' then L := L + ',';
+    L := L + '"' + JsonEscape(Name) + '"';
+  end;
+
+begin
+  NowJSON := '';
+  LaterJSON := '';
+  Live := MCPServerStatuses;
+  for i := 0 to High(NewCfg.MCPServers) do
+  begin
+    Found := False;
+    for j := 0 to High(Live) do
+      if SameText(Live[j].Name, NewCfg.MCPServers[i].Name) then
+      begin
+        Found := True;
+        { Running already: an edit, or turning it off, needs a restart --
+          its client and its registered tools are in use by running chats,
+          and the registry has no way to take a tool back. }
+        if ((not NewCfg.MCPServers[i].Enabled) or
+            (Live[j].Spec <> MCPServerSpec(NewCfg.MCPServers[i]))) and
+           Changed(NewCfg.MCPServers[i]) then
+          AddTo(LaterJSON, NewCfg.MCPServers[i].Name);
+        Break;
+      end;
+    if Found or (not NewCfg.MCPServers[i].Enabled) then Continue;
+    { Added, or turned on: start it now, the same way the boot did. }
+    if FMCPLive and (FRegistry <> nil) and
+       ConnectMCPServerLive(NewCfg.MCPServers[i], NewCfg, FRegistry) then
+    begin
+      LogInfo('gateway: mcp[%s] added by a config save -- connecting', [NewCfg.MCPServers[i].Name]);
+      AddTo(NowJSON, NewCfg.MCPServers[i].Name);
+    end
+    else if Changed(NewCfg.MCPServers[i]) then
+      AddTo(LaterJSON, NewCfg.MCPServers[i].Name);
+  end;
+  { Removed while it runs: it keeps running until the restart. }
+  for j := 0 to High(Live) do
+  begin
+    Found := False;
+    for i := 0 to High(NewCfg.MCPServers) do
+      if SameText(Live[j].Name, NewCfg.MCPServers[i].Name) then begin Found := True; Break; end;
+    if (not Found) and WasSaved(Live[j].Name) then AddTo(LaterJSON, Live[j].Name);
+  end;
+  NowJSON := '[' + NowJSON + ']';
+  LaterJSON := '[' + LaterJSON + ']';
 end;
 
 function TGatewayServer.HandleDesktop(ARequest: TIdHTTPRequestInfo;
@@ -3927,11 +4141,13 @@ end;
 procedure TGatewayServer.HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
                                            AResp: TIdHTTPResponseInfo);
 var
-  Body, Merged, BaseJSON: string;
-  Tmp, Live: TConfig;
+  Body, Merged, BaseJSON, MCPNow, MCPLater, MCPPart: string;
+  Tmp, Live, Old: TConfig;
   Applied: Boolean;
 begin
   Applied := False;
+  MCPNow := '[]';
+  MCPLater := '[]';
   Body := ReadRequestBody(ARequest);
   if Trim(Body) = '' then
   begin
@@ -3991,23 +4207,37 @@ begin
     try
       Live.FromJSON(ExpandEnvVarsInJSON(Merged));
       Applied := ApplyProviderConfig(Live);
+      { MCP servers added or turned on connect now; the rest of an MCP
+        change waits for a restart (ApplyMCPServers says which). }
+      Old := TConfig.Create;
+      try
+        try
+          Old.FromJSON(ExpandEnvVarsInJSON(BaseJSON));
+        except
+          FreeAndNil(Old);
+        end;
+        ApplyMCPServers(Live, Old, MCPNow, MCPLater);
+      finally
+        Old.Free;
+      end;
     finally
       Live.Free;
     end;
   finally
     Tmp.Free;
   end;
+  MCPPart := ',"mcp":{"connected":' + MCPNow + ',"restart":' + MCPLater + '}';
   if Applied then
   begin
     LogInfo('gateway: config.json updated via /v1/config (provider applied live)');
     WriteJSON(AResp, 200,
-      '{"saved":true,"applied":true,"note":"saved -- provider/model applied live; other settings take effect on restart"}');
+      '{"saved":true,"applied":true,"note":"saved -- provider/model applied live; other settings take effect on restart"' + MCPPart + '}');
   end
   else
   begin
     LogInfo('gateway: config.json updated via /v1/config (restart to apply)');
     WriteJSON(AResp, 200,
-      '{"saved":true,"applied":false,"note":"saved to config.json -- restart pasclaw for changes to take effect"}');
+      '{"saved":true,"applied":false,"note":"saved to config.json -- restart pasclaw for changes to take effect"' + MCPPart + '}');
   end;
 end;
 

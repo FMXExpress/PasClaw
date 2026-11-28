@@ -1018,7 +1018,11 @@ test-webui-relay-e2e: $(BIN)
 # server ready, one still connecting, a command that fails and one turned
 # off: a row per server with the route's state, the ready one's protocol,
 # server and tool names, the failed one's error drawn as text, and the empty
-# state (and its Settings button) with none. Needs node with Playwright and
+# state (and its Settings button) with none. Then add, edit and remove from
+# the tab: inline checks, the catalog filling the form, the fake server added
+# with an env secret (on disk, never in the page) and connected live to
+# Ready, an edit waiting for a restart, HTML in a name drawn as text, Remove
+# asking first. SHOTS=<dir> saves screenshots. Needs node with Playwright and
 # python3; skips without node or Playwright.
 test-webui-mcp-e2e: $(BIN)
 	@if command -v node >/dev/null 2>&1; then node src/tests/webui_mcp_e2e.js $(BIN); \

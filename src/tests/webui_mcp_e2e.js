@@ -17,6 +17,24 @@
      - with no servers, the empty state, whose button opens Settings on the
        MCP servers section.
 
+   Then, on the second gateway (MCP on, so a save connects what it adds):
+
+     - Add server from the empty state: an empty form is refused inline (no
+       name, no command), and nothing is saved;
+     - the catalog lists what GET /v1/mcp/catalog has, and Use fills the
+       form (a URL server, its token as a ${VAR} marker shown as text);
+     - adding the fake server with a secret env value: config.json gets the
+       value, the row appears and reaches Ready, and the value is in the
+       page's HTML neither then nor after a reload;
+     - a duplicate name and a name with other characters are refused;
+     - Edit changes its args (the saved env value is kept, not shown), and
+       the row says the change waits for a restart;
+     - HTML in a server name (written by another client) renders as text;
+     - Remove asks first; dismissed it keeps the server, accepted it takes
+       it out of config.json, and the row says it runs until a restart.
+
+   SHOTS=<dir> saves screenshots of the add form, the catalog and the list.
+
    Needs node with Playwright and a Chromium; skips without them.
    usage: node webui_mcp_e2e.js <pasclaw-binary> */
 const http = require("http");
@@ -82,7 +100,11 @@ async function startGateway(servers, tag) {
   const browser = await chromium.launch();
   const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
   page.on("pageerror", e => { console.log("FAIL: page error: " + e.message); failures++; });
-  page.on("dialog", d => d.dismiss());
+  let dialogs = [], dialogAnswer = "dismiss";
+  page.on("dialog", d => { dialogs.push(d.message()); dialogAnswer === "accept" ? d.accept() : d.dismiss(); });
+  const shots = process.env.SHOTS || "";
+  if (shots) fs.mkdirSync(shots, { recursive: true });
+  const shot = async name => { if (shots) await page.screenshot({ path: path.join(shots, name), fullPage: true }); };
   const row = name => page.locator(`#mcp-list .mcp-srv[data-name="${name}"]`);
 
   try {
@@ -128,6 +150,124 @@ async function startGateway(servers, tag) {
     await until(async () => (await page.getAttribute('#set-nav button[data-sec="mcp"]', "aria-current")) === "true",
                 "Settings on MCP servers");
     ok("no servers: the empty state, and its button opens Settings on MCP servers");
+
+    /* ---- add from the tab: inline checks first ---- */
+    const SECRET = "s3cr3t-fake-value-77";
+    const disk = () => JSON.parse(fs.readFileSync(path.join(B.home, "config.json"), "utf8")).mcp_servers || [];
+    const perr = async () => (await page.locator("#mcp-form .set-err").allTextContents()).join(" | ");
+    await page.goto(B.base + "/#mcp");
+    await until(async () => /No MCP servers configured/.test(await page.textContent("#mcp-list")), "the empty state again");
+    await page.click("#mcp-list .mcp-empty [data-mcp-add]");
+    await until(() => page.isVisible("#mcp-panel #mcp-form"), "the add panel");
+    await page.click("#mcp-save");
+    await until(async () => /Give the server a name/.test(await perr()) && /command that starts/.test(await perr()), "the empty form's errors, got " + await perr());
+    if (disk().length) fail("an empty form was saved");
+    ok("an empty add form is refused inline, and nothing is saved");
+
+    /* ---- the catalog ---- */
+    const cat = (await (await fetch(B.base + "/v1/mcp/catalog")).json()).servers;
+    if (!cat.length || cat.some(c => "env" in c)) fail("the catalog route: " + JSON.stringify(cat).slice(0, 200));
+    await page.click("#mcp-cat > summary");
+    await until(async () => (await page.locator("#mcp-cat .mcp-cat-row").count()) === cat.length, "a catalog row per entry");
+    const hf = cat.find(c => c.name === "huggingface");
+    const hfRow = page.locator('#mcp-cat .mcp-cat-row[data-name="huggingface"]');
+    if ((await hfRow.locator(".mcp-cmd").textContent()) !== hf.cmd) fail("the catalog row's command");
+    await shot("mcp-add-catalog.png");
+    await hfRow.getByRole("button", { name: "Use huggingface" }).click();
+    await until(async () => (await page.inputValue("#mcp-f-name")) === "huggingface", "the form filled from the catalog");
+    if ((await page.inputValue("#mcp-f-cmd")) !== hf.cmd) fail("the catalog URL");
+    if (!(await page.isChecked('#mcp-form input[type=radio][value=url]'))) fail("the catalog entry should pick the URL transport");
+    const hfKey = page.locator("#mcp-f-env-k0"), hfVal = page.locator("#mcp-f-env-v0");
+    if ((await hfKey.inputValue()) !== "Authorization" || (await hfVal.inputValue()) !== "Bearer ${HF_TOKEN}" || (await hfVal.getAttribute("type")) !== "text")
+      fail("the catalog's token should be an Authorization variable holding ${HF_TOKEN}, shown as text");
+    ok("the catalog lists " + cat.length + " entries with their command; Use fills the form (URL, Authorization: Bearer ${HF_TOKEN})");
+
+    /* ---- add the fake server, with a secret ---- */
+    await page.click("#mcp-add");
+    await until(async () => (await page.inputValue("#mcp-f-name")) === "", "a fresh add form");
+    await page.fill("#mcp-f-name", "fakemcp");
+    await page.fill("#mcp-f-cmd", PY);
+    await page.fill("#mcp-f-args", `"${FAKE}" --era modern`);
+    await page.getByRole("button", { name: "Add a variable" }).click();
+    await page.fill("#mcp-f-env-k0", "FAKE_SECRET");
+    await page.fill("#mcp-f-env-v0", SECRET);
+    if ((await page.getAttribute("#mcp-f-env-v0", "type")) !== "password") fail("an env value should be a password field");
+    await shot("mcp-add-form.png");
+    await page.click("#mcp-save");
+    await until(async () => /Added “fakemcp”/.test(await page.textContent("#mcp-flash")), "the added message");
+    const flash1 = await page.textContent("#mcp-flash");
+    if (!/Connecting fakemcp now/.test(flash1)) fail("the add should connect at once: " + flash1);
+    const d1 = disk();
+    if (d1.length !== 1 || d1[0].name !== "fakemcp" || d1[0].env !== "FAKE_SECRET=" + SECRET || d1[0].cmd !== PY) fail("disk after add: " + JSON.stringify(d1));
+    await until(async () => (await row("fakemcp").getAttribute("data-state")) === "ready", "fakemcp to reach Ready");
+    if (await page.isVisible("#mcp-panel")) fail("the panel should close after a save");
+    if ((await page.content()).includes(SECRET)) fail("the page holds the env secret after the add");
+    await page.reload();
+    await until(async () => (await row("fakemcp").count()) === 1, "the row after a reload");
+    if ((await page.content()).includes(SECRET)) fail("the page holds the env secret after a reload");
+    const cfgView = await (await fetch(B.base + "/v1/config?source=file")).text();
+    if (cfgView.includes(SECRET) || !cfgView.includes("FAKE_SECRET=•••")) fail("GET /v1/config should show the variable's name and mask its value");
+    ok("Add: saved with its env value on disk (" + d1[0].env.replace(SECRET, "<secret>") + "), connected live to Ready, the value never in the page");
+
+    /* ---- duplicate and bad names, no command ---- */
+    await page.click("#mcp-add");
+    await page.fill("#mcp-f-name", "FakeMCP");
+    await page.fill("#mcp-f-cmd", "x");
+    await page.click("#mcp-save");
+    await until(async () => /already called “FakeMCP”/.test(await perr()), "the duplicate-name error, got " + await perr());
+    await page.fill("#mcp-f-name", "bad name");
+    await until(async () => /letters, digits/.test(await perr()), "the allowed-characters error, got " + await perr());
+    await page.fill("#mcp-f-name", "other");
+    await page.fill("#mcp-f-cmd", "");
+    await until(async () => /command that starts/.test(await perr()), "the no-command error, got " + await perr());
+    if (disk().length !== 1) fail("an invalid server was saved");
+    await page.click("#mcp-panel .mcp-panel-foot .icon-btn");
+    ok("a duplicate name (any case), a name with a space and a missing command are refused inline");
+
+    /* ---- edit its args ---- */
+    await row("fakemcp").getByRole("button", { name: "Edit fakemcp" }).click();
+    await until(async () => (await page.textContent("#mcp-panel-h")) === "Edit fakemcp", "the edit panel");
+    if ((await page.inputValue("#mcp-f-env-k0")) !== "FAKE_SECRET" || (await page.inputValue("#mcp-f-env-v0")) !== "" ||
+        !/Saved/.test(await page.getAttribute("#mcp-f-env-v0", "placeholder"))) fail("the saved env value should show as saved, empty");
+    await page.fill("#mcp-f-args", `"${FAKE}" --era modern --silent-unknown`);
+    await page.click("#mcp-save");
+    await until(async () => /Saved “fakemcp”/.test(await page.textContent("#mcp-flash")), "the saved message");
+    if (!/Restart the gateway to apply it/.test(await page.textContent("#mcp-flash"))) fail("an edit of a running server should wait for a restart: " + await page.textContent("#mcp-flash"));
+    const d2 = disk();
+    if (!/--silent-unknown$/.test(d2[0].args) || d2[0].env !== "FAKE_SECRET=" + SECRET) fail("disk after edit: " + JSON.stringify(d2));
+    await until(async () => (await row("fakemcp").locator(".mcp-restart").count()) === 1, "the row's restart tag");
+    ok("Edit: the args changed on disk, the env value kept; the row says Restart to apply");
+
+    /* ---- HTML in a name, from another client ---- */
+    const EVIL = "<img src=x onerror=window.__pwned=1>";
+    const cfg = await (await fetch(B.base + "/v1/config?source=file")).json();
+    cfg.mcp_servers.push({ name: EVIL, cmd: "nope", args: "", enabled: false });
+    const put = await fetch(B.base + "/v1/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(cfg) });
+    if (!put.ok) fail("PUT with the HTML name: " + put.status);
+    await page.click("#mcp-refresh");
+    await until(async () => (await page.locator("#mcp-list .mcp-srv").count()) === 2, "the HTML-named row");
+    const names2 = await page.locator("#mcp-list .mcp-srv-name").allTextContents();
+    if (!names2.includes(EVIL)) fail("the HTML name should read as text: " + JSON.stringify(names2));
+    if (await page.locator("#mcp-list img").count() || await page.evaluate(() => window.__pwned)) fail("the HTML in a name became markup");
+    if (disk()[0].env !== "FAKE_SECRET=" + SECRET) fail("another client's save lost the env value");
+    ok("HTML in a server name is drawn as text");
+
+    /* ---- remove, with the confirm ---- */
+    dialogs = [];
+    await row("fakemcp").getByRole("button", { name: "Remove fakemcp" }).click();
+    await until(async () => dialogs.length === 1, "the confirm");
+    if (!/Remove the MCP server “fakemcp”/.test(dialogs[0])) fail("the confirm text: " + dialogs[0]);
+    await sleep(300);
+    if (!disk().some(s => s.name === "fakemcp")) fail("a dismissed Remove removed the server");
+    dialogAnswer = "accept";
+    await row("fakemcp").getByRole("button", { name: "Remove fakemcp" }).click();
+    await until(async () => !disk().some(s => s.name === "fakemcp"), "fakemcp gone from config.json");
+    dialogAnswer = "dismiss";
+    await until(async () => /Removed “fakemcp”/.test(await page.textContent("#mcp-flash")), "the removed message");
+    await until(async () => /keeps running until the gateway restarts/.test(await row("fakemcp").textContent()), "the removed row's note");
+    if (await row("fakemcp").getByRole("button", { name: "Edit fakemcp" }).count()) fail("a removed server still offers Edit");
+    await shot("mcp-tab-list.png");
+    ok("Remove asks first; dismissed keeps it, accepted takes it out of config.json; the row says it runs until a restart");
 
     if (failures) throw new Error(failures + " failure(s)");
     console.log("webui_mcp_e2e: OK");

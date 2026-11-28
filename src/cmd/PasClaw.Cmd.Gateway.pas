@@ -435,6 +435,9 @@ begin
 
     Server := TGatewayServer.Create(Cfg, Provider, Reg);
     Server.SetMCPAllowMutating(Args.MCPAllowWrite);
+    { This process connects the MCP servers, so a server a saved config
+      adds or turns on can connect at once (PUT /v1/config). }
+    Server.SetMCPLive((not Args.NoMCP) and (Reg <> nil));
     { Optional /mcp companion listener. See the long-form comment in
       Cmd.Serve for the same wiring -- one source of truth for the
       tool registry, two HTTP listeners when isolation matters. }

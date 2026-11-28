@@ -43,7 +43,27 @@ pasclaw mcp install <slug>           # install from hub OR bundled catalog
 ]
 ```
 
-`env` is `KEY=VALUE` pairs separated by `;`. For the HTTP transport, `Authorization` is read here and written as a request header on every call.
+`env` is `KEY=VALUE` pairs separated by `;`. For a command, the variables are added to the environment the server is started with (they win over the gateway's own). For the HTTP transport, `args` holds the Authorization header `pasclaw mcp install` writes; when `args` is empty, an `Authorization` variable here is sent as that header on every call. A `${VAR}` marker in a value is read from the gateway's environment when it starts, so a token need not be stored in `config.json` at all.
+
+`GET /v1/config` masks each value on its own and keeps the names (`GITHUB_TOKEN=•••;DEBUG=•••`); a save that sends a masked value back keeps the saved value of the variable with that name, so a value can be set without ever being read.
+
+## In the web UI
+
+The **MCP** tab adds, edits and removes servers; **Settings › MCP servers** edits the same list as cards, with the same form. Both save `config.json` through `PUT /v1/config`.
+
+- The form: name, transport (a command with its arguments, or a URL), environment variables as rows (values write-only), enabled, and tool exposure (follow `mcp_codemode_default`, Code Mode, or classic). It refuses a missing name, a name another server has (in any case), a name with anything but letters, digits, `-` and `_` (the name begins each tool's name), a missing command or URL, and a renamed server or variable whose saved value would be lost.
+- **Start from the catalog** (Add only) lists the bundled catalog from `GET /v1/mcp/catalog` and fills the form; a token the entry needs becomes a `${VAR}` marker, for example `Authorization=Bearer ${HF_TOKEN}`.
+- **Remove** asks first.
+
+What a save applies at once, and what waits for a restart:
+
+| Change | When |
+| --- | --- |
+| A server added, or turned on, that this gateway has not started | At once: it connects the way the boot does (cached tools first, the live connect on its own thread), and shows Connecting, then Ready |
+| A running server's command, arguments, environment or code mode changed | At the next restart; until then it runs as it was started |
+| A running server turned off or removed | At the next restart; until then it keeps running and its tools stay available |
+
+Why: the bridge only ever adds. A running server's tools are registered in the tool registry, which has no way to take a tool back, and a chat may be in the middle of a call on its client, so stopping or replacing it under a running chat is not safe. The MCP tab marks such a server **Restart to apply**, `GET /v1/mcp` gives it `apply: "restart"`, and `PUT /v1/config` answers `"mcp": {"connected": [...], "restart": [...]}`, which Settings lists with the other restart-only changes. A gateway started with `--no-mcp` connects nothing, so every MCP change waits for a restart there.
 
 ## Protocol versions
 
@@ -58,7 +78,7 @@ A stdio server that exits when it gets a request before `initialize` is started 
 The result is recorded per server and shown where server status is shown:
 
 - `pasclaw mcp test <name>` prints `protocol: 2026-07-28 (stateless, via server/discover)` or `protocol: 2025-06-18 (handshake, via initialize (probe: ...))`.
-- The gateway's `GET /v1/mcp` gives each connected server `state` (`connecting` / `ready` / `failed`), `protocol_version`, `negotiation`, `server_name`, `server_version` and, on failure, `error`. The web UI's **MCP** tab shows the state and the version (hover for how it was settled).
+- The gateway's `GET /v1/mcp` gives each connected server `state` (`connecting` / `ready` / `failed`), `protocol_version`, `negotiation`, `server_name`, `server_version` and, on failure, `error`. It lists `config.json` as saved, so a server added since the gateway started is there too, with `apply: "restart"` when the running gateway has not taken it up. The web UI's **MCP** tab shows the state and the version (hover for how it was settled).
 - The live connect is logged: `mcp[name] live connect OK (12 tools, MCP 2026-07-28 via server/discover)`.
 
 Over **Streamable HTTP** a modern request also carries `MCP-Protocol-Version: 2026-07-28`, `Mcp-Method`, and `Mcp-Name` (the tool name for `tools/call`, the `taskId` for `tasks/*`), with the `=?base64?...?=` form for values that are not plain ASCII. Arguments whose schema property has `x-mcp-header` are mirrored into `Mcp-Param-<Name>` headers; a tool whose `x-mcp-header` annotations break the spec's rules is left out of `tools/list` with a warning, and a `HeaderMismatch` error re-reads the tool list and retries once. No `Mcp-Session-Id` is sent. A legacy HTTP server gets the old shape: `Mcp-Session-Id` echoed back, and from 2025-06-18 on the negotiated `MCP-Protocol-Version`. Both eras send one `Accept: application/json, text/event-stream`, and an SSE reply's notifications are skipped to find the response to the request.
@@ -152,6 +172,8 @@ A subagent inherits a code-mode tool **as code mode**: its registry can dispatch
 | `huggingface` | `HF_TOKEN` | Search models / datasets / papers / Spaces. |
 
 `pasclaw mcp search <query>` hits the hub directly with no fallback — the bundled list is too small to search.
+
+The gateway serves the bundled list (never the hub) at `GET /v1/mcp/catalog` for the web UI's **Start from the catalog**.
 
 `pasclaw mcp install <slug>` tries the hub first so any registered server is installable, falls back to the bundled catalog when the hub doesn't have it. Auth is read from the env var the catalog entry names; installing with the env unset writes an empty Authorization header and a hint to re-run after setting it.
 

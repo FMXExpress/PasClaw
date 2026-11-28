@@ -65,6 +65,8 @@ function freePort() {
 
 /* Secrets the page must never show; each is checked against the DOM. */
 const SECRETS = ["sk-keep-me-123", "sk-spare-old-456", "https://hooks.example/ops-secret-789", "GITHUB_TOKEN=keep-0ab"];
+/* An MCP env reads back as GITHUB_TOKEN=•••: the name shows, the value never. */
+const SECRET_VALUES = ["keep-0ab"];
 
 (async () => {
   const gport = await freePort();
@@ -218,7 +220,7 @@ const SECRETS = ["sk-keep-me-123", "sk-spare-old-456", "https://hooks.example/op
     await spareKey.fill("sk-spare-new-999");
     if (!/New value/.test(await spareCard.locator(".set-secret-state").textContent())) fail("a typed key should read as a new value");
     const html = await page.content();
-    for (const s of SECRETS) if (html.includes(s)) fail("the page holds a saved secret: " + s);
+    for (const s of SECRETS.concat(SECRET_VALUES)) if (html.includes(s)) fail("the page holds a saved secret: " + s);
     ok("secrets: saved ones show as Set in an empty password field and never reach the page; typing one marks it new");
 
     if (shots) { await go("models"); await shot("web-ui-settings-dark.png"); }
@@ -248,7 +250,7 @@ const SECRETS = ["sk-keep-me-123", "sk-spare-old-456", "https://hooks.example/op
     const prov = n => body.providers.find(p => p.name === n);
     if (prov("fake").api_key !== MASK) fail("PUT: the untouched key should go back as the mask, got " + prov("fake").api_key);
     if (prov("spare").api_key !== "sk-spare-new-999") fail("PUT: the replaced key");
-    if (body.channels[0].target !== MASK || body.mcp_servers[0].env !== MASK) fail("PUT: untouched channel target / MCP env should be the mask");
+    if (body.channels[0].target !== MASK || body.mcp_servers[0].env !== "GITHUB_TOKEN=" + MASK) fail("PUT: untouched channel target / MCP env value should be the mask: " + body.mcp_servers[0].env);
     if (!eq(body.channels[1], { name: "alerts", kind: "slack", target: "https://hooks.example/alerts-new" })) fail("PUT: the new channel " + JSON.stringify(body.channels[1]));
     if (body.future_flag !== true || !eq(body.experimental, UNKNOWN.experimental) || body.gateway.future_knob !== 7 || prov("fake").region !== "eu")
       fail("PUT: unknown keys not kept as they came: " + JSON.stringify([body.future_flag, body.experimental, body.gateway.future_knob, prov("fake").region]));
@@ -277,13 +279,73 @@ const SECRETS = ["sk-keep-me-123", "sk-spare-old-456", "https://hooks.example/op
     dialogAnswer = "dismiss";
     ok("after a reload the form shows config.json as saved (debug), while the running gateway still says info");
 
+    /* ---- MCP servers: add one from Settings ---- */
+    await go("mcp");
+    const mrow = row("mcp_servers");
+    const ghCard = mrow.locator(".set-item").first();
+    if ((await ghCard.getByLabel("Name", { exact: true }).inputValue()) !== "gh") fail("the gh card's name");
+    const ghEnvKey = ghCard.getByLabel("Variable 1 name"), ghEnvVal = ghCard.getByLabel("Variable 1 value");
+    if ((await ghEnvKey.inputValue()) !== "GITHUB_TOKEN" || (await ghEnvVal.inputValue()) !== "" ||
+        !/Saved/.test(await ghEnvVal.getAttribute("placeholder")) || (await ghEnvVal.getAttribute("type")) !== "password")
+      fail("the saved env variable should show its name and an empty password field that says a value is saved");
+    await mrow.locator(".set-add").last().click();
+    const newSrv = mrow.locator(".set-item.new");
+    await until(async () => (await newSrv.count()) === 1, "the new server card");
+    const errs = async () => (await newSrv.locator(".set-err").allTextContents()).join(" | ");
+    await until(async () => /Give the server a name/.test(await errs()) && /command that starts/.test(await errs()), "the empty card's errors, got " + await errs());
+    const nPuts = puts.length;
+    await page.click("#config-save");
+    await until(async () => /Fix 2 fields?/.test(await status()) || /Fix 1 field/.test(await status()), "Save to refuse the empty server, got " + await status());
+    if (puts.length !== nPuts) fail("Save sent a PUT with an invalid server");
+    await newSrv.getByLabel("Name", { exact: true }).fill("gh");
+    await until(async () => /already called “gh”/.test(await errs()), "the duplicate-name error, got " + await errs());
+    await newSrv.getByLabel("Name", { exact: true }).fill("bad name!");
+    await until(async () => /letters, digits/.test(await errs()), "the allowed-characters error, got " + await errs());
+    await newSrv.getByLabel("Name", { exact: true }).fill("docs");
+    await newSrv.getByRole("textbox", { name: "Command", exact: true }).fill("uvx");
+    await newSrv.getByLabel("Arguments", { exact: true }).fill("mcp-docs --stdio");
+    await newSrv.getByRole("button", { name: "Add a variable" }).click();
+    await newSrv.getByLabel("Variable 1 name").fill("DOCS_TOKEN");
+    await newSrv.getByLabel("Variable 1 value").fill("docs-secret-42");
+    await until(async () => !(await errs()).replace(/[\s|]/g, ""), "the new card's errors to clear, got " + await errs());
+    if ((await newSrv.locator(".set-item-title").textContent()) !== "docs") fail("the card title follows its name");
+    if (shots) await shot("web-ui-settings-mcp.png");
+    await until(async () => /^1 unsaved change$/.test(await status()), "1 unsaved change for the new server, got " + await status());
+    await page.click("#config-save");
+    await until(() => puts.length === nPuts + 1, "the PUT with the new server");
+    await until(async () => /^Saved\./.test(await status()), "the saved status, got " + await status());
+    const mb = puts[nPuts].mcp_servers;
+    if (!eq(mb[1], { name: "docs", cmd: "uvx", args: "mcp-docs --stdio", env: "DOCS_TOKEN=docs-secret-42", enabled: true })) fail("PUT: the new server " + JSON.stringify(mb[1]));
+    if (mb[0].env !== "GITHUB_TOKEN=" + MASK) fail("PUT: the kept env should go back masked: " + mb[0].env);
+    const mdisk = JSON.parse(fs.readFileSync(cfgPath, "utf8")).mcp_servers;
+    if (mdisk[0].env !== SECRETS[3] || mdisk[1].env !== "DOCS_TOKEN=docs-secret-42") fail("disk: the MCP envs " + JSON.stringify(mdisk));
+    /* This gateway runs with --no-mcp: the new server waits for a restart. */
+    if (!/Restart the gateway to apply docs/.test(await status())) fail("the saved status should say docs waits for a restart: " + await status());
+    if (!/MCP server docs/.test(await page.textContent("#set-banners"))) fail("the restart banner should list MCP server docs");
+    if ((await page.content()).includes("docs-secret-42")) fail("the page holds the new env value after the save");
+    /* Remove asks first. */
+    const docsCard = mrow.locator(".set-item").filter({ has: page.locator(".set-item-title", { hasText: /^docs$/ }) });
+    dialogs = [];
+    await docsCard.getByRole("button", { name: /Remove server docs/ }).click();
+    if (!dialogs.length || !/Remove the server “docs”/.test(dialogs[0])) fail("Remove did not ask: " + JSON.stringify(dialogs));
+    if (await docsCard.count() !== 1) fail("a dismissed Remove removed the card");
+    dialogAnswer = "accept";
+    await docsCard.getByRole("button", { name: /Remove server docs/ }).click();
+    dialogAnswer = "dismiss";
+    await until(async () => (await docsCard.count()) === 0, "the docs card to go");
+    await until(async () => /^1 unsaved change$/.test(await status()), "the removal as 1 unsaved change, got " + await status());
+    await page.click("#config-discard");
+    await until(async () => (await docsCard.count()) === 1, "Discard to bring the card back");
+    await go("gateway");
+    ok("MCP servers: Add server makes a card checked inline (name required, unique, allowed characters; a command required); Save sends it, env value written to disk and never shown back; Remove asks first");
+
     /* ---- Advanced: edit as JSON ---- */
     await page.click("#config-raw-toggle");
     await until(() => visible("#config-edit"), "the JSON editor");
     const raw = await page.inputValue("#config-edit");
     const parsed = JSON.parse(raw);
     if (parsed.future_flag !== true) fail("the JSON view lost an unknown key");
-    if (SECRETS.some(s => raw.includes(s))) fail("the JSON view shows a secret");
+    if (SECRETS.concat(SECRET_VALUES).some(s => raw.includes(s))) fail("the JSON view shows a secret");
     await page.fill("#config-edit", raw + "{");
     await until(async () => /Not valid JSON/.test(await page.textContent("#set-raw-state")), "the invalid-JSON message");
     const n = puts.length;

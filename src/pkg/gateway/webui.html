@@ -1190,7 +1190,9 @@
   .mcp-wrap{max-width:58rem;margin:0 auto;display:flex;flex-direction:column;gap:1.75rem;min-width:0}
   .mcp-head-row{display:flex;align-items:center;gap:.6rem}
   .mcp-head h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
-  .mcp-head-row .icon-btn{margin-left:auto;padding:.3rem}
+  .mcp-head-row>h2{margin-right:auto}
+  .mcp-head-row .icon-btn{padding:.3rem}
+  .mcp-head-row>.mcp-add{padding:.3rem .7rem .3rem .5rem;gap:.3rem}
   .mcp-head-row .icon-btn.busy svg.ic{animation:mcpSpin .8s linear infinite}
   @keyframes mcpSpin{to{transform:rotate(360deg)}}
   .mcp-lead{margin:.3rem 0 0;max-width:44rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
@@ -1262,6 +1264,48 @@
   .mcp-empty code{background:var(--surface-2);border-radius:4px;padding:.03rem .3rem;font-size:.92em}
   .mcp-msg{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;padding:1rem 1.25rem;font-size:13px;color:var(--text-3)}
   .mcp-msg.err{color:var(--danger)}
+  /* Add / Edit / Remove: the row's actions, the panel the form opens in,
+     the catalog above the form, and the line that says what a save did. */
+  .mcp-tag.warn{background:var(--warn-soft);color:var(--warn)}
+  .mcp-srv-acts{display:flex;gap:.25rem;margin-left:auto}
+  .mcp-srv-acts .icon-btn{padding:.2rem .5rem;font-size:12px;gap:.25rem;border-color:transparent;color:var(--text-3)}
+  .mcp-srv-acts .icon-btn:hover{color:var(--text);background:var(--surface-3)}
+  .mcp-srv-acts .icon-btn.mcp-rm:hover{color:var(--danger);background:var(--danger-soft)}
+  .mcp-flash{display:flex;align-items:flex-start;gap:.45rem;margin-top:.7rem;padding:.5rem .75rem;border-radius:8px;
+    font-size:12.5px;line-height:1.5;background:var(--surface-2);border:1px solid var(--border);color:var(--text-2)}
+  .mcp-flash[hidden]{display:none}
+  .mcp-flash.ok{border-color:var(--ok-soft);background:var(--ok-soft);color:var(--text)}
+  .mcp-flash.warn{border-color:var(--warn-soft);background:var(--warn-soft);color:var(--text)}
+  .mcp-flash.err{border-color:var(--danger-line);background:var(--danger-soft);color:var(--text)}
+  .mcp-flash svg.ic{flex:none;margin-top:2px}
+  .mcp-panel{background:var(--surface);border:1px solid var(--accent-line);border-radius:var(--radius-lg);min-width:0}
+  .mcp-panel[hidden]{display:none}
+  .mcp-panel-head{display:flex;align-items:center;gap:.5rem;padding:.75rem 1rem;border-bottom:1px solid var(--border)}
+  .mcp-panel-head h3{margin:0 auto 0 0;font-size:14px;font-weight:600;color:var(--text)}
+  .mcp-panel-head .icon-btn{padding:.3rem;border-color:transparent}
+  .mcp-panel-foot{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:.5rem;padding:.75rem 1rem;
+    border-top:1px solid var(--border)}
+  .mcp-panel-foot .mcp-panel-msg{margin-right:auto;font-size:12.5px;color:var(--text-3)}
+  .mcp-panel-foot .mcp-panel-msg.err{color:var(--danger)}
+  .mcp-cat{margin:.8rem .8rem 0;border:1px solid var(--border);border-radius:8px;background:var(--surface-2)}
+  .mcp-cat>summary{cursor:pointer;padding:.5rem .75rem;font-size:12.5px;font-weight:500;color:var(--text-2)}
+  .mcp-cat-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--border);max-height:18rem;overflow:auto}
+  .mcp-cat-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.15rem .75rem;align-items:center;padding:.5rem .75rem}
+  .mcp-cat-row+.mcp-cat-row{border-top:1px solid var(--border)}
+  .mcp-cat-row b{font:600 12.5px/1.4 var(--mono);color:var(--text)}
+  .mcp-cat-row p{margin:0;font-size:12px;line-height:1.45;color:var(--text-2)}
+  .mcp-cat-row .mcp-cmd{grid-column:1}
+  .mcp-cat-row>button{grid-row:1/span 3;grid-column:2}
+  .mcp-seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:8px;overflow:hidden;width:max-content}
+  .mcp-seg label{display:inline-flex;align-items:center;padding:.3rem .75rem;font-size:12.5px;color:var(--text-2);cursor:pointer}
+  .mcp-seg label+label{border-left:1px solid var(--border-strong)}
+  .mcp-seg input{position:absolute;opacity:0;pointer-events:none}
+  .mcp-seg label:has(input:checked){background:var(--accent-soft);color:var(--accent);font-weight:500}
+  .mcp-seg label:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:-2px}
+  .mcp-env{max-width:none}
+  .mcp-env .set-list-row>input:first-child{flex:0 1 13rem}
+  .mcp-env-note{font-size:11.5px;color:var(--text-3)}
+  .mcp-empty-acts{display:flex;flex-wrap:wrap;gap:.5rem}
   @media (max-width:760px){
     #mcp-pane{padding:1rem 1rem 2rem}
     .mcp-wrap{gap:1.4rem}
@@ -2729,6 +2773,7 @@
   <symbol id="i-power" viewBox="0 0 16 16"><path d="M5 4.1a5 5 0 1 0 6 0M8 2.25v5.5"/></symbol>
   <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="M8 7.25v3.5M8 5.25h.01"/></symbol>
   <symbol id="i-mcp-plug" viewBox="0 0 16 16"><path d="M6 2.25v3M10 2.25v3M4.25 5.25h7.5v2.5a3.75 3.75 0 0 1-7.5 0z"/><path d="M8 11.5v2.25"/></symbol>
+  <symbol id="i-mcp-edit" viewBox="0 0 16 16"><path d="M10.25 3.25l2.5 2.5M3.25 12.75l.5-2.75 7.25-7.25a1.06 1.06 0 0 1 1.5 0l1 1a1.06 1.06 0 0 1 0 1.5L6.25 12.5z"/></symbol>
   <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></symbol>
   <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.75 8S4 3.75 8 3.75 14.25 8 14.25 8 12 12.25 8 12.25 1.75 8 1.75 8Z"/><circle cx="8" cy="8" r="2"/></symbol>
   <symbol id="i-eye-off" viewBox="0 0 16 16"><path d="m2.5 2.5 11 11"/><path d="M6.5 3.95A6 6 0 0 1 8 3.75C12 3.75 14.25 8 14.25 8a11 11 0 0 1-1.6 2.15M10.3 11.75A5.6 5.6 0 0 1 8 12.25C4 12.25 1.75 8 1.75 8a11 11 0 0 1 2.5-3.05"/><path d="M6.6 6.6a2 2 0 0 0 2.8 2.8"/></symbol>
@@ -3156,18 +3201,23 @@
   <div id="tab-mcp" class="tab">
     <!-- MCP: the servers in config.json's mcp_servers, each with what this
          gateway's connection to it negotiated (GET /v1/mcp) and the tools it
-         registered (GET /v1/mcp/tools, namespaced server__tool). Read-only:
-         servers are added and edited in Settings > MCP servers. -->
+         registered (GET /v1/mcp/tools, namespaced server__tool). Add, Edit
+         and Remove open #mcp-panel, which saves through PUT /v1/config like
+         Settings > MCP servers; a server added or turned on connects then. -->
     <div class="pane" id="mcp-pane">
       <div class="mcp-wrap">
         <header class="mcp-head">
           <div class="mcp-head-row">
             <h2>MCP servers</h2>
+            <button type="button" class="icon-btn mcp-add" id="mcp-add" data-mcp-add><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Add server</button>
             <button type="button" class="icon-btn" id="mcp-refresh" aria-label="Refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
           </div>
-          <p class="mcp-lead">Model Context Protocol servers give the agent more tools. The gateway connects to each one when it starts, by running its command or calling its URL.
+          <p class="mcp-lead">Model Context Protocol servers give the agent more tools. The gateway runs each one’s command, or calls its URL, when it starts, and connects a server you add here right away.
             <a href="#settings" class="mcp-settings-link" data-mcp-settings>Configure in Settings › MCP servers</a></p>
+          <div class="mcp-flash" id="mcp-flash" role="status" hidden></div>
         </header>
+
+        <section class="mcp-panel" id="mcp-panel" aria-labelledby="mcp-panel-h" hidden></section>
 
         <section class="mcp-strip" id="mcp-strip" aria-label="Server summary" hidden>
           <div class="mcp-stat" data-k="ready"><span class="mcp-num" id="mcp-stat-ready">—</span><span class="mcp-lbl">ready</span></div>
@@ -7433,10 +7483,10 @@ const SET_SECTIONS = [
       ] },
     ] },
   { id: "mcp", title: "MCP servers",
-    intro: "Model Context Protocol servers the agent can use, and how their tools are offered to the model.",
+    intro: "Model Context Protocol servers the agent can use, and how their tools are offered to the model. A server you add or turn on connects as soon as you save; other changes apply after a restart.",
     groups: [
       { title: "Servers", fields: [
-        SET_F("mcp_servers", "cards", "Servers", "Each runs a command, or is reached at a URL. Its environment can carry keys, so it is write-only here.", { cards: "mcp_servers", def: [] }),
+        SET_F("mcp_servers", "cards", "Servers", "Each runs a command, or is reached at a URL. Environment values can carry keys, so they are write-only here.", { live: 3, cards: "mcp_servers", def: [] }),
       ] },
       { title: "Tool exposure", fields: [
         SET_F("mcp_codemode_default", "bool", "Code Mode by default", "MCP tools are called from `execute_code` scripts instead of being sent as tool schemas.", { def: true }),
@@ -7555,7 +7605,10 @@ const SET_CARDS = {
       ["api_base", "url", "Base URL", "Blank uses the provider's default."],
       ["api_key", "secret", "API key", ""],
     ] },
-  mcp_servers: { noun: "server", key: "name", sub: it => it.cmd || "",
+  /* Drawn by mcpServerForm, the MCP tab's editor too: transport, the
+     environment as variables, inline checks. `fields` stays for the keys
+     it knows, so unknown keys still show generically. */
+  mcp_servers: { noun: "server", key: "name", sub: it => it.cmd || "", form: "mcp", confirmRemove: 1,
     newItem: () => ({ name: "", cmd: "", args: "", env: "", enabled: true }),
     fields: [
       ["name", "text", "Name", "Its tools are called `<name>__<tool>`.", { required: 1, mono: 1 }],
@@ -8208,6 +8261,8 @@ function settingsInit() {
       };
       rm.append(ic("trash"), el("span", "lbl", "Remove"));
       rm.addEventListener("click", () => {
+        if (spec.confirmRemove && orig && !confirm("Remove the " + spec.noun + " “" + String(orig[spec.key] || "") + "”?\n\n"
+                                                    + "It is taken out of config.json when you save.")) return;
         const a = arr(), i = a.indexOf(item);
         if (i >= 0) a.splice(i, 1);
         if (!a.length && getP(st.base, p) === undefined) delP(st.draft, p);
@@ -8215,6 +8270,20 @@ function settingsInit() {
         const next = box.querySelector(".set-item .icon-btn") || box.querySelector(".set-add"); if (next) next.focus();
       });
       head.append(title, sub, rm);
+      if (spec.form === "mcp") {
+        /* The MCP tab's editor, checked through one control: Save stays
+           refused while it reports an error, and reveal() focuses it. */
+        const fm = mcpServerForm({ item, orig, eager: true, idp: uid(),
+          others: () => arr().filter(o => o !== item).map(o => String((o && o.name) || "")),
+          onChange: () => { paintHead(); changed(); } });
+        register({ owner: box, check: () => { const e = fm.firstError(); return e ? e.msg : ""; },
+                   get input() { return fm.firstInput(); } });
+        paintHead();
+        c.append(head, fm.node);
+        c._item = item;
+        if (focus) setTimeout(() => fm.focus(), 0);
+        return c;
+      }
       const body = el("div", "set-item-body");
       const known = new Set(spec.fields.map(x => x[0]));
       const fieldSpecs = spec.fields.map(([k, type, label, hint, x]) => Object.assign({ k, type, label, desc: hint, path: f.path + "[]." + k }, x || {}));
@@ -8549,14 +8618,15 @@ function settingsInit() {
      file), and what waits for a restart -- which includes every key the
      table does not know. */
   function describe(a, b) {
-    const live = [], sched = [], restart = [];
+    const live = [], sched = [], restart = [], mcp = [];
     const seen = new Set();
     for (const f of allFields()) {
       if (f.type === "action") continue;
       const ps = f.paths || [f.path];
       ps.forEach(p => seen.add(p));
+      /* live: 3 is mcp_servers: the gateway says per server (the PUT's mcp). */
       if (ps.some(p => !same(getP(a, p.split(".")) === undefined ? f.def : getP(a, p.split(".")),
-                             getP(b, p.split(".")) === undefined ? f.def : getP(b, p.split("."))))) (restartOf(f) ? restart : f.live === 2 ? sched : live).push(f.label);
+                             getP(b, p.split(".")) === undefined ? f.def : getP(b, p.split("."))))) (restartOf(f) ? restart : f.live === 2 ? sched : f.live === 3 ? mcp : live).push(f.label);
     }
     (function walk(x, y, pre) {
       for (const k of new Set([...Object.keys(x || {}), ...Object.keys(y || {})])) {
@@ -8566,7 +8636,7 @@ function settingsInit() {
         if (!same(x && x[k], y && y[k])) restart.push(ps);
       }
     })(a, b, []);
-    return { live, sched, restart };
+    return { live, sched, restart, mcp };
   }
   async function save() {
     /* Ctrl+S reaches here with the button disabled; nothing to send then. */
@@ -8584,17 +8654,21 @@ function settingsInit() {
     }
     const what = describe(st.base, payload);
     st.busy = true; st.busyText = "Saving…"; st.flash = null; paintBar();
-    let ok = false, msg = "", applied = false;
+    let ok = false, msg = "", applied = false, mcpRes = null;
     try {
       const r = await gwFetch("/v1/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       const j = await r.json().catch(() => ({}));
-      if (r.ok && j.saved) { ok = true; applied = !!j.applied; }
+      if (r.ok && j.saved) { ok = true; applied = !!j.applied; mcpRes = j.mcp || null; }
       else msg = j.error || ("HTTP " + r.status);
     } catch (e) { msg = String(e && e.message || e); }
     st.busy = false;
     if (!ok) { flash("err", "Couldn't save: " + msg); return; }
     for (const l of what.restart) st.pending.set(l, true);
     if (what.live.length && !applied) for (const l of what.live) st.pending.set(l, true);
+    /* MCP servers: the gateway connected some now and names the rest. */
+    const mcpNow = (mcpRes && mcpRes.connected) || [], mcpLater = (mcpRes && mcpRes.restart) || [];
+    if (what.mcp.length && !mcpRes) for (const l of what.mcp) st.pending.set(l, true);
+    for (const n of mcpLater) st.pending.set("MCP server " + n, true);
     const wasRaw = st.raw;
     await load();
     if (wasRaw) enterRaw();
@@ -8602,6 +8676,8 @@ function settingsInit() {
     let text = "Saved.";
     if (now) text += " " + plural(now, "change") + " applied now.";
     if (what.live.length && !applied) text += " The gateway could not switch providers live; restart to apply.";
+    if (mcpNow.length) text += " Connecting " + mcpNow.join(", ") + " now.";
+    if (mcpLater.length) text += " Restart the gateway to apply " + mcpLater.join(", ") + ".";
     if (what.restart.length) text += " " + plural(what.restart.length, "change") + " after a restart.";
     flash(what.live.length && !applied ? "err" : "ok", text);
   }
@@ -14302,8 +14378,13 @@ function setupMcpTab() {
   ui.setup = true;
   $("#mcp-refresh").addEventListener("click", () => mcpRefresh(false));
   $("#tab-mcp").addEventListener("click", e => {
-    if (e.target.closest("[data-mcp-settings]")) { e.preventDefault(); mcpOpenSettings(); }
-    else if (e.target.closest("[data-mcp-retry]")) mcpRefresh(false);
+    const t = e.target.closest("[data-mcp-settings],[data-mcp-retry],[data-mcp-add],[data-mcp-edit],[data-mcp-remove]");
+    if (!t) return;
+    if (t.matches("[data-mcp-settings]")) { e.preventDefault(); mcpOpenSettings(); }
+    else if (t.matches("[data-mcp-retry]")) mcpRefresh(false);
+    else if (t.matches("[data-mcp-add]")) mcpOpenPanel(null);
+    else if (t.matches("[data-mcp-edit]")) mcpOpenPanel(t.dataset.mcpEdit);
+    else if (t.matches("[data-mcp-remove]")) mcpRemove(t.dataset.mcpRemove, t.dataset.running === "1");
   });
   /* Which tool lists are open survives a refresh. */
   $("#mcp-list").addEventListener("toggle", e => {
@@ -14328,7 +14409,7 @@ async function mcpRefresh(prompt) {
     /* Only the first load may ask for a gateway token. */
     const r = await gwFetch("/v1/mcp", prompt ? {} : { noPrompt: true });
     if (!r.ok) err = "Couldn't load the MCP servers (HTTP " + r.status + ").";
-    else { const j = await r.json(); servers = Array.isArray(j.servers) ? j.servers : []; }
+    else { const j = await r.json(); servers = Array.isArray(j.servers) ? j.servers : []; ui.live = !!j.live_apply; }
   } catch { err = "Couldn't reach the gateway to load the MCP servers."; }
   /* The tool list is extra: without it the rows just leave tools out. */
   if (!err) {
@@ -14424,9 +14505,33 @@ function mcpRow(s, st, tools) {
   const http = /^https?:\/\//i.test(cmd);
   const transport = mcpEl("span", "mcp-tag plain", http ? "HTTP" : "stdio");
   transport.title = http ? "Reached at a URL (Streamable HTTP)" : "Started as a command; spoken to over stdin and stdout";
-  l1.append(mcpEl("code", "mcp-srv-name", name || "(no name)"), mcpEl("span", "mcp-tag mcp-state " + tone, label), transport);
-  const line = mcpEl("code", "mcp-cmd", args ? cmd + " " + args : cmd);
-  main.append(l1, line);
+  l1.append(mcpEl("code", "mcp-srv-name", name || "(no name)"), mcpEl("span", "mcp-tag mcp-state " + tone, label));
+  if (!s.removed) l1.appendChild(transport);
+  const restart = s.apply === "restart";
+  if (restart) {
+    const t = mcpEl("span", "mcp-tag warn mcp-restart", "Restart to apply");
+    t.title = "Saved in config.json; the running gateway takes it up when it restarts";
+    l1.appendChild(t);
+  }
+  /* Edit and Remove; a server already taken out of config.json has neither. */
+  if (!s.removed) {
+    const acts = mcpEl("span", "mcp-srv-acts");
+    const ed = mcpEl("button", "icon-btn mcp-ed");
+    ed.type = "button"; ed.dataset.mcpEdit = name; ed.innerHTML = icon("mcp-edit");
+    ed.appendChild(mcpEl("span", null, "Edit"));
+    ed.setAttribute("aria-label", "Edit " + name);
+    const rm = mcpEl("button", "icon-btn mcp-rm");
+    rm.type = "button"; rm.dataset.mcpRemove = name; rm.innerHTML = icon("trash");
+    rm.appendChild(mcpEl("span", null, "Remove"));
+    rm.setAttribute("aria-label", "Remove " + name);
+    if (s.state) rm.dataset.running = "1";
+    acts.append(ed, rm);
+    l1.appendChild(acts);
+  }
+  /* args of a URL server is its Authorization header: not shown. */
+  const line = mcpEl("code", "mcp-cmd", args && !http ? cmd + " " + args : cmd);
+  main.append(l1);
+  if (cmd) main.appendChild(line);
 
   /* What the connection negotiated: only what the route gave. */
   const facts = mcpEl("dl", "mcp-facts");
@@ -14446,6 +14551,9 @@ function mcpRow(s, st, tools) {
   if (tools && (tools.length || st === "ready")) fact("Tools", document.createTextNode(fmtInt(tools.length)));
   if (facts.children.length) main.appendChild(facts);
 
+  if (s.removed) main.appendChild(mcpEl("p", "mcp-note", "Removed from config.json. It keeps running until the gateway restarts."));
+  else if (restart && s.state && !s.enabled) main.appendChild(mcpEl("p", "mcp-note", "Turned off in config.json. It keeps running until the gateway restarts."));
+  else if (restart && s.state) main.appendChild(mcpEl("p", "mcp-note", "Changed in config.json. It runs as it was started until the gateway restarts."));
   if (st === "failed") {
     const box = mcpEl("div", "mcp-err"), txt = mcpEl("div");
     box.innerHTML = icon("alert");
@@ -14455,10 +14563,12 @@ function mcpRow(s, st, tools) {
     main.appendChild(box);
   } else if (st === "connecting") {
     main.appendChild(mcpEl("p", "mcp-note", "Starting up. This page checks again every few seconds."));
-  } else if (st === "disabled") {
+  } else if (st === "disabled" && !s.state) {
     main.appendChild(mcpEl("p", "mcp-note", "Turned off, so the gateway doesn't start it."));
   } else if (st === "idle") {
-    main.appendChild(mcpEl("p", "mcp-note", "This gateway hasn't connected to it. Servers connect when the gateway starts, so one added since then needs a restart."));
+    main.appendChild(mcpEl("p", "mcp-note", mcpUI().live
+      ? "This gateway hasn't connected to it: it was added outside this page. Restart the gateway to connect it."
+      : "This gateway hasn't connected to it. It runs without MCP (--no-mcp), or the server was added since it started: restart the gateway to connect it."));
   }
 
   if (tools && tools.length) {
@@ -14483,8 +14593,9 @@ function mcpEmptyState() {
   const d = mcpEl("div", "mcp-empty");
   d.innerHTML = '<span class="mcp-empty-ic">' + icon("mcp-plug") + '</span><div><b>No MCP servers configured</b>'
     + '<p>An MCP server gives the agent tools it doesn\'t have built in, such as a browser, a database or an '
-    + 'issue tracker. Add one with the command that starts it, or its URL, and restart PasClaw to connect it.</p>'
-    + '<button type="button" class="primary" data-mcp-settings>Add a server in Settings</button></div>';
+    + 'issue tracker. Add one with the command that starts it, or its URL, or pick one from the catalog.</p>'
+    + '<div class="mcp-empty-acts"><button type="button" class="primary" data-mcp-add>Add a server</button> '
+    + '<button type="button" class="icon-btn" data-mcp-settings>Open Settings</button></div></div>';
   return d;
 }
 
@@ -14510,6 +14621,428 @@ function mcpOpenSettings() {
   showTab("settings");
   const b = document.querySelector('#set-nav button[data-sec="mcp"]');
   if (b && $("#tab-settings").classList.contains("active")) b.click();
+}
+
+/* ===== The MCP server editor =====
+   One form for an mcp_servers entry, used by the MCP tab's panel and by
+   Settings › MCP servers' cards, so both check the same things the same way.
+
+   An entry is { name, cmd, args, env, enabled, codemode }. A URL in cmd
+   (http:// or https://) is the HTTP transport; anything else is a command
+   run with args. env is `KEY=value` pairs separated by ";", and GET
+   /v1/config masks each VALUE ("KEY=•••"), never the names: a row whose
+   value is the mask says a value is saved and sends the mask back while it
+   is left empty, and the server puts the saved value back
+   (RestoreMaskedConfigSecrets). A `${VAR}` marker is kept as written and
+   resolved when the gateway starts. Everything the user typed reaches the
+   page as values and textContent only. */
+const MCP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const MCP_ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MCP_MASK = "•••";
+const MCP_MARKER_RE = /\$\{[A-Z_][A-Z0-9_]*\}/;
+function mcpIsUrl(s) { return /^https?:\/\//i.test(String(s || "").trim()); }
+function mcpEnvParse(env) {
+  return String(env || "").split(";").map(p => p.trim()).filter(Boolean).map(p => {
+    const i = p.indexOf("=");
+    if (i < 1) return { key: "", orig: "", saved: p === MCP_MASK, value: p === MCP_MASK ? "" : p };
+    const key = p.slice(0, i), v = p.slice(i + 1);
+    return v === MCP_MASK ? { key, orig: key, saved: true, value: "" } : { key, orig: key, saved: false, value: v };
+  });
+}
+function mcpEnvJoin(rows) {
+  return rows.filter(r => r.key.trim() || r.value || r.saved).map(r => {
+    const k = r.key.trim();
+    const v = r.value !== "" ? r.value : (r.saved && r.orig === k ? MCP_MASK : "");
+    return k ? k + "=" + v : v;
+  }).join(";");
+}
+/* What is wrong with an entry, by field: { name, cmd, env }. A field is
+   checked when the entry is new or the field differs from the saved one:
+   an odd value already in config.json is not this form's to refuse. */
+function mcpServerErrors(it, ctx) {
+  const e = {}, orig = ctx.orig, name = String(it.name || "").trim();
+  const renamed = !!orig && String(orig.name || "") !== String(it.name || "");
+  if (!orig || renamed) {
+    if (!name) e.name = "Give the server a name.";
+    else if (!MCP_NAME_RE.test(name)) e.name = "Use letters, digits, - and _ only, starting with a letter or digit. The name begins each of its tools’ names.";
+    else if (name.length > 48) e.name = "Use 48 characters or fewer.";
+    else if (ctx.others.some(o => String(o).trim().toLowerCase() === name.toLowerCase())) e.name = "Another server is already called “" + name + "”.";
+    else if (renamed && ctx.rows.some(r => r.saved && r.value === "" && r.orig === r.key.trim()))
+      e.name = "The saved environment values belong to “" + orig.name + "”. Enter them again to rename it, or keep the old name.";
+  }
+  const cmd = String(it.cmd || "").trim(), url = ctx.transport === "url";
+  if (!orig || cmd !== String(orig.cmd || "").trim() || url !== mcpIsUrl(orig.cmd)) {
+    if (url) {
+      let u = null; try { u = new URL(cmd); } catch {}
+      if (!cmd) e.cmd = "Enter the server’s URL.";
+      else if (!u || !/^https?:$/.test(u.protocol)) e.cmd = "Enter a full URL, such as https://example.com/mcp.";
+    } else if (!cmd) e.cmd = "Enter the command that starts the server.";
+    else if (mcpIsUrl(cmd)) e.cmd = "That is a URL: choose URL above.";
+  }
+  const seen = new Set();
+  for (const r of ctx.rows) {
+    const k = r.key.trim();
+    if (!k && !r.value && !r.saved) continue;
+    if (!k) { e.env = "Give every value a variable name."; break; }
+    if (!MCP_ENV_KEY_RE.test(k)) { e.env = "“" + k + "” isn’t a variable name: letters, digits and _, not starting with a digit."; break; }
+    if (seen.has(k)) { e.env = "“" + k + "” is set twice."; break; }
+    seen.add(k);
+    if (r.value.includes(";")) { e.env = "A value can’t hold “;”: it separates the variables."; break; }
+    if (r.saved && r.value === "" && r.orig !== k) { e.env = "Enter the value of “" + k + "” again: a renamed variable does not keep its saved value."; break; }
+  }
+  return e;
+}
+
+/* Build the form. o: { item (edited in place), orig (the saved entry, or
+   null for a new one), others() (the other servers' names), onChange(),
+   eager (show every error at once, as Settings does), idp (id prefix) }.
+   Returns { node, errors(), firstError(), showAll(), focus() }. */
+function mcpServerForm(o) {
+  const item = o.item, idp = o.idp || "mcpf";
+  let transport = mcpIsUrl(item.cmd) ? "url" : "cmd";
+  const rows = mcpEnvParse(item.env);
+  const touched = new Set();
+  let all = !!o.eager;
+  const body = mcpEl("div", "set-item-body mcp-fbody");
+  const parts = {};
+  function field(key, label, hint, wide, tag) {
+    const box = mcpEl("div", "set-f" + (wide ? " wide" : ""));
+    const lab = mcpEl(tag || "label", "set-f-label", label);
+    lab.id = idp + "-" + key + "-l";
+    if (!tag) lab.htmlFor = idp + "-" + key;
+    const h = mcpEl("span", "set-hint");
+    h.id = idp + "-" + key + "-d";
+    if (hint) h.textContent = hint; else h.hidden = true;
+    const err = mcpEl("div", "set-err");
+    err.setAttribute("aria-live", "polite");
+    box.append(lab);
+    parts[key] = { box, lab, hint: h, err };
+    return box;
+  }
+  function textInput(key, value, mono, placeholder) {
+    const i = mcpEl("input", mono ? "set-mono" : "");
+    i.type = "text"; i.id = idp + "-" + key; i.value = value == null ? "" : String(value);
+    i.spellcheck = false; i.autocomplete = "off";
+    if (placeholder) i.placeholder = placeholder;
+    i.setAttribute("aria-describedby", idp + "-" + key + "-d");
+    i.addEventListener("input", () => { touched.add(key); sync(); });
+    i.addEventListener("blur", () => { if (i.value !== "" || touched.has(key)) { touched.add(key); paint(); } });
+    parts[key].input = i;
+    return i;
+  }
+
+  /* name */
+  const fName = field("name", "Name", "Its tools are called name__tool.");
+  fName.append(textInput("name", item.name, true, "github"), parts.name.hint, parts.name.err);
+  /* transport */
+  const fT = field("transport", "Transport", "", false, "span");
+  const seg = mcpEl("div", "mcp-seg");
+  seg.setAttribute("role", "radiogroup"); seg.setAttribute("aria-labelledby", parts.transport.lab.id);
+  for (const [v, t] of [["cmd", "Command"], ["url", "URL"]]) {
+    const l = mcpEl("label"), r = mcpEl("input");
+    r.type = "radio"; r.name = idp + "-transport"; r.value = v; r.checked = transport === v;
+    r.addEventListener("change", () => { if (r.checked) { transport = v; touched.add("cmd"); layout(); sync(); } });
+    l.append(r, document.createTextNode(t));
+    seg.appendChild(l);
+  }
+  fT.append(seg, parts.transport.err);
+  /* command or URL */
+  const fCmd = field("cmd", "Command", "", true);
+  fCmd.append(textInput("cmd", item.cmd, true, ""), parts.cmd.hint, parts.cmd.err);
+  /* arguments; for a URL, the Authorization header `mcp install` keeps there */
+  const fArgs = field("args", "Arguments", "", true);
+  fArgs.append(textInput("args", item.args, true, ""), parts.args.hint, parts.args.err);
+  /* environment */
+  const fEnv = field("env", "Environment variables", "", true, "span");
+  const list = mcpEl("div", "set-list mcp-env");
+  list.id = idp + "-env"; list.setAttribute("role", "group"); list.setAttribute("aria-labelledby", parts.env.lab.id);
+  fEnv.append(list, parts.env.hint, parts.env.err);
+  function renderEnv(focusAt) {
+    list.textContent = "";
+    if (!rows.length) list.appendChild(mcpEl("span", "set-empty", "None."));
+    rows.forEach((r, i) => {
+      const line = mcpEl("div", "set-list-row");
+      const k = mcpEl("input", "set-mono");
+      k.type = "text"; k.value = r.key; k.placeholder = "NAME"; k.spellcheck = false; k.autocomplete = "off";
+      k.id = idp + "-env-k" + i; k.setAttribute("aria-label", "Variable " + (i + 1) + " name");
+      const v = mcpEl("input", "set-mono");
+      v.id = idp + "-env-v" + i; v.value = r.value; v.autocomplete = "new-password"; v.spellcheck = false;
+      v.setAttribute("aria-label", "Variable " + (i + 1) + " value");
+      /* A ${VAR} marker is not a secret: it shows as typed. */
+      const kind = () => { v.type = MCP_MARKER_RE.test(v.value) ? "text" : "password"; };
+      kind();
+      v.placeholder = r.saved ? "Saved. Leave empty to keep it" : "Value";
+      k.addEventListener("input", () => { r.key = k.value; touched.add("env"); sync(); });
+      v.addEventListener("input", () => { r.value = v.value; kind(); touched.add("env"); sync(); });
+      const x = mcpEl("button", "set-x");
+      x.type = "button"; x.innerHTML = icon("x");
+      x.setAttribute("aria-label", "Remove variable " + (r.key || i + 1));
+      x.addEventListener("click", () => { rows.splice(i, 1); touched.add("env"); renderEnv(); sync(); });
+      line.append(k, v, x);
+      list.appendChild(line);
+    });
+    const add = mcpEl("button", "icon-btn set-add");
+    add.type = "button"; add.innerHTML = icon("plus");
+    add.appendChild(document.createTextNode("Add a variable"));
+    add.addEventListener("click", () => { rows.push({ key: "", orig: "", saved: false, value: "" }); renderEnv(rows.length - 1); });
+    list.appendChild(add);
+    if (focusAt != null) { const f = list.querySelector("#" + idp + "-env-k" + focusAt); if (f) f.focus(); }
+  }
+  renderEnv();
+  /* enabled, code mode */
+  const fOn = mcpEl("div", "set-f");
+  const line = mcpEl("div", "set-f-inline"), sw = mcpEl("span", "switch"), on = mcpEl("input");
+  on.type = "checkbox"; on.id = idp + "-enabled"; on.setAttribute("role", "switch"); on.checked = item.enabled !== false;
+  on.addEventListener("change", sync);
+  sw.append(on, mcpEl("span"));
+  const onLab = mcpEl("label", null, "Enabled"); onLab.htmlFor = on.id;
+  line.append(sw, onLab); fOn.appendChild(line);
+  fOn.appendChild(mcpEl("span", "set-hint", "Off: kept in config.json, not started."));
+  const fCm = field("codemode", "Tool exposure", "Code Mode: called from execute_code scripts. Classic: sent to the model as tools.");
+  const cm = mcpEl("select"); cm.id = idp + "-codemode";
+  for (const [v, t] of [["", "Follow the default"], ["true", "Code Mode"], ["false", "Classic tools"]]) cm.appendChild(new Option(t, v));
+  cm.value = item.codemode === true ? "true" : item.codemode === false ? "false" : "";
+  cm.addEventListener("change", sync);
+  fCm.append(cm, parts.codemode.hint);
+  body.append(fName, fT, fCmd, fArgs, fEnv, fOn, fCm);
+
+  function layout() {
+    const url = transport === "url";
+    parts.cmd.lab.textContent = url ? "URL" : "Command";
+    parts.cmd.input.placeholder = url ? "https://example.com/mcp" : "npx";
+    parts.cmd.input.type = url ? "url" : "text";
+    parts.cmd.hint.textContent = url ? "Reached over Streamable HTTP." : "The program to run. It is spoken to over stdin and stdout.";
+    parts.cmd.hint.hidden = false;
+    /* A URL's args slot is the Authorization header `pasclaw mcp install`
+       writes; shown only when one is there. */
+    const hasHeader = url && String(parts.args.input.value || "") !== "";
+    fArgs.hidden = url && !hasHeader;
+    parts.args.lab.textContent = url ? "Authorization header" : "Arguments";
+    parts.args.input.type = url ? "password" : "text";
+    parts.args.input.placeholder = url ? "" : "-y @modelcontextprotocol/server-github";
+    parts.args.hint.textContent = url ? "Sent as the Authorization header, as pasclaw mcp install wrote it. Clear it to use an Authorization variable instead."
+                                      : "Split like a shell would; quotes keep spaces together.";
+    parts.args.hint.hidden = false;
+    parts.env.hint.textContent = (url ? "For a URL, an Authorization variable is sent as the request header. " : "Added to the server’s environment. ")
+      + "Values are write-only: a saved one is never shown, and left empty it is kept. ${VAR} reads VAR from the gateway’s environment when it starts.";
+    parts.env.hint.hidden = false;
+  }
+  /* Write back only what differs, so a card that is looked at and left
+     alone stays exactly as config.json has it. */
+  function read() {
+    const put = (k, v, cur) => { if (v !== cur) item[k] = v; };
+    put("name", parts.name.input.value, String(item.name == null ? "" : item.name));
+    put("cmd", parts.cmd.input.value.trim(), String(item.cmd == null ? "" : item.cmd));
+    put("args", parts.args.input.value, String(item.args == null ? "" : item.args));
+    put("env", mcpEnvJoin(rows), mcpEnvJoin(mcpEnvParse(item.env)) === mcpEnvJoin(rows) ? mcpEnvJoin(rows) : String(item.env || ""));
+    if (on.checked !== (item.enabled !== false)) item.enabled = on.checked;
+    const cmNow = item.codemode === true ? "true" : item.codemode === false ? "false" : "";
+    if (cm.value !== cmNow) { if (cm.value === "") delete item.codemode; else item.codemode = cm.value === "true"; }
+  }
+  const errors = () => mcpServerErrors(item, { orig: o.orig, others: o.others(), transport, rows });
+  function paint() {
+    const e = errors();
+    for (const k of ["name", "cmd", "env"]) {
+      const p = parts[k], msg = (all || touched.has(k)) ? e[k] || "" : "";
+      p.err.textContent = "";
+      if (msg) { p.err.innerHTML = icon("alert"); p.err.appendChild(mcpEl("span", null, msg)); }
+      p.box.classList.toggle("invalid", !!msg);
+      const target = k === "env" ? list : p.input;
+      if (target) target.setAttribute("aria-invalid", msg ? "true" : "false");
+    }
+    return e;
+  }
+  function sync() { read(); paint(); if (o.onChange) o.onChange(); }
+  layout(); paint();
+  const order = ["name", "cmd", "env"];
+  return {
+    node: body,
+    errors,
+    firstError() { const e = errors(); const k = order.find(x => e[x]); return k ? { key: k, msg: e[k] } : null; },
+    firstInput() {
+      const e = errors(), k = order.find(x => e[x]);
+      return k === "env" ? (list.querySelector("input") || list.querySelector("button")) : k ? parts[k].input : parts.name.input;
+    },
+    showAll() { all = true; return paint(); },
+    focus() { parts.name.input.focus(); },
+  };
+}
+
+/* ---- the MCP tab's panel: add, edit, remove ----
+   Each save reads config.json as saved (GET /v1/config?source=file, secrets
+   masked), changes mcp_servers only, and PUTs it back -- the same request
+   Settings sends, so masked secrets elsewhere go back as masks and are kept.
+   The answer says which servers connected at once and which wait for a
+   restart (see ApplyMCPServers in the gateway). */
+async function mcpLoadConfig() {
+  const r = await gwFetch("/v1/config?source=file");
+  if (!r.ok) throw new Error("couldn't read config.json (HTTP " + r.status + ")");
+  const cfg = await r.json();
+  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) throw new Error("the server did not send a JSON object");
+  if (!Array.isArray(cfg.mcp_servers)) cfg.mcp_servers = [];
+  return cfg;
+}
+async function mcpPutConfig(cfg) {
+  const r = await gwFetch("/v1/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(cfg) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.saved) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+function mcpFlash(cls, text) {
+  const f = $("#mcp-flash");
+  f.className = "mcp-flash" + (cls ? " " + cls : "");
+  f.textContent = "";
+  f.innerHTML = icon(cls === "err" ? "alert" : cls === "warn" ? "power" : "check");
+  f.appendChild(mcpEl("span", null, text));
+  f.hidden = !text;
+}
+/* What a save did, in words. */
+function mcpSavedText(j, verb, name) {
+  const m = j && j.mcp, now = (m && m.connected) || [], later = (m && m.restart) || [];
+  let t = verb + " “" + name + "” in config.json.";
+  if (now.length) t += " Connecting " + now.join(", ") + " now.";
+  if (later.length) t += " Restart the gateway to apply " + (later.length === 1 && later[0] === name ? "it" : later.join(", ")) + ".";
+  return { text: t, cls: later.length ? "warn" : "ok" };
+}
+
+async function mcpCatalog() {
+  const ui = mcpUI();
+  if (ui.catalog) return ui.catalog;
+  try {
+    const r = await gwFetch("/v1/mcp/catalog", { noPrompt: true });
+    if (r.ok) { const j = await r.json(); if (Array.isArray(j.servers)) ui.catalog = j.servers; }
+  } catch {}
+  return ui.catalog || [];
+}
+/* A catalog entry as a new mcp_servers entry. A token is never asked for
+   here: a ${VAR} marker names the variable it is read from at start. */
+function mcpFromCatalog(c) {
+  const it = { name: String(c.name || ""), cmd: String(c.cmd || ""), args: String(c.args || ""), env: "", enabled: true };
+  const v = String(c.env_var || "");
+  if (v && MCP_ENV_KEY_RE.test(v)) {
+    if (c.transport === "http" && c.auth_format) it.env = "Authorization=" + String(c.auth_format).replace("%s", "${" + v + "}");
+    else if (c.transport !== "http") it.env = v + "=${" + v + "}";
+  }
+  return it;
+}
+
+function mcpClosePanel(focusAdd) {
+  const ui = mcpUI(), p = $("#mcp-panel");
+  p.hidden = true; p.textContent = "";
+  ui.panel = null;
+  if (focusAdd) $("#mcp-add").focus();
+}
+/* Open the panel: name null adds a server, a name edits that one. */
+async function mcpOpenPanel(name, preset) {
+  const ui = mcpUI(), p = $("#mcp-panel");
+  let cfg;
+  try { cfg = await mcpLoadConfig(); }
+  catch (e) { mcpFlash("err", "Couldn't open the editor: " + (e.message || e)); return; }
+  const list = cfg.mcp_servers;
+  let orig = null;
+  if (name != null) {
+    orig = list.find(s => s && String(s.name) === name) || null;
+    if (!orig) { mcpFlash("err", "“" + name + "” is no longer in config.json."); mcpRefresh(false); return; }
+  }
+  const item = orig ? JSON.parse(JSON.stringify(orig)) : (preset || { name: "", cmd: "", args: "", env: "", enabled: true });
+  const others = () => list.filter(s => s && s !== orig).map(s => String(s.name || ""));
+  p.textContent = ""; p.hidden = false;
+  const head = mcpEl("div", "mcp-panel-head"), h = mcpEl("h3", null, orig ? "Edit " + name : "Add a server");
+  h.id = "mcp-panel-h";
+  const x = mcpEl("button", "icon-btn"); x.type = "button"; x.innerHTML = icon("x");
+  x.setAttribute("aria-label", "Close"); x.addEventListener("click", () => mcpClosePanel(true));
+  head.append(h, x);
+  p.appendChild(head);
+  if (!orig) {
+    /* Start from the bundled catalog. */
+    const det = mcpEl("details", "mcp-cat");
+    det.id = "mcp-cat";
+    det.appendChild(mcpEl("summary", null, "Start from the catalog"));
+    const ul = mcpEl("ul", "mcp-cat-list");
+    det.appendChild(ul);
+    p.appendChild(det);
+    mcpCatalog().then(cat => {
+      det.querySelector("summary").textContent = cat.length ? "Start from the catalog (" + cat.length + ")" : "Start from the catalog (not available)";
+      for (const c of cat) {
+        const li = mcpEl("li", "mcp-cat-row"), txt = mcpEl("div");
+        li.dataset.name = String(c.name || "");
+        txt.append(mcpEl("b", null, String(c.name || "")), mcpEl("p", null, String(c.description || "")));
+        const use = mcpEl("button", "icon-btn", "Use");
+        use.type = "button"; use.setAttribute("aria-label", "Use " + c.name);
+        use.addEventListener("click", () => mcpOpenPanel(null, mcpFromCatalog(c)));
+        li.append(txt, use, mcpEl("code", "mcp-cmd", [c.cmd, c.args].filter(Boolean).join(" ")));
+        if (c.requires_oauth) li.appendChild(mcpEl("p", null, "Needs pasclaw mcp auth " + c.name + " once it is added."));
+        else if (c.env_var) li.appendChild(mcpEl("p", null, "Reads its token from $" + c.env_var + " on the gateway."));
+        ul.appendChild(li);
+      }
+    });
+  }
+  const form = mcpServerForm({ item, orig, others, idp: "mcp-f", eager: false,
+                               onChange: () => { msg.textContent = ""; msg.className = "mcp-panel-msg"; } });
+  form.node.id = "mcp-form";
+  p.appendChild(form.node);
+  if (preset) {
+    const note = preset.env ? "Prefilled from the catalog. The token is not stored here: " + preset.env.replace(/^[^=]*=/, "") + " is read when the gateway starts." : "Prefilled from the catalog.";
+    form.node.prepend(Object.assign(mcpEl("p", "set-f wide mcp-env-note", note), { id: "mcp-preset-note" }));
+  }
+  const foot = mcpEl("div", "mcp-panel-foot"), msg = mcpEl("span", "mcp-panel-msg");
+  msg.setAttribute("role", "status");
+  const cancel = mcpEl("button", "icon-btn", "Cancel"); cancel.type = "button";
+  cancel.addEventListener("click", () => mcpClosePanel(true));
+  const save = mcpEl("button", "primary", orig ? "Save changes" : "Add server"); save.type = "button"; save.id = "mcp-save";
+  foot.append(msg, cancel, save);
+  p.appendChild(foot);
+  ui.panel = { name };
+  save.addEventListener("click", async () => {
+    const e = form.showAll();
+    if (Object.keys(e).length) {
+      msg.className = "mcp-panel-msg err"; msg.textContent = "Fix the fields marked in red.";
+      const f = form.firstInput(); if (f) f.focus();
+      return;
+    }
+    save.disabled = true; msg.className = "mcp-panel-msg"; msg.textContent = "Saving…";
+    try {
+      const fresh = await mcpLoadConfig(), arr = fresh.mcp_servers;
+      const nm = String(item.name).trim();
+      item.name = nm;
+      if (orig) {
+        const i = arr.findIndex(s => s && String(s.name) === name);
+        if (i < 0) throw new Error("“" + name + "” is no longer in config.json");
+        arr[i] = Object.assign({}, arr[i], item);
+        if (!("codemode" in item)) delete arr[i].codemode;
+      } else {
+        if (arr.some(s => s && String(s.name || "").toLowerCase() === nm.toLowerCase())) throw new Error("another server is already called “" + nm + "”");
+        arr.push(item);
+      }
+      const j = await mcpPutConfig(fresh);
+      const said = mcpSavedText(j, orig ? "Saved" : "Added", nm);
+      mcpClosePanel(false);
+      mcpFlash(said.cls, said.text);
+      mcpRefresh(false);
+    } catch (err) {
+      msg.className = "mcp-panel-msg err"; msg.textContent = "Couldn't save: " + (err.message || err);
+    } finally { save.disabled = false; }
+  });
+  p.scrollIntoView({ block: "nearest" });
+  form.focus();
+}
+
+async function mcpRemove(name, running) {
+  if (!confirm("Remove the MCP server “" + name + "”?\n\nIt is taken out of config.json"
+               + (running ? ". It keeps running until the gateway restarts." : ", and its tools with it."))) return;
+  try {
+    const cfg = await mcpLoadConfig();
+    const i = cfg.mcp_servers.findIndex(s => s && String(s.name) === name);
+    if (i < 0) throw new Error("“" + name + "” is no longer in config.json");
+    cfg.mcp_servers.splice(i, 1);
+    const j = await mcpPutConfig(cfg);
+    const later = (j.mcp && j.mcp.restart) || [];
+    mcpFlash(later.includes(name) ? "warn" : "ok", "Removed “" + name + "” from config.json."
+      + (later.includes(name) ? " It keeps running until the gateway restarts." : ""));
+    const ui = mcpUI();
+    if (ui.panel && ui.panel.name === name) mcpClosePanel(false);
+  } catch (e) { mcpFlash("err", "Couldn't remove “" + name + "”: " + (e.message || e)); }
+  mcpRefresh(false);
 }
 
 /* ===== Relay tab implementation =====
