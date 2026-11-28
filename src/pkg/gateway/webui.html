@@ -2199,6 +2199,27 @@
   .wf-sec-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text)}
   .wf-sec-head .n{font-size:12.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
   .wf-sec-lead{margin:-.35rem 0 0;font-size:12.5px;line-height:1.5;color:var(--text-3)}
+  /* Import a workflow file (list header) and Export (editor toolbar) */
+  .wf-imp{display:flex;flex-direction:column;gap:.6rem;padding:.85rem 1rem;border:1px solid var(--border);
+    border-radius:var(--radius-lg);background:var(--surface);min-width:0}
+  .wf-imp[hidden],.wf-imp-clash[hidden],.wf-menu-list[hidden]{display:none}
+  .wf-imp-row,.wf-imp-acts{display:flex;align-items:center;flex-wrap:wrap;gap:.4rem .6rem;min-width:0;font-size:12.5px;color:var(--text-3)}
+  .wf-imp textarea{width:100%;box-sizing:border-box;min-height:6rem;font-family:var(--mono,monospace);font-size:12px;resize:vertical}
+  .wf-imp-clash{display:flex;flex-direction:column;gap:.5rem;padding:.6rem .75rem;border-radius:8px;
+    background:var(--warn-soft);color:var(--text);font-size:12.5px;line-height:1.5}
+  .wf-imp-clash input{min-width:0;flex:1 1 10rem}
+  .wf-imp-err{margin:0;font-size:12.5px;color:var(--danger);overflow-wrap:anywhere}
+  .wf-imp-err:empty{display:none}
+  .wf-pmiss{margin:0;padding:.45rem .7rem .45rem 1.6rem;border-radius:6px;background:var(--warn-soft);
+    font-size:12px;line-height:1.5;color:var(--text-2);overflow-wrap:anywhere}
+  .wf-menu{position:relative;display:inline-flex}
+  .wf-menu-list{position:absolute;right:0;top:calc(100% + 4px);z-index:40;display:flex;flex-direction:column;
+    min-width:14rem;padding:.25rem;background:var(--surface);border:1px solid var(--border);
+    border-radius:var(--radius-lg);box-shadow:var(--shadow-pop)}
+  .wf-menu-list button{display:flex;justify-content:space-between;gap:1rem;background:none;border:0;border-radius:6px;
+    padding:.45rem .6rem;text-align:left;font-size:13px;color:var(--text);cursor:pointer}
+  .wf-menu-list button:hover,.wf-menu-list button:focus-visible{background:var(--surface-2)}
+  .wf-menu-list small{color:var(--text-3);font-size:11.5px}
   .wf-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
   .wf-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:.35rem .8rem;padding:.85rem 1rem}
   .wf-row+.wf-row{border-top:1px solid var(--border)}
@@ -3472,13 +3493,38 @@
           </div>
           <div class="wf-acts">
             <button type="button" class="icon-btn" id="wf-refresh" aria-label="Refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+            <button type="button" class="icon-btn" id="wf-import" aria-expanded="false" title="Import a workflow file someone shared"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>Import</button>
             <button type="button" class="primary" id="wfNew"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>New workflow</button>
           </div>
         </header>
         <div class="wf-note" id="wf-note" role="status" hidden></div>
+        <section class="wf-imp" id="wf-imp" aria-labelledby="wf-imp-h" hidden>
+          <div class="wf-sec-head"><h3 id="wf-imp-h">Import a workflow file</h3></div>
+          <p class="wf-sec-lead">A <code>.pasclaw-workflow.json</code> file someone shared. It can run tools, so it waits in <b>Waiting for your approval</b> until you have read its steps and approved it.</p>
+          <div class="wf-imp-row">
+            <button type="button" class="icon-btn" id="wf-imp-pick"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>Choose a file…</button>
+            <input type="file" id="wf-imp-file" accept=".json,application/json" hidden>
+            <span>or paste it below</span>
+          </div>
+          <textarea id="wf-imp-text" rows="5" spellcheck="false" aria-label="Workflow file (JSON)" placeholder='{"format": "pasclaw-workflow", "version": 1, "workflow": {…}}'></textarea>
+          <div class="wf-imp-clash" id="wf-imp-clash" role="alert" hidden>
+            <span id="wf-imp-clash-msg"></span>
+            <div class="wf-imp-row">
+              <input id="wf-imp-as" aria-label="New id" autocomplete="off" spellcheck="false">
+              <button type="button" class="icon-btn" id="wf-imp-rename">Rename</button>
+              <button type="button" class="icon-btn wf-danger" id="wf-imp-replace">Replace</button>
+              <button type="button" class="icon-btn" id="wf-imp-clash-cancel">Cancel</button>
+            </div>
+          </div>
+          <p class="wf-imp-err" id="wf-imp-err" role="alert"></p>
+          <div class="wf-imp-acts">
+            <button type="button" class="primary" id="wf-imp-go">Import</button>
+            <button type="button" class="icon-btn" id="wf-imp-cancel">Cancel</button>
+          </div>
+        </section>
         <section class="wf-sec" id="wf-pend-sec" aria-labelledby="wf-pend-h" hidden>
           <div class="wf-sec-head"><h3 id="wf-pend-h">Waiting for your approval</h3><span class="n" id="wf-pend-n"></span></div>
-          <p class="wf-sec-lead">The agent saved these when nobody could be asked. They don't run and aren't tools until you approve them.</p>
+          <p class="wf-sec-lead">The agent saved these when nobody could be asked, or you imported them. They don't run and aren't tools until you approve them.</p>
           <div class="wf-list wf-pend" id="wf-pend"></div>
         </section>
         <section class="wf-sec" aria-labelledby="wf-saved-h">
@@ -3504,6 +3550,14 @@
           </div>
           <div class="wf-grp" role="group" aria-label="Workflow">
             <button type="button" id="wfRun" class="icon-btn" title="Run it (saves first when it has changed)"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Run</button>
+            <div class="wf-menu" id="wf-export">
+              <button type="button" id="wfExport" class="icon-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="wf-export-menu" title="Download the saved workflow as a file or as code"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg>Export<svg class="ic" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+              <div class="wf-menu-list" id="wf-export-menu" role="menu" hidden>
+                <button type="button" role="menuitem" data-lang="workflow">Workflow file (.json)<small>to share</small></button>
+                <button type="button" role="menuitem" data-lang="python">Python script<small>.py</small></button>
+                <button type="button" role="menuitem" data-lang="pascal">Object Pascal program<small>.dpr</small></button>
+              </div>
+            </div>
             <button type="button" id="wfSave" class="primary">Save</button>
             <button type="button" id="wfDelete" class="icon-btn wf-danger" title="Delete this workflow" aria-label="Delete this workflow"><svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg></button>
           </div>
@@ -10753,6 +10807,7 @@ async function wfInit() {
     wfBound = true;
     const on = (id, ev, fn) => document.getElementById(id).addEventListener(ev, fn);
     on("wfNew", "click", () => wfNewClicked());
+    wfShareBind(on);
     on("wf-refresh", "click", () => wfLoadList());
     on("wf-back", "click", () => wfBackToList());
     on("wfAddNode", "click", wfAddNode);
@@ -10956,6 +11011,12 @@ async function wfLoadPending() {
     if (w.replaces) l1.appendChild(wfEl("span", "wf-tag warn", "Replaces the saved one"));
     main.appendChild(l1);
     if (w.description) main.appendChild(wfEl("p", "wf-rdesc", w.description));
+    if (w.missing && w.missing.length) {
+      const miss = wfEl("ul", "wf-pmiss");
+      miss.title = "Not on this machine: the steps that need these fail until they are added";
+      w.missing.forEach(m => miss.appendChild(wfEl("li", "", "Missing here: " + m)));
+      main.appendChild(miss);
+    }
     const ol = wfEl("ol", "wf-psteps");
     ((w.spec && w.spec.nodes) || []).forEach(n => {
       const li = wfEl("li");
@@ -10992,6 +11053,100 @@ async function wfPendingAction(w, what, btn) {
   } catch (e) { wfNote("Couldn't " + what + " " + (w.name || w.id) + ": " + e, true); }
   await wfLoadList({ quiet: true });
   refreshApprovals();
+}
+
+/* ----- sharing: Import a workflow file, Export the saved one ----- */
+function wfShareBind(on) {
+  on("wf-import", "click", () => wfImportOpen(document.getElementById("wf-imp").hidden));
+  on("wf-imp-cancel", "click", () => wfImportOpen(false));
+  on("wf-imp-pick", "click", () => document.getElementById("wf-imp-file").click());
+  on("wf-imp-file", "change", async e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    document.getElementById("wf-imp-text").value = await f.text();
+    wfImport({});
+  });
+  on("wf-imp-go", "click", () => wfImport({}));
+  on("wf-imp-rename", "click", () => {
+    const as = document.getElementById("wf-imp-as").value.trim();
+    if (as) wfImport({ as });
+  });
+  on("wf-imp-replace", "click", () => wfImport({ replace: true }));
+  on("wf-imp-clash-cancel", "click", () => wfImportOpen(false));
+  on("wfExport", "click", () => wfExportMenu(document.getElementById("wf-export-menu").hidden));
+  document.querySelectorAll("#wf-export-menu [data-lang]").forEach(b =>
+    b.addEventListener("click", () => wfExport(b.dataset.lang)));
+  document.addEventListener("click", e => { if (!e.target.closest("#wf-export")) wfExportMenu(false); });
+  on("wf-export", "keydown", e => { if (e.key === "Escape") { wfExportMenu(false); document.getElementById("wfExport").focus(); } });
+}
+function wfImportOpen(open) {
+  document.getElementById("wf-imp").hidden = !open;
+  document.getElementById("wf-import").setAttribute("aria-expanded", String(open));
+  document.getElementById("wf-imp-clash").hidden = true;
+  document.getElementById("wf-imp-err").textContent = "";
+  if (open) document.getElementById("wf-imp-text").focus();
+  else document.getElementById("wf-imp-text").value = "";
+}
+/* POST the file; the gateway stages it for approval (never saves it), so it
+   shows in the approvals list with every step. A taken id comes back 409:
+   offer Rename / Replace / Cancel. */
+async function wfImport(opts) {
+  const text = document.getElementById("wf-imp-text").value;
+  const err = document.getElementById("wf-imp-err"), clash = document.getElementById("wf-imp-clash");
+  err.textContent = "";
+  if (!text.trim()) { err.textContent = "Choose a file or paste one first."; return; }
+  const q = opts.as ? "?as=" + encodeURIComponent(opts.as) : opts.replace ? "?replace=1" : "";
+  const go = document.getElementById("wf-imp-go");
+  go.disabled = true;
+  try {
+    const r = await gwFetch("/v1/workflows/import" + q, {
+      method: "POST", headers: { "content-type": "application/json" }, body: text });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 409 && j.clash) {
+      document.getElementById("wf-imp-clash-msg").textContent =
+        "A workflow “" + j.id + "” is already here. Import this one under another id, or replace that one.";
+      const as = document.getElementById("wf-imp-as");
+      as.value = j.id + "-2";
+      clash.hidden = false;
+      as.focus(); as.select();
+      return;
+    }
+    if (!r.ok) { err.textContent = "Couldn't import: " + (j.error || ("HTTP " + r.status)); return; }
+    wfImportOpen(false);
+    const miss = (j.missing || []).length ? " Missing on this machine: " + j.missing.join("; ") + "." : "";
+    wfNote("Imported " + j.id + (j.replaces ? " (it replaces the one here once approved)" : "") +
+           ". It waits below for your approval: read its steps, then Approve." + miss);
+    await wfLoadList({ quiet: true });
+    refreshApprovals();
+  } catch (e) { err.textContent = "Couldn't import: " + (e.message || e); }
+  finally { go.disabled = false; }
+}
+function wfExportMenu(open) {
+  const m = document.getElementById("wf-export-menu");
+  if (!m || m.hidden === !open) return;
+  m.hidden = !open;
+  document.getElementById("wfExport").setAttribute("aria-expanded", String(open));
+  if (open) m.querySelector("button").focus();
+}
+/* An export is of the SAVED workflow: a new or edited one says to save first. */
+async function wfExport(lang) {
+  wfExportMenu(false);
+  if (!wf.current) { wfMsg("Save the workflow first: Export downloads the saved workflow.", "err"); return; }
+  if (wfIsDirty()) { wfMsg("Save your changes first: Export downloads the saved workflow, without them.", "err"); return; }
+  try {
+    const r = await gwFetch("/v1/workflows/" + encodeURIComponent(wf.current) + "/export?lang=" + encodeURIComponent(lang));
+    if (!r.ok) {
+      let m = "HTTP " + r.status; try { const j = await r.json(); if (j.error) m = j.error; } catch {}
+      wfMsg("Couldn't export: " + m, "err"); return;
+    }
+    const cd = r.headers.get("content-disposition") || "";
+    const name = (cd.match(/filename="([^"]+)"/) || [])[1] || ("wf_" + wf.current);
+    const blob = await r.blob(), url = URL.createObjectURL(blob), a = document.createElement("a");
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    wfMsg("Downloaded " + name + ".", "ok");
+  } catch (e) { wfMsg("Couldn't export: " + (e.message || e), "err"); }
 }
 
 /* ----- unsaved changes ----- */

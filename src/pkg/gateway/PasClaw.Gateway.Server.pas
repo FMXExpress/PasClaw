@@ -548,6 +548,9 @@ type
     procedure HandleWorkflowPendingAction(const Approve: Boolean;
       ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     procedure HandleWorkflowCreate(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+    { POST /v1/workflows/import -- a workflow file, staged for approval. }
+    procedure HandleWorkflowImport(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+    function WorkflowToolRegistered(const Name: string): Boolean;
     procedure HandleWorkflowItem(const Doc: string; ARequest: TIdHTTPRequestInfo;
                                  AResp: TIdHTTPResponseInfo);
     procedure HandleMCPTools(AResp: TIdHTTPResponseInfo);
@@ -755,6 +758,8 @@ uses
   PasClaw.Workflow,
   PasClaw.Workflow.Store,
   PasClaw.Workflow.Dispatch,  { WorkflowDispatch -- MCP / llm / registry node caller }
+  PasClaw.Workflow.Export,    { GET /v1/workflows/<id>/export }
+  PasClaw.Workflow.Share,     { POST /v1/workflows/import }
   PasClaw.MCP.Bridge,         { MCPCallStructured -- replicate search/model proxy }
   PasClaw.Tools.Types,        { TTool -- MCP tool enumeration for the palette }
   PasClaw.Skills.Zip,       { PackDirToZip -- workspace export download }
@@ -2244,6 +2249,7 @@ begin
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows/pending/approve') then HandleWorkflowPendingAction(True, ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows/pending/reject')  then HandleWorkflowPendingAction(False, ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows') then HandleWorkflowCreate(ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows/import') then HandleWorkflowImport(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp/tools') then HandleMCPTools(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/providers') then HandleProvidersList(AResponse)
     else if (ARequest.Command = 'GET') and (Copy(Doc, 1, 14) = '/v1/providers/') and
@@ -4229,8 +4235,9 @@ procedure TGatewayServer.HandleWorkflowsPending(AResp: TIdHTTPResponseInfo);
 var
   Sums: TWorkflowSummaryArray;
   Spec: TWorkflowSpec;
-  Root, O: TJsonObject; Arr: TJsonArray; i: Integer;
+  Root, O: TJsonObject; Arr, MArr: TJsonArray; i, k: Integer;
   Err: string;
+  Missing: TStringArray;
 begin
   if not FCfg.WorkflowsEnabled then begin WriteJSON(AResp, 404, '{"error":"workflows disabled"}'); Exit; end;
   Sums := ListPendingWorkflows;
@@ -4250,7 +4257,14 @@ begin
         this listing is not approved unseen }
       O.PutStr('sha256', PendingWorkflowSha(Sums[i].Id));
       if LoadPendingWorkflow(Sums[i].Id, Spec, Err) then
+      begin
         O.PutRaw('spec', WorkflowToJSON(Spec));
+        { what it needs that this machine lacks -- shown before it runs }
+        Missing := MissingRequirements(Spec, '{}', FCfg, WorkflowToolRegistered);
+        MArr := TJsonArray.Create;
+        for k := 0 to High(Missing) do MArr.AddStr(Missing[k]);
+        O.PutArray('missing', MArr);
+      end;
       Arr.AddObject(O);
     end;
     Root.PutArray('pending', Arr);
@@ -4315,15 +4329,93 @@ begin
   end;
 end;
 
+function TGatewayServer.WorkflowToolRegistered(const Name: string): Boolean;
+var
+  T: TTool;
+begin
+  Result := (FRegistry <> nil) and FRegistry.Find(Name, T);
+end;
+
+procedure TGatewayServer.HandleWorkflowImport(ARequest: TIdHTTPRequestInfo;
+  AResp: TIdHTTPResponseInfo);
+var
+  Body, Err: string;
+  R: TWorkflowImportResult;
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  Replace: Boolean;
+  i: Integer;
+begin
+  if not FCfg.WorkflowsEnabled then begin WriteJSON(AResp, 404, '{"error":"workflows disabled"}'); Exit; end;
+  Body := ReadRequestBody(ARequest);
+  Replace := (ARequest.Params.Values['replace'] = '1') or SameText(ARequest.Params.Values['replace'], 'true');
+  { Never saved from here: an imported workflow can run shell, file and MCP
+    tools, so it waits in the approvals list like an agent's. }
+  if not ImportWorkflowFile(Body, Trim(ARequest.Params.Values['as']), Replace, False,
+                            FCfg, WorkflowToolRegistered, R, Err) then
+  begin
+    Root := TJsonObject.Create;
+    try
+      Root.PutStr('error', Err);
+      if R.Clash then
+      begin
+        Root.PutBool('clash', True);
+        Root.PutStr('id', R.Id);
+        WriteJSON(AResp, 409, Root.ToJSON);
+      end
+      else
+        WriteJSON(AResp, 400, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutBool('staged', True);
+    Root.PutStr('id', R.Id);
+    Root.PutBool('replaces', R.Replaces);
+    Root.PutStr('sha256', PendingWorkflowSha(R.Id));
+    Arr := TJsonArray.Create;
+    for i := 0 to High(R.Missing) do Arr.AddStr(R.Missing[i]);
+    Root.PutArray('missing', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
 procedure TGatewayServer.HandleWorkflowItem(const Doc: string;
   ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
 var
-  Rest, Id, Body, Err, Errs, InputsJSON: string;
+  Rest, Id, Body, Err, Errs, InputsJSON, ExportText, ExportName: string;
   Spec: TWorkflowSpec; Res: TWorkflowNodeResultArray; Ok: Boolean;
   Root, O: TJsonObject; Arr: TJsonArray; i: Integer;
 begin
   if not FCfg.WorkflowsEnabled then begin WriteJSON(AResp, 404, '{"error":"workflows disabled"}'); Exit; end;
   Rest := Copy(Doc, Length('/v1/workflows/') + 1, MaxInt);
+
+  { GET /v1/workflows/<id>/export?lang=python|pascal|workflow -- the source
+    (or the portable file) as a download. No key or token is in it. }
+  if (ARequest.Command = 'GET') and (Length(Rest) > 7) and
+     (Copy(Rest, Length(Rest) - 6, 7) = '/export') then
+  begin
+    Id := Copy(Rest, 1, Length(Rest) - 7);
+    if not LoadWorkflow(Id, Spec, Err) then
+    begin WriteJSON(AResp, 404, '{"error":' + JsonStr(Err) + '}'); Exit; end;
+    Spec.Id := Id;
+    if not ExportWorkflowAs(Spec, ARequest.Params.Values['lang'], FCfg, ExportText, ExportName, Err) then
+    begin WriteJSON(AResp, 400, '{"error":' + JsonStr(Err) + '}'); Exit; end;
+    AResp.ResponseNo  := 200;
+    if Copy(ExportName, Length(ExportName) - 4, 5) = '.json' then
+      AResp.ContentType := 'application/json; charset=utf-8'
+    else
+      AResp.ContentType := 'text/plain; charset=utf-8';
+    AResp.CharSet     := 'utf-8';
+    AResp.CustomHeaders.AddValue('Content-Disposition', 'attachment; filename="' + ExportName + '"');
+    WriteBodyStream(AResp, ExportText);
+    Exit;
+  end;
 
   { POST /v1/workflows/<id>/run -- run synchronously, return per-node status. }
   if (ARequest.Command = 'POST') and (Length(Rest) > 4) and
