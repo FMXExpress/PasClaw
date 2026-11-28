@@ -2163,41 +2163,283 @@
   }
 
   /* ===== Workflow tab =====
-     The editor's layout lives in its markup; this gives it the page's
-     spacing and the nodes the page's colours. */
-  .wf-shell{display:flex;gap:1rem;width:100%;height:100%;overflow:hidden;padding:1rem 1.25rem}
-  .wf-side{flex:0 0 13rem;display:flex;flex-direction:column;gap:.5rem;overflow:auto}
-  .wf-side>.icon-btn{justify-content:center}
-  #wfList{display:flex;flex-direction:column;gap:1px}
-  #wfList button{text-align:left;background:transparent;border-color:transparent;color:var(--text-2);
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  #wfList button:hover{background:var(--surface-2);color:var(--text)}
-  .wf-main{flex:1;display:flex;flex-direction:column;gap:.5rem;overflow:hidden;min-width:0}
-  .wf-bar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
-  .wf-bar #wfName{flex:1;min-width:10rem}
-  .wf-bar #wfPalette{flex:0 1 15rem}
+     Two views. The list is laid out like Checkpoints: a heading with a
+     line on what a workflow is, the agent's staged workflows waiting for
+     approval (a warn edge, every step listed, Approve and Reject), then a
+     row per saved workflow with its step count and actions. The editor is
+     a bar (back, name, save state, then the toolbar in groups: add a step,
+     view, run, save and delete), the workflow's details behind a
+     disclosure, the canvas with the selected step's settings beside it,
+     and a run under it. Steps are cards with a type label; during and
+     after a run each carries its state as a top edge, a dot and a line.
+     Below 760px everything stacks and the canvas scrolls inside itself. */
+  #tab-workflow{flex-direction:column}
+  #wf-home{padding:1.5rem 2rem 3rem}
+  #wf-home[hidden],.wf-editor[hidden],.wf-insp[hidden],.wf-run[hidden],.wf-note[hidden],.wf-sec[hidden]{display:none}
+  .wf-wrap{max-width:58rem;margin:0 auto;display:flex;flex-direction:column;gap:1.5rem;min-width:0}
+  .wf-top{display:flex;align-items:flex-start;gap:1rem;min-width:0}
+  .wf-top>div:first-child{flex:1;min-width:0}
+  .wf-top h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--text)}
+  .wf-lead{margin:.3rem 0 0;max-width:44rem;font-size:13.5px;line-height:1.55;color:var(--text-2)}
+  .wf-lead a{white-space:nowrap}
+  .wf-lead code,.wf-sec-lead code,.wf-empty code,.wf-f small code,.wf-msg code{background:var(--surface-2);
+    border-radius:4px;padding:.03rem .3rem;font-size:.92em}
+  .wf-acts{display:flex;flex-wrap:wrap;gap:.4rem;flex:none}
+  .wf-acts .primary,.wf-empty .primary,.wf-run-go .primary{display:inline-flex;align-items:center;gap:.35rem}
+  #wf-refresh.busy svg.ic{animation:st-spin .7s linear infinite}
+  .wf-note{display:flex;align-items:flex-start;gap:.6rem;padding:.7rem .95rem;border:1px solid var(--border);
+    border-radius:var(--radius-lg);background:var(--surface);font-size:13px;line-height:1.5;color:var(--text);min-width:0}
+  .wf-note>svg.ic{flex:none;margin-top:.18rem;color:var(--ok)}
+  .wf-note.err{border-color:var(--danger-line);background:var(--danger-soft);color:var(--danger)}
+  .wf-note.err>svg.ic{color:var(--danger)}
+  .wf-note>span{flex:1;min-width:0;overflow-wrap:anywhere}
+  .wf-note .wf-x{margin:-.2rem -.35rem -.2rem 0}
+  .wf-sec{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+  .wf-sec-head{display:flex;align-items:baseline;gap:.5rem;min-width:0}
+  .wf-sec-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text)}
+  .wf-sec-head .n{font-size:12.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .wf-sec-lead{margin:-.35rem 0 0;font-size:12.5px;line-height:1.5;color:var(--text-3)}
+  .wf-list{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .wf-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:.35rem .8rem;padding:.85rem 1rem}
+  .wf-row+.wf-row{border-top:1px solid var(--border)}
+  .wf-list>.wf-row:first-child{border-top-left-radius:var(--radius-lg);border-top-right-radius:var(--radius-lg)}
+  .wf-list>.wf-row:last-child{border-bottom-left-radius:var(--radius-lg);border-bottom-right-radius:var(--radius-lg)}
+  .wf-pend>.wf-row{box-shadow:inset 3px 0 0 var(--warn)}
+  .wf-ric{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;
+    background:var(--surface-2);color:var(--text-2)}
+  .wf-pend .wf-ric{background:var(--warn-soft);color:var(--warn)}
+  .wf-rmain{display:flex;flex-direction:column;gap:.3rem;min-width:0}
+  .wf-rl1{display:flex;align-items:center;flex-wrap:wrap;gap:.3rem .5rem;min-width:0}
+  .wf-rname{min-width:0;max-width:100%;background:none;border:0;border-radius:2px;padding:0;text-align:left;
+    font-size:13.5px;font-weight:600;line-height:1.5;color:var(--text);overflow-wrap:anywhere;cursor:pointer}
+  .wf-rname:hover{background:none;color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+  span.wf-rname{cursor:default}
+  span.wf-rname:hover{color:var(--text);text-decoration:none}
+  .wf-rid{font:11.5px/1.5 var(--mono);color:var(--text-3);overflow-wrap:anywhere}
+  .wf-rdesc{margin:0;font-size:12.5px;line-height:1.5;color:var(--text-2);overflow-wrap:anywhere}
+  .wf-rside{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:.4rem}
+  .wf-tag{display:inline-flex;align-items:center;padding:0 .45rem;border-radius:999px;font-size:11px;font-weight:500;
+    line-height:1.65;white-space:nowrap;background:var(--surface-3);color:var(--text-2);font-variant-numeric:tabular-nums}
+  .wf-tag.warn{background:var(--warn-soft);color:var(--warn)}
+  .wf-tag.ok{background:var(--ok-soft);color:var(--ok)}
+  .wf-tag.err{background:var(--danger-soft);color:var(--danger)}
+  .wf-psteps{margin:.15rem 0 0;padding:0 0 0 1.2rem;display:flex;flex-direction:column;gap:.3rem;min-width:0;
+    font-size:12.5px;color:var(--text-2)}
+  .wf-psteps li{min-width:0;overflow-wrap:anywhere}
+  .wf-psteps b{font-weight:600;color:var(--text)}
+  .wf-psteps code{font:12px/1.5 var(--mono);color:var(--text-2)}
+  .wf-psteps .a{display:block;font:11.5px/1.5 var(--mono);color:var(--text-3);white-space:pre-wrap}
+  .icon-btn.wf-danger{color:var(--danger)}
+  .icon-btn.wf-danger:hover{background:var(--danger-soft);border-color:var(--danger-line);color:var(--danger)}
+  .icon-btn.wf-x{border-color:transparent;padding:.2rem .3rem}
+  .wf-empty{display:flex;gap:.9rem;align-items:flex-start;padding:1.2rem 1.25rem}
+  .wf-empty-ic{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;
+    border-radius:8px;background:var(--surface-2);color:var(--text-2)}
+  .wf-empty-ic svg.ic{width:18px;height:18px;vertical-align:0}
+  .wf-empty b{display:block;margin-bottom:.2rem;font-size:13.5px;font-weight:600;color:var(--text)}
+  .wf-empty p{margin:0 0 .75rem;max-width:40rem;font-size:13px;line-height:1.55;color:var(--text-2)}
+  .wf-msg{display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;padding:1rem 1.25rem;font-size:13px;color:var(--text-3)}
+  .wf-msg.err{color:var(--danger)}
+
+  /* The editor. */
+  .wf-editor{flex:1;min-height:0;display:flex;flex-direction:column;overflow:auto}
+  .wf-ebar{position:sticky;top:0;z-index:6;display:flex;align-items:center;flex-wrap:wrap;gap:.5rem .75rem;
+    padding:.6rem 1.25rem;background:var(--surface);border-bottom:1px solid var(--border)}
+  .wf-back{border-color:transparent;padding:.3rem .5rem}
+  #wfName{flex:1 1 12rem;min-width:8rem;max-width:24rem;font-weight:600}
+  .wf-state{display:inline-flex;align-items:center;gap:.35rem;font-size:12px;color:var(--text-3);white-space:nowrap}
+  .wf-state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--text-3)}
+  .wf-state:empty{display:none}
+  .wf-state.dirty{color:var(--warn)} .wf-state.dirty::before{background:var(--warn)}
+  .wf-state.saved::before{background:var(--ok)}
+  .wf-tools{display:flex;align-items:center;flex-wrap:wrap;gap:.5rem;margin-left:auto;min-width:0}
+  .wf-grp{display:flex;align-items:center;gap:.35rem;min-width:0}
+  .wf-grp+.wf-grp{padding-left:.5rem;border-left:1px solid var(--border)}
+  #wfPalette{width:12.5rem;min-width:0}
+  .wf-econt{display:flex;flex-direction:column;gap:.9rem;padding:1rem 1.25rem 2rem;min-width:0}
+  .wf-msgline{display:flex;align-items:flex-start;gap:.45rem;font-size:12.5px;line-height:1.5;color:var(--text-2);
+    overflow-wrap:anywhere;white-space:pre-wrap}
+  .wf-msgline:empty{display:none}
+  .wf-msgline svg.ic{margin-top:1px}
+  .wf-msgline.ok{color:var(--ok)} .wf-msgline.err{color:var(--danger)}
+  .wf-details{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .wf-details>summary{display:flex;align-items:center;gap:.5rem;padding:.6rem .9rem;cursor:pointer;list-style:none;
+    font-size:13px;font-weight:600;color:var(--text);border-radius:var(--radius-lg);min-width:0}
+  .wf-details>summary::-webkit-details-marker{display:none}
+  .wf-details>summary::before{content:"";flex:none;width:.4rem;height:.4rem;margin:0 .2rem 0 .1rem;
+    border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);
+    opacity:.75;transition:transform .12s}
+  .wf-details[open]>summary::before{transform:rotate(45deg)}
+  .wf-details-t{flex:none}
+  .wf-details-sum{min-width:0;font-weight:400;font-size:12.5px;color:var(--text-3);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .wf-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.85rem 1rem;padding:.3rem .9rem 1rem}
+  .wf-f{display:flex;flex-direction:column;gap:.3rem;min-width:0}
+  .wf-f>span{font-size:12.5px;font-weight:550;color:var(--text-2)}
+  .wf-f small{font-size:12px;line-height:1.45;color:var(--text-3)}
+  .wf-f-wide{grid-column:1/-1}
+  .wf-f textarea{resize:vertical}
+  .wf-f.chk{flex-direction:row;align-items:center;gap:.45rem}
   .wf-code{font-family:var(--mono);font-size:12px}
-  .wf-hint,#wfMsg{font-size:12px;color:var(--text-3)}
-  #wfMsg:empty{display:none}
-  #wfCanvas{position:relative;flex:1;min-height:280px;overflow:auto;
-    border:1px solid var(--border);border-radius:8px;background:var(--surface)}
-  #wfEdgeLayer path{stroke:var(--accent)}
-  /* Wires light up under the cursor (they are click-to-delete). */
-  #wfEdgeLayer path.wf-edge:hover{stroke-width:3.5}
-  .wf-node,.wf-io{color:var(--text)}
-  #wfRunPanel{border-top:1px solid var(--border);padding-top:.5rem;max-height:34%;overflow:auto}
-  #wfRunInputs{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.4rem}
-  #wfResults{margin:0;white-space:pre-wrap;font-size:12px;color:var(--text-2)}
-  #wfInspect{flex:0 0 17rem;flex-direction:column;gap:.4rem;overflow:auto;
-    border-left:1px solid var(--border);padding-left:1rem}
-  .wf-insp-head{display:flex;align-items:center;gap:.4rem}
-  .wf-insp-head #wfInspTool{font-family:var(--mono);font-size:12px;color:var(--text-3)}
-  .wf-insp-head .icon-btn{margin-left:auto}
-  #wfInspect label,#wfInspRawWrap>summary{font-size:12px;font-weight:500;color:var(--text-2)}
-  #wfInspRawWrap{margin-top:.25rem}
-  #wfInspRawWrap>summary{cursor:pointer;margin-bottom:.3rem}
-  #wfInspBody{display:flex;flex-direction:column;gap:.4rem}
-  #wfInspArgs{width:100%}
+  .wf-ebody{display:flex;gap:1rem;align-items:flex-start;min-width:0}
+  .wf-stage{flex:1;min-width:0;display:flex;flex-direction:column;gap:.5rem}
+  #wfCanvas{position:relative;height:clamp(320px,58vh,720px);min-height:240px;overflow:auto;resize:vertical;
+    border:1px solid var(--border);border-radius:var(--radius-lg);background-color:var(--surface);
+    background-image:radial-gradient(circle,var(--border-strong) 1px,transparent 1.2px);
+    background-size:24px 24px;background-position:-12px -12px;background-attachment:local}
+  #wfEdgeLayer{position:absolute;left:0;top:0;pointer-events:none;z-index:0;color:var(--text-3)}
+  #wfEdgeLayer marker path{fill:var(--text-3)}
+  #wfEdgeLayer path.wf-edge:hover{color:var(--accent);stroke-width:3.5}
+  #wfEdgeLayer path.wf-io-edge{color:var(--accent-line)}
+  .wf-hint{margin:0;font-size:12px;line-height:1.5;color:var(--text-3)}
+  .wf-cempty{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:0;pointer-events:none;
+    display:flex;flex-direction:column;align-items:center;gap:.4rem;width:min(22rem,80%);text-align:center;
+    font-size:13px;line-height:1.5;color:var(--text-3)}
+  .wf-cempty b{font-size:13.5px;font-weight:600;color:var(--text-2)}
+  .wf-cempty svg.ic{width:22px;height:22px}
+  /* Step cards: a head with the type and the id (the drag handle), the tool,
+     and after a run its state. The ports sit level with the head. */
+  .wf-node{position:absolute;z-index:1;display:flex;flex-direction:column;font-size:12px;color:var(--text);
+    background:var(--surface-2);border:1px solid var(--border-strong);border-radius:8px;
+    box-shadow:0 1px 3px rgba(0,0,0,.16);cursor:pointer;transition:border-color .12s,box-shadow .12s}
+  html.lite .wf-node{background:var(--surface);box-shadow:0 1px 3px rgba(20,25,40,.1)}
+  .wf-node:hover{border-color:var(--field-border)}
+  .wf-node.sel{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .wf-head{display:flex;align-items:center;gap:.4rem;height:34px;padding:0 .6rem;cursor:move;min-width:0;
+    border-bottom:1px solid var(--border);border-radius:8px 8px 0 0}
+  .wf-nid{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wf-kind{flex:none;display:inline-flex;align-items:center;padding:0 .4rem;border-radius:4px;font-size:10.5px;
+    font-weight:600;letter-spacing:.03em;text-transform:uppercase;line-height:1.7;background:var(--surface-3);color:var(--text-2)}
+  .wf-kind.k-llm{background:var(--accent-soft);color:var(--accent)}
+  .wf-kind.k-model{background:var(--ok-soft);color:var(--ok)}
+  .wf-kind:empty{display:none}
+  .wf-ntool{padding:.4rem .6rem;font:11.5px/1.45 var(--mono);color:var(--text-2);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .wf-ntool.p{font-family:var(--sans);font-size:12px}
+  .wf-insp-tool:empty{display:none}
+  .wf-nst{display:flex;align-items:center;gap:.35rem;margin-top:-.15rem;padding:0 .6rem .45rem;font-size:11.5px;
+    color:var(--text-3);min-width:0}
+  .wf-nst>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wf-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--text-3)}
+  .wf-node[data-st=ok]{box-shadow:inset 0 3px 0 var(--ok)}
+  .wf-node[data-st=ok] .wf-dot{background:var(--ok)}
+  .wf-node[data-st=err]{border-color:var(--danger-line);box-shadow:inset 0 3px 0 var(--danger)}
+  .wf-node[data-st=err] .wf-dot{background:var(--danger)}
+  .wf-node[data-st=err] .wf-nst{color:var(--danger)}
+  .wf-node[data-st=run]{box-shadow:inset 0 3px 0 var(--accent)}
+  .wf-node[data-st=run] .wf-dot{background:var(--accent);animation:typingPulse 1.4s ease-in-out infinite}
+  .wf-node[data-st=skip]{opacity:.62}
+  .wf-node.sel[data-st=ok]{box-shadow:inset 0 3px 0 var(--ok),0 0 0 3px var(--accent-soft)}
+  .wf-node.sel[data-st=err]{box-shadow:inset 0 3px 0 var(--danger),0 0 0 3px var(--accent-soft)}
+  .wf-node.sel[data-st=run]{box-shadow:inset 0 3px 0 var(--accent),0 0 0 3px var(--accent-soft)}
+  .wf-port{position:absolute;top:11px;width:12px;height:12px;border-radius:50%;border:2px solid var(--surface);
+    background:var(--text-3);cursor:crosshair}
+  .wf-port.wf-in{left:-7px}
+  .wf-port.wf-out{right:-7px;background:var(--accent)}
+  .wf-port.wf-out:hover{box-shadow:0 0 0 3px var(--accent-soft)}
+  .wf-io{position:absolute;z-index:1;font-size:12px;color:var(--text);border:1px dashed var(--accent-line);
+    border-radius:8px;background:var(--surface)}
+  .wf-io::before{content:"";position:absolute;inset:0;border-radius:inherit;background:var(--accent-soft);pointer-events:none}
+  .wf-io-head{position:relative;display:flex;align-items:center;height:34px;padding:0 .6rem;font-size:10.5px;font-weight:600;
+    letter-spacing:.04em;text-transform:uppercase;color:var(--accent);border-bottom:1px dashed var(--accent-line);cursor:move}
+  .wf-infield,.wf-outfield,.wf-iofield-none{position:relative;padding:.2rem .6rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wf-io>div:nth-last-child(2){padding-bottom:.45rem}
+  .wf-infield{cursor:copy}
+  .wf-infield:hover{color:var(--accent)}
+  .wf-iofield-none,.wf-outfield .drop{color:var(--text-3)}
+  .wf-io .wf-port{cursor:default}
+  .wf-io-input .wf-port{right:-7px;background:var(--accent)}
+  .wf-io-output .wf-port{left:-7px}
+  .wf-pal{position:absolute;z-index:5;width:15rem;display:flex;flex-direction:column;gap:.4rem;padding:.45rem;
+    background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-lg);box-shadow:var(--shadow-pop)}
+  .wf-pal-list{max-height:12rem;overflow:auto;display:flex;flex-direction:column;gap:1px}
+  .wf-pal-list button,.wf-pick button{text-align:left;background:transparent;border-color:transparent;font-size:12.5px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wf-pal-list button:hover,.wf-pal-list button:focus-visible,.wf-pick button:hover{background:var(--surface-2)}
+  /* The selected step's settings. */
+  .wf-insp{flex:0 0 19rem;min-width:0;display:flex;flex-direction:column;gap:.75rem;position:sticky;top:4.25rem;
+    max-height:calc(100vh - 8rem);overflow:auto;padding:.85rem 1rem 1rem;background:var(--surface);
+    border:1px solid var(--border);border-radius:var(--radius-lg)}
+  .wf-insp-head{display:flex;align-items:center;gap:.5rem;min-width:0}
+  .wf-insp-head strong{font-size:13.5px;font-weight:600}
+  .wf-insp-head .wf-x{margin-left:auto}
+  .wf-insp-tool{margin-top:-.4rem;font:12px/1.5 var(--mono);color:var(--text-3);overflow-wrap:anywhere}
+  .wf-insp-body{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+  .wf-insp-body:empty{display:none}
+  .wf-insp-body textarea{min-height:6rem}
+  .wf-search{display:flex;gap:.35rem;min-width:0}
+  .wf-search input{flex:1;min-width:0}
+  .wf-pick{display:flex;flex-direction:column;gap:1px;max-height:9rem;overflow:auto}
+  .wf-pick:empty{display:none}
+  .wf-sub{display:flex;flex-direction:column;gap:.6rem;padding-top:.6rem;border-top:1px solid var(--border)}
+  .wf-sub:empty{display:none}
+  .wf-sub-t{font-size:12.5px;font-weight:600;color:var(--text);overflow-wrap:anywhere}
+  .wf-quiet{font-size:12px;line-height:1.45;color:var(--text-3);overflow-wrap:anywhere}
+  .wf-raw>summary{cursor:pointer;font-size:12.5px;font-weight:550;color:var(--text-2);margin-bottom:.35rem;border-radius:2px}
+  .wf-raw textarea{width:100%;resize:vertical}
+  .wf-insp-foot{display:flex;padding-top:.75rem;border-top:1px solid var(--border)}
+  /* A run: its inputs, then how it went and each step's output. */
+  .wf-run{display:flex;flex-direction:column;gap:.75rem;margin-top:.4rem;padding:.9rem 1rem 1rem;background:var(--surface);
+    border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+  .wf-run-head{display:flex;align-items:center;gap:.6rem;min-width:0}
+  .wf-run-head h3{margin:0;font-size:14px;font-weight:600}
+  .wf-run-head .wf-x{margin-left:auto}
+  .wf-run-state{display:inline-flex;align-items:center;gap:.35rem;font-size:12.5px;color:var(--text-3);
+    font-variant-numeric:tabular-nums}
+  .wf-run-state.run::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent);
+    animation:typingPulse 1.4s ease-in-out infinite}
+  .wf-run-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(14rem,1fr));gap:.75rem 1rem;align-items:end}
+  .wf-run-go{display:flex;align-items:center;gap:.5rem}
+  .wf-results{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+  .wf-results:empty{display:none}
+  .wf-sum{display:flex;align-items:flex-start;gap:.6rem;padding:.65rem .9rem;border:1px solid var(--border);
+    border-radius:8px;font-size:13px;line-height:1.5;min-width:0}
+  .wf-sum svg.ic{margin-top:.15rem}
+  .wf-sum>div{flex:1;min-width:0;overflow-wrap:anywhere}
+  .wf-sum.ok{background:var(--ok-soft)}
+  .wf-sum.ok svg.ic{color:var(--ok)}
+  .wf-sum.err{border-color:var(--danger-line);background:var(--danger-soft)}
+  .wf-sum.err svg.ic,.wf-sum.err b{color:var(--danger)}
+  .wf-sum .m{display:block;font-size:12.5px;color:var(--text-2)}
+  .wf-sum code{font:12px/1.5 var(--mono)}
+  .wf-steps{list-style:none;margin:0;padding:0;border:1px solid var(--border);border-radius:8px;min-width:0}
+  .wf-step{display:grid;grid-template-columns:auto minmax(0,1fr);gap:.35rem .6rem;padding:.6rem .8rem;min-width:0}
+  .wf-step+.wf-step{border-top:1px solid var(--border)}
+  .wf-step .wf-dot{margin-top:.45rem}
+  .wf-step.ok .wf-dot{background:var(--ok)} .wf-step.err .wf-dot{background:var(--danger)}
+  .wf-step.skip{color:var(--text-3)}
+  .wf-step-l1{display:flex;align-items:center;flex-wrap:wrap;gap:.25rem .5rem;min-width:0}
+  .wf-step-l1 b{font-size:13px;font-weight:600;overflow-wrap:anywhere}
+  .wf-step-l1 code{font:11.5px/1.5 var(--mono);color:var(--text-3);overflow-wrap:anywhere}
+  .wf-step-out{grid-column:2;margin:0;max-height:14rem;overflow:auto;padding:.5rem .65rem;border-radius:6px;
+    background:var(--code);border:1px solid var(--border);font:12px/1.5 var(--mono);color:var(--text-2);
+    white-space:pre-wrap;overflow-wrap:anywhere}
+  .wf-step.err .wf-step-out{color:var(--danger);border-color:var(--danger-line)}
+  @media (max-width:1100px){
+    .wf-insp{flex-basis:16.5rem}
+  }
+  @media (max-width:760px){
+    #wf-home{padding:1rem 1rem 2rem}
+    .wf-top{flex-direction:column;gap:.75rem}
+    .wf-row{grid-template-columns:auto minmax(0,1fr)}
+    .wf-rside{grid-column:2;justify-content:flex-start}
+    .wf-ebar{padding:.5rem .75rem;gap:.45rem .5rem}
+    #wfName{flex:1 1 0;max-width:none}
+    .wf-back span{display:none}
+    .wf-tools{margin-left:0;flex:1 1 100%}
+    .wf-grp+.wf-grp{padding-left:0;border-left:0}
+    .wf-grp:first-child{flex:1 1 100%}
+    #wfPalette{flex:1;width:auto}
+    .wf-econt{padding:.75rem .75rem 1.5rem}
+    .wf-form{grid-template-columns:minmax(0,1fr)}
+    .wf-ebody{flex-direction:column;align-items:stretch}
+    #wfCanvas{height:24rem}
+    .wf-insp{position:static;flex:none;max-height:none}
+    .wf-run-form{grid-template-columns:minmax(0,1fr)}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .wf-node[data-st=run] .wf-dot,.wf-run-state.run::before,#wf-refresh.busy svg.ic{animation:none}
+  }
 
   /* ===== Markdown =====
      Shared by chat replies (.bub.md) and the file / memory viewers
@@ -2273,12 +2515,6 @@
     .bg-body{padding:.9rem .75rem 1.1rem}
     form.bg-msg{width:calc(100% - 1.5rem);margin-bottom:.75rem}
     .bg-msg-hint{display:none}
-    /* The workflow editor stacks: list, then the editor, then the inspector. */
-    .wf-shell{flex-direction:column;overflow:auto}
-    .wf-side,.wf-main,#wfInspect{flex:none}
-    .wf-main{overflow:visible}
-    #wfCanvas{flex:none;height:22rem}
-    #wfInspect{border-left:0;padding-left:0;border-top:1px solid var(--border);padding-top:.75rem}
     #log{padding:1rem .75rem 1.5rem}
     form.send{width:calc(100% - 1.5rem);margin-bottom:.75rem}
     .pane,#subpane-setup,#facts-box{padding:.9rem}
@@ -2352,6 +2588,8 @@
   <symbol id="i-lg-pause" viewBox="0 0 16 16"><path d="M5.75 3.5v9M10.25 3.5v9"/></symbol>
   <symbol id="i-lg-clear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75"/><path d="m3.95 12.05 8.1-8.1"/></symbol>
   <symbol id="i-kb-book" viewBox="0 0 16 16"><path d="M3 3.25A1.25 1.25 0 0 1 4.25 2h8.25v9.5H4.25A1.25 1.25 0 0 0 3 12.75z"/><path d="M3 12.75A1.25 1.25 0 0 0 4.25 14h8.25v-2.5M6 5.25h4"/></symbol>
+  <symbol id="i-wf-flow" viewBox="0 0 16 16"><rect x="1.75" y="2.75" width="4.5" height="3.5" rx="1"/><rect x="9.75" y="9.75" width="4.5" height="3.5" rx="1"/><path d="M6.25 4.5h1.5a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 0 1.5 1.5"/></symbol>
+  <symbol id="i-wf-fit" viewBox="0 0 16 16"><path d="M2.75 5.75v-3h3M10.25 2.75h3v3M13.25 10.25v3h-3M5.75 13.25h-3v-3"/><rect x="5.75" y="5.75" width="4.5" height="4.5" rx="1"/></symbol>
 </defs></svg>
 <header>
   <span class="logo"><span class="blue">Pas</span><span class="red">Claw</span></span>
@@ -3131,49 +3369,117 @@
   </div>
 
   <div id="tab-workflow" class="tab">
-    <div class="wf-shell">
-      <div class="wf-side">
-        <button id="wfNew" class="icon-btn"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>New workflow</button>
-        <div id="wfList"></div>
+    <!-- Workflow: the list (GET /v1/workflows, and GET /v1/workflows/pending
+         for what the agent staged), or one workflow open in the editor: a
+         canvas of steps (GET/POST /v1/workflows[/<id>]), the selected
+         step's settings beside it, and a run (POST /v1/workflows/<id>/run)
+         under it. Names, ids, prompts and run output are drawn as text. -->
+    <div class="pane" id="wf-home">
+      <div class="wf-wrap">
+        <header class="wf-top">
+          <div>
+            <h2>Workflows</h2>
+            <p class="wf-lead">A workflow is a saved chain of steps. Each step calls a tool, an MCP tool or a model, and later steps read what earlier ones returned. Every saved workflow is also a tool the agent can call, named <code>wf_&lt;id&gt;</code>.
+              <a href="https://github.com/FMXExpress/PasClaw/blob/main/docs/workflows.md" target="_blank" rel="noopener">How it works</a></p>
+          </div>
+          <div class="wf-acts">
+            <button type="button" class="icon-btn" id="wf-refresh" aria-label="Refresh" title="Refresh"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+            <button type="button" class="primary" id="wfNew"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>New workflow</button>
+          </div>
+        </header>
+        <div class="wf-note" id="wf-note" role="status" hidden></div>
+        <section class="wf-sec" id="wf-pend-sec" aria-labelledby="wf-pend-h" hidden>
+          <div class="wf-sec-head"><h3 id="wf-pend-h">Waiting for your approval</h3><span class="n" id="wf-pend-n"></span></div>
+          <p class="wf-sec-lead">The agent saved these when nobody could be asked. They don't run and aren't tools until you approve them.</p>
+          <div class="wf-list wf-pend" id="wf-pend"></div>
+        </section>
+        <section class="wf-sec" aria-labelledby="wf-saved-h">
+          <div class="wf-sec-head"><h3 id="wf-saved-h">Saved</h3><span class="n" id="wf-saved-n"></span></div>
+          <div class="wf-list" id="wfList" aria-live="polite"><div class="wf-msg">Loading workflows…</div></div>
+        </section>
       </div>
-      <div class="wf-main">
-        <div class="wf-bar">
-          <input id="wfName" placeholder="Workflow name (letters, digits, _ -)">
-          <select id="wfPalette"><option value="">Add a node…</option></select>
-          <button id="wfAddNode" class="icon-btn"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Node</button>
-          <button id="wfRun" class="icon-btn"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Run</button>
-          <button id="wfDelete" class="icon-btn">Delete</button>
-          <button id="wfSave" class="primary">Save</button>
+    </div>
+
+    <div class="wf-editor" id="wf-editor" hidden>
+      <div class="wf-ebar">
+        <button type="button" class="icon-btn wf-back" id="wf-back" title="Back to the list"><svg class="ic" aria-hidden="true"><use href="#i-back"/></svg><span>Workflows</span></button>
+        <input id="wfName" placeholder="Workflow name" aria-label="Workflow name" autocomplete="off" spellcheck="false"
+               title="Letters, digits, - and _. It is also the id when the workflow is new.">
+        <span class="wf-state" id="wf-state" role="status" aria-live="polite"></span>
+        <div class="wf-tools">
+          <div class="wf-grp" role="group" aria-label="Add a step">
+            <select id="wfPalette" aria-label="Step to add"><option value="">Choose a step…</option></select>
+            <button type="button" id="wfAddNode" class="icon-btn"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Add step</button>
+          </div>
+          <div class="wf-grp" role="group" aria-label="View">
+            <button type="button" id="wf-fit" class="icon-btn" title="Scroll the canvas to the steps (F)"><svg class="ic" aria-hidden="true"><use href="#i-wf-fit"/></svg>Fit</button>
+          </div>
+          <div class="wf-grp" role="group" aria-label="Workflow">
+            <button type="button" id="wfRun" class="icon-btn" title="Run it (saves first when it has changed)"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Run</button>
+            <button type="button" id="wfSave" class="primary">Save</button>
+            <button type="button" id="wfDelete" class="icon-btn wf-danger" title="Delete this workflow" aria-label="Delete this workflow"><svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg></button>
+          </div>
         </div>
-        <input id="wfDesc" placeholder="Description (optional)">
-        <input id="wfOutputDir" placeholder="Output folder (workflows/&lt;id&gt;)" title="Where runs write their outputs, under the workspace. Empty = workflows/<id>/<timestamp>.">
-        <input id="wfInputs" placeholder="Inputs (comma-separated names, e.g. prompt)">
-        <textarea id="wfOutputs" rows="2" class="wf-code"
-          placeholder="Outputs, one per line: name = template.  e.g.  video_url = {{nodes.animate.output[0]}}"></textarea>
-        <textarea id="wfLoop" rows="2" class="wf-code"
-          placeholder="Loop (optional): max = 5 · until = {{nodes.judge.done}} · one feedback per line: output -> input"></textarea>
-        <div class="wf-hint">Drag a node by its title to move it. Drag from a node's right port to another node's left port to connect them. Click a node to edit its arguments.</div>
-        <div id="wfCanvas">
-          <svg id="wfEdgeLayer" style="position:absolute;left:0;top:0;pointer-events:none;z-index:0"></svg>
-        </div>
-        <div id="wfRunPanel" style="display:none">
-          <div id="wfRunInputs"></div>
-          <pre id="wfResults"></pre>
-        </div>
-        <div id="wfMsg"></div>
       </div>
-      <div id="wfInspect" style="display:none">
-        <div class="wf-insp-head">
-          <strong>Node</strong><span id="wfInspTool"></span>
-          <button id="wfInspDel" class="icon-btn">Delete node</button>
-        </div>
-        <label for="wfInspId">Id</label>
-        <input id="wfInspId">
-        <div id="wfInspBody"></div>
-        <details id="wfInspRawWrap">
-          <summary>Raw arguments (JSON)</summary>
-          <textarea id="wfInspArgs" rows="10" class="wf-code"></textarea>
+      <div class="wf-econt">
+        <div id="wfMsg" class="wf-msgline" role="status" aria-live="polite"></div>
+        <details class="wf-details" id="wf-details">
+          <summary><span class="wf-details-t">Description, inputs and outputs</span><span class="wf-details-sum" id="wf-details-sum"></span></summary>
+          <div class="wf-form">
+            <label class="wf-f wf-f-wide"><span>Description</span>
+              <input id="wfDesc" placeholder="What it does, in a line (optional)"></label>
+            <label class="wf-f"><span>Inputs</span>
+              <input id="wfInputs" placeholder="Comma-separated names, e.g. prompt" spellcheck="false">
+              <small>Steps read each one as <code>{{inputs.name}}</code>.</small></label>
+            <label class="wf-f"><span>Output folder</span>
+              <input id="wfOutputDir" placeholder="workflows/&lt;id&gt;" spellcheck="false">
+              <small>Where runs write their outputs, under the workspace. Empty: <code>workflows/&lt;id&gt;/&lt;time&gt;</code>.</small></label>
+            <label class="wf-f"><span>Outputs</span>
+              <textarea id="wfOutputs" rows="2" class="wf-code" spellcheck="false"
+                placeholder="video_url = {{nodes.animate.output[0]}}"></textarea>
+              <small>One per line: <code>name = template</code>. Or drag a step's right dot onto the Outputs box.</small></label>
+            <label class="wf-f"><span>Loop</span>
+              <textarea id="wfLoop" rows="2" class="wf-code" spellcheck="false"
+                placeholder="max = 5&#10;until = {{nodes.judge.done}}"></textarea>
+              <small>Optional: <code>max = N</code>, <code>until = template</code>, and one <code>output -&gt; input</code> per line.</small></label>
+          </div>
         </details>
+        <div class="wf-ebody">
+          <div class="wf-stage">
+            <div id="wfCanvas" aria-label="Workflow canvas">
+              <svg id="wfEdgeLayer" aria-hidden="true"><defs><marker id="wf-arrow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 .5 8 4 0 7.5z"/></marker></defs></svg>
+            </div>
+            <p class="wf-hint">Drag a step by its title to move it. Drag from its right dot to another step's left dot to connect them; click a connection to remove it. Double-click the canvas to add a step there.</p>
+            <section id="wfRunPanel" class="wf-run" aria-labelledby="wf-run-h" hidden>
+              <div class="wf-run-head">
+                <h3 id="wf-run-h">Run</h3>
+                <span class="wf-run-state" id="wf-run-state"></span>
+                <button type="button" class="icon-btn wf-x" id="wf-run-close" aria-label="Close the run" title="Close"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
+              </div>
+              <form id="wfRunInputs" class="wf-run-form"></form>
+              <div id="wfResults" class="wf-results" aria-live="polite"></div>
+            </section>
+          </div>
+          <aside id="wfInspect" class="wf-insp" aria-label="Step settings" hidden>
+            <div class="wf-insp-head">
+              <span class="wf-kind" id="wf-insp-kind"></span>
+              <strong>Step settings</strong>
+              <button type="button" class="icon-btn wf-x" id="wf-insp-close" aria-label="Close step settings" title="Close"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
+            </div>
+            <div class="wf-insp-tool" id="wfInspTool"></div>
+            <label class="wf-f"><span>Step id</span>
+              <input id="wfInspId" spellcheck="false" autocomplete="off">
+              <small>Later steps read its output as <code>{{nodes.id}}</code>.</small></label>
+            <div id="wfInspBody" class="wf-insp-body"></div>
+            <details id="wfInspRawWrap" class="wf-raw">
+              <summary>Arguments as JSON</summary>
+              <textarea id="wfInspArgs" rows="10" class="wf-code" spellcheck="false" aria-label="Arguments as JSON"></textarea>
+            </details>
+            <div class="wf-insp-foot">
+              <button type="button" id="wfInspDel" class="icon-btn wf-danger"><svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg>Delete step</button>
+            </div>
+          </aside>
+        </div>
       </div>
     </div>
   </div>
@@ -10292,31 +10598,50 @@ function initParams() {
   loadParamsForActive();
 }
 
-/* ===== Workflow tab (drag-and-drop canvas) ===== */
-const wf = { tools: [], nodes: [], edges: [], inputs: [], current: null, sel: null };
+/* ===== Workflow tab =====
+   Two views: the list of saved workflows (with what the agent staged for
+   approval above it) and one workflow open in the editor, a drag-and-drop
+   canvas of steps. Everything a workflow, a step or a run carries is
+   drawn as text: names, ids, descriptions, prompts and output go through
+   textContent or escapeHtml. */
+const wf = { tools: [], nodes: [], edges: [], inputs: [], current: null, sel: null,
+             loadedName: "", savedSig: null, running: false };
 let wfBound = false;
 let wfConnect = null;   // { from, tmp: <svg line> } while dragging a connection
 /* Movable INPUT/OUTPUT box positions (logical, like node x/y). null means
    "the classic left/right defaults" -- older specs and Studio saves without a
    ui block land there and look exactly as before. */
 let wfIO = { inx: null, iny: null, outx: null, outy: null };
-/* Last run's per-node verdicts: id -> {ok, line}. Painted as a badge dot +
-   first-line preview on the node so a run is debuggable without leaving
-   the canvas. Reset on load/new -- badges belong to a run, not a spec. */
+/* The last run's state per step: id -> {st, line}, st one of run (the run
+   is in flight), ok, err, skip (the run ended before it). Painted on the
+   step's card so a run is debuggable without leaving the canvas. Reset on
+   load/new -- this belongs to a run, not a spec. */
 let wfRunStatus = {};
-let wfPal = null;       // the floating add-node palette (dbl-click), if open
+let wfPal = null;       // the floating add-step palette (dbl-click), if open
+let wfRunTick = null;   // the elapsed-time ticker while a run is in flight
 
 const NS = "http://www.w3.org/2000/svg";
-const NODE_W = 150, PORT_Y = 20;
+const NODE_W = 168, PORT_Y = 11;   // the port's centre is PORT_Y + 6: level with the 34px head
 const WF_GRID = 24;
-const NODE_H = 64;      // painted node height, for the overlap test only
+const NODE_H = 84;      // painted node height, for the overlap test only
 const wfSnap = v => Math.max(0, Math.round(v / WF_GRID) * WF_GRID);
+const wfEl = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const wfPlural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+/* The tool a saved workflow is served as (WorkflowToolName in the engine). */
+const wfToolName = id => ("wf_" + id).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+/* A step's type, for its label: [class suffix, label]. */
+function wfKindOf(tool) {
+  const t = String(tool || "");
+  if (t === "llm") return ["llm", "LLM"];
+  if (t === "replicate") return ["model", "Model"];
+  if (t.includes("__")) return ["mcp", "MCP"];
+  return ["tool", "Tool"];
+}
 
 /* Walk the diagonal from (x,y) until a node dropped there would not OVERLAP
    one already placed. Measured as box intersection, not as a shared anchor:
-   two anchors a grid step apart still cover most of each other at
-   150xNODE_H, which reads as one obscured node. Bounded so a pathological
-   graph cannot spin the loop. */
+   two anchors a grid step apart still cover most of each other, which reads
+   as one obscured node. Bounded so a pathological graph cannot spin the loop. */
 function wfFreeSlot(x, y) {
   const hits = (px, py) => wf.nodes.some(m =>
     px < m.x + NODE_W && px + NODE_W > m.x && py < m.y + NODE_H && py + NODE_H > m.y);
@@ -10327,22 +10652,34 @@ function wfFreeSlot(x, y) {
 async function wfInit() {
   if (!wfBound) {
     wfBound = true;
-    document.getElementById("wfNew").addEventListener("click", wfNewClicked);
-    document.getElementById("wfAddNode").addEventListener("click", wfAddNode);
-    document.getElementById("wfSave").addEventListener("click", wfSave);
-    document.getElementById("wfCanvas").addEventListener("mousedown", wfStartPan);
-    document.getElementById("wfRun").addEventListener("click", wfRun);
-    document.getElementById("wfDelete").addEventListener("click", wfDelete);
-    document.getElementById("wfInspId").addEventListener("change", wfRenameSel);
-    document.getElementById("wfInspArgs").addEventListener("input", e => {
+    const on = (id, ev, fn) => document.getElementById(id).addEventListener(ev, fn);
+    on("wfNew", "click", () => wfNewClicked());
+    on("wf-refresh", "click", () => wfLoadList());
+    on("wf-back", "click", () => wfBackToList());
+    on("wfAddNode", "click", wfAddNode);
+    on("wfSave", "click", wfSave);
+    on("wf-fit", "click", wfFitView);
+    on("wfCanvas", "mousedown", wfStartPan);
+    on("wfRun", "click", wfRun);
+    on("wfDelete", "click", () => wfDelete(wf.current, document.getElementById("wfName").value.trim()));
+    on("wfInspId", "change", wfRenameSel);
+    on("wfInspArgs", "input", e => {
       const n = wf.nodes.find(x => x.id === wf.sel); if (n) n.args = e.target.value;
     });
-    document.getElementById("wfInspDel").addEventListener("click", () => { if (wf.sel) wfDeleteNode(wf.sel); });
+    on("wfInspDel", "click", () => { if (wf.sel) wfDeleteNode(wf.sel); });
+    on("wf-insp-close", "click", () => wfSelect(null));
+    on("wf-run-close", "click", () => { document.getElementById("wfRunPanel").hidden = true; });
     /* Redraw the Input/Output boxes live as their fields are edited. */
-    document.getElementById("wfInputs").addEventListener("input", wfRender);
-    document.getElementById("wfOutputs").addEventListener("input", wfRender);
-    /* Double-click empty canvas: searchable add-node palette AT that spot. */
-    document.getElementById("wfCanvas").addEventListener("dblclick", ev => {
+    on("wfInputs", "input", wfRender);
+    on("wfOutputs", "input", wfRender);
+    /* Any edit anywhere in the editor: recount what is unsaved. */
+    on("wf-editor", "input", e => { if (!e.target.closest("#wfRunPanel")) wfUpdateState(); });
+    on("wf-editor", "change", e => { if (!e.target.closest("#wfRunPanel")) wfUpdateState(); });
+    on("wf-editor", "keydown", e => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "s") { e.preventDefault(); wfSave(); }
+    });
+    /* Double-click empty canvas: searchable add-step palette AT that spot. */
+    on("wfCanvas", "dblclick", ev => {
       const canvas = ev.currentTarget;
       if (ev.target !== canvas && ev.target.id !== "wfEdgeLayer") return;
       const r = canvas.getBoundingClientRect();
@@ -10353,138 +10690,305 @@ async function wfInit() {
       if (wfPal && !wfPal.contains(ev.target)) wfHidePalette();
     });
     document.addEventListener("keydown", wfKeydown);
+    tabHooks.workflow = {
+      leave: () => !wfIsDirty() || confirm(wfLeaveText() +
+        "\n\nLeave the tab anyway? Your edits stay in the editor until you save or discard them."),
+      /* Back on the list: pick up what changed elsewhere (the agent, the CLI). */
+      show() { if (document.getElementById("wf-editor").hidden) wfLoadList({ quiet: true }); },
+    };
+    window.addEventListener("beforeunload", e => { if (wfIsDirty()) { e.preventDefault(); e.returnValue = ""; } });
   }
-  try { wf.tools = (await (await gwFetch("/v1/mcp/tools")).json()).tools || []; }
-  catch (e) { wf.tools = []; }
-  const pal = document.getElementById("wfPalette");
-  pal.innerHTML = '<option value="">Add a node…</option>' +
-    '<option value="replicate">Model (Replicate) — run a model</option>' +
-    '<option value="llm">LLM — call a provider</option>' +
-    (wf.tools.length
-      ? '<optgroup label="Advanced: raw MCP tools">' +
-        wf.tools.map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("") +
-        '</optgroup>' : '');
+  wfLoadTools();
   await wfLoadList();
-  if (!wf.current) wfNewClicked();
 }
 
-async function wfLoadList() {
-  const box = document.getElementById("wfList");
+/* The step palette: the two built-in step kinds, then the MCP tools. */
+async function wfLoadTools() {
+  try { wf.tools = (await (await gwFetch("/v1/mcp/tools")).json()).tools || []; }
+  catch (e) { wf.tools = []; }
+  document.getElementById("wfPalette").innerHTML = '<option value="">Choose a step…</option>' +
+    '<optgroup label="Steps"><option value="llm">LLM: call a model</option>' +
+    '<option value="replicate">Model: run one on Replicate</option></optgroup>' +
+    (wf.tools.length
+      ? '<optgroup label="MCP tools">' +
+        wf.tools.map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("") +
+        '</optgroup>' : '');
+}
+
+function wfShowView(editing) {
+  document.getElementById("wf-home").hidden = editing;
+  document.getElementById("wf-editor").hidden = !editing;
+  if (!editing) wfHidePalette();
+}
+
+/* The note above the list: what the last action did. */
+function wfNote(msg, err) {
+  const n = document.getElementById("wf-note");
+  if (!msg) { n.hidden = true; n.textContent = ""; return; }
+  n.className = "wf-note" + (err ? " err" : "");
+  n.innerHTML = icon(err ? "alert" : "check");
+  n.appendChild(wfEl("span", "", msg));
+  const x = wfEl("button", "icon-btn wf-x"); x.type = "button";
+  x.setAttribute("aria-label", "Dismiss"); x.title = "Dismiss"; x.innerHTML = icon("x");
+  x.addEventListener("click", () => wfNote(""));
+  n.appendChild(x);
+  n.hidden = false;
+}
+
+async function wfLoadList(opts = {}) {
+  const box = document.getElementById("wfList"), btn = document.getElementById("wf-refresh");
+  if (!opts.quiet && !box.querySelector(".wf-row")) box.innerHTML = '<div class="wf-msg">Loading workflows…</div>';
+  btn.classList.add("busy");
   try {
-    const ws = (await (await gwFetch("/v1/workflows")).json()).workflows || [];
-    box.innerHTML = ws.length ? "" : '<div class="wf-hint">No workflows yet</div>';
-    ws.forEach(w => {
-      const b = document.createElement("button");
-      b.textContent = w.name + " (" + w.nodes + ")";
-      b.style.textAlign = "left";
-      b.addEventListener("click", () => wfLoad(w.id));
-      box.appendChild(b);
+    let ws;
+    try {
+      const r = await gwFetch("/v1/workflows");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(new Error(j.error || ("HTTP " + r.status)), { off: /disabled/.test(j.error || "") });
+      ws = j.workflows || [];
+    } catch (e) {
+      document.getElementById("wf-saved-n").textContent = "";
+      document.getElementById("wf-pend-sec").hidden = true;
+      box.innerHTML = "";
+      const m = wfEl("div", "wf-msg err");
+      if (e.off) m.innerHTML = 'Workflows are turned off. Turn on <b>Workflows</b> in Settings (<code>workflows_enabled</code>), then refresh.';
+      else m.textContent = "Couldn't load the workflows: " + (e.message || e);
+      const again = wfEl("button", "icon-btn", "Try again"); again.type = "button";
+      again.addEventListener("click", () => wfLoadList());
+      m.appendChild(again);
+      box.appendChild(m);
+      return;
+    }
+    wfRenderList(ws);
+    await wfLoadPending();
+  } finally { btn.classList.remove("busy"); }
+}
+
+function wfRenderList(ws) {
+  const box = document.getElementById("wfList");
+  document.getElementById("wf-saved-n").textContent = ws.length ? String(ws.length) : "";
+  box.innerHTML = "";
+  if (!ws.length) {
+    box.innerHTML = '<div class="wf-empty"><span class="wf-empty-ic">' + icon("wf-flow") + '</span><div>' +
+      '<b>No workflows yet</b><p>Chain tools and models into steps, run them here, and the agent can call each one as a tool. ' +
+      'The agent can build them too, with <code>workflow_save</code>.</p>' +
+      '<button type="button" class="primary" data-act="new">' + icon("plus") + 'New workflow</button></div></div>';
+    box.querySelector("[data-act=new]").addEventListener("click", () => wfNewClicked());
+    return;
+  }
+  ws.slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)))
+    .forEach(w => {
+      const row = wfEl("div", "wf-row"); row.dataset.id = w.id;
+      const ic = wfEl("span", "wf-ric"); ic.innerHTML = icon("wf-flow");
+      const main = wfEl("div", "wf-rmain"), l1 = wfEl("div", "wf-rl1");
+      const name = wfEl("button", "wf-rname", w.name || w.id);
+      name.type = "button"; name.title = "Open in the editor";
+      name.addEventListener("click", () => wfLoad(w.id));
+      l1.appendChild(name);
+      const tool = wfEl("span", "wf-rid", wfToolName(w.id));
+      tool.title = "Agents call it as this tool";
+      l1.appendChild(tool);
+      main.appendChild(l1);
+      if (w.description) main.appendChild(wfEl("p", "wf-rdesc", w.description));
+      const side = wfEl("div", "wf-rside");
+      side.appendChild(wfEl("span", "wf-tag wf-rsteps", wfPlural(w.nodes || 0, "step")));
+      const run = wfEl("button", "icon-btn"); run.type = "button"; run.dataset.act = "run";
+      run.innerHTML = icon("play") + "Run"; run.title = "Open it and run it";
+      run.addEventListener("click", async () => { if (await wfLoad(w.id)) wfRun(); });
+      const open = wfEl("button", "icon-btn", "Open"); open.type = "button"; open.dataset.act = "open";
+      open.addEventListener("click", () => wfLoad(w.id));
+      const del = wfEl("button", "icon-btn wf-danger"); del.type = "button"; del.dataset.act = "delete";
+      del.innerHTML = icon("trash"); del.title = "Delete"; del.setAttribute("aria-label", "Delete " + (w.name || w.id));
+      del.addEventListener("click", () => wfDelete(w.id, w.name || w.id));
+      side.append(run, open, del);
+      row.append(ic, main, side);
+      box.appendChild(row);
     });
-  } catch (e) { box.innerHTML = '<div class="wf-hint">Workflows are disabled or unavailable</div>'; return; }
-  await wfLoadPending(box);
 }
 
 /* Workflows the agent saved, waiting for approval (workflow_save stages
-   them unless workflows_auto_approve). Each shows every step it would
-   call with which arguments -- the thing to read before approving -- and
-   approve sends back the sha256 it was listed with, so a version staged
-   after this listing is refused rather than approved unseen. */
-async function wfLoadPending(box) {
+   them when nobody can be asked, unless workflows_auto_approve). Each shows
+   every step it would call with which arguments -- the thing to read before
+   approving -- and approve sends back the sha256 it was listed with, so a
+   version staged after this listing is refused rather than approved unseen. */
+async function wfLoadPending() {
+  const sec = document.getElementById("wf-pend-sec"), box = document.getElementById("wf-pend");
   let p;
-  try { p = await (await gwFetch("/v1/workflows/pending")).json(); } catch { return; }
-  if (!p || !p.pending || !p.pending.length) return;
-  const hdr = document.createElement("div");
-  hdr.className = "wf-hint";
-  hdr.style.marginTop = "10px";
-  hdr.style.fontWeight = "600";
-  hdr.textContent = "Waiting for approval (" + p.pending.length + ")";
-  box.appendChild(hdr);
-  p.pending.forEach(w => {
-    const card = document.createElement("div");
-    card.className = "wf-pending";
-    card.style.cssText = "border:1px solid var(--border);border-radius:6px;padding:6px;margin-top:6px";
-    const steps = ((w.spec && w.spec.nodes) || []).map(n =>
-      (n.id || "") + "  " + (n.tool || "") + "\n    " + JSON.stringify(n.args || {})).join("\n");
-    card.innerHTML =
-        `<div><b>${escapeHtml(w.name || w.id)}</b> <span class="wf-hint">${w.nodes} step(s)` +
-        (w.replaces ? " · replaces the saved one" : "") + `</span></div>` +
-        (w.description ? `<div class="wf-hint">${escapeHtml(w.description)}</div>` : "") +
-        `<details><summary class="wf-hint">steps</summary>` +
-        `<pre style="white-space:pre-wrap;font-size:11px;margin:4px 0">${escapeHtml(steps)}</pre></details>` +
-        `<div style="display:flex;gap:6px;margin-top:4px">` +
-        `<button class="primary wf-approve" type="button">approve</button>` +
-        `<button class="wf-reject" type="button">reject</button></div>`;
-    card.querySelector(".wf-approve").addEventListener("click", () => wfPendingAction(w, "approve"));
-    card.querySelector(".wf-reject").addEventListener("click", () => wfPendingAction(w, "reject"));
-    box.appendChild(card);
+  try { const r = await gwFetch("/v1/workflows/pending"); p = r.ok ? await r.json() : null; } catch { p = null; }
+  const list = (p && p.pending) || [];
+  sec.hidden = !list.length;
+  document.getElementById("wf-pend-n").textContent = list.length ? String(list.length) : "";
+  box.innerHTML = "";
+  list.forEach(w => {
+    const row = wfEl("div", "wf-row"); row.dataset.id = w.id;
+    const ic = wfEl("span", "wf-ric"); ic.innerHTML = icon("alert");
+    const main = wfEl("div", "wf-rmain"), l1 = wfEl("div", "wf-rl1");
+    l1.appendChild(wfEl("span", "wf-rname", w.name || w.id));
+    l1.appendChild(wfEl("span", "wf-tag", wfPlural(w.nodes || 0, "step")));
+    if (w.replaces) l1.appendChild(wfEl("span", "wf-tag warn", "Replaces the saved one"));
+    main.appendChild(l1);
+    if (w.description) main.appendChild(wfEl("p", "wf-rdesc", w.description));
+    const ol = wfEl("ol", "wf-psteps");
+    ((w.spec && w.spec.nodes) || []).forEach(n => {
+      const li = wfEl("li");
+      li.appendChild(wfEl("b", "", n.id || ""));
+      li.appendChild(document.createTextNode(" "));
+      li.appendChild(wfEl("code", "", n.tool || ""));
+      li.appendChild(wfEl("span", "a", JSON.stringify(n.args || {})));
+      ol.appendChild(li);
+    });
+    main.appendChild(ol);
+    const side = wfEl("div", "wf-rside");
+    const ok = wfEl("button", "primary wf-approve", "Approve"); ok.type = "button";
+    const no = wfEl("button", "icon-btn wf-reject", "Reject"); no.type = "button";
+    ok.addEventListener("click", () => wfPendingAction(w, "approve", ok));
+    no.addEventListener("click", () => wfPendingAction(w, "reject", no));
+    side.append(ok, no);
+    row.append(ic, main, side);
+    box.appendChild(row);
   });
 }
 
-async function wfPendingAction(w, what) {
+async function wfPendingAction(w, what, btn) {
+  if (btn) btn.disabled = true;
   try {
     const r = await gwFetch("/v1/workflows/pending/" + what, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ id: w.id, sha256: w.sha256 }) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) wfMsg(what === "approve"
-      ? "Approved " + w.id + " — it runs now, and agents can call it as a tool"
-      : "Discarded " + w.id);
-    else wfMsg(what + " failed: " + (j.error || ("http " + r.status)));
-  } catch (e) { wfMsg(what + " failed: " + e); }
-  await wfLoadList();
+    if (r.ok) wfNote(what === "approve"
+      ? "Approved " + (w.name || w.id) + ". It runs now, and agents can call it as " + wfToolName(w.id) + "."
+      : "Rejected " + (w.name || w.id) + ". It was discarded.");
+    else wfNote((what === "approve" ? "Couldn't approve " : "Couldn't reject ") + (w.name || w.id) + ": " +
+                (j.error || ("HTTP " + r.status)), true);
+  } catch (e) { wfNote("Couldn't " + what + " " + (w.name || w.id) + ": " + e, true); }
+  await wfLoadList({ quiet: true });
   refreshApprovals();
 }
 
-function wfNewClicked() {
-  wf.current = null; wf.nodes = []; wf.edges = []; wf.inputs = []; wf.sel = null;
-  wfRunStatus = {}; wfHidePalette();
-  document.getElementById("wfName").value = "";
-  document.getElementById("wfDesc").value = "";
-  document.getElementById("wfInputs").value = "";
-  document.getElementById("wfOutputs").value = "";
-  document.getElementById("wfLoop").value = "";
-  document.getElementById("wfRunPanel").style.display = "none";
-  wfRender(); wfSelect(null); wfMsg("");
+/* ----- unsaved changes ----- */
+/* Everything a save would send, as one string: compared with the one taken
+   at the last load or save. Args stay as typed, so a half-edited JSON
+   still counts. */
+function wfSig() {
+  const v = id => document.getElementById(id).value;
+  return JSON.stringify([v("wfName").trim(), v("wfDesc"), v("wfInputs"), v("wfOutputs"), v("wfLoop"),
+    v("wfOutputDir"), wf.nodes.map(n => [n.id, n.tool, n.args, Math.round(n.x), Math.round(n.y)]),
+    wf.edges.map(e => [e.from, e.to]), wfIO]);
+}
+function wfIsDirty() {
+  return !document.getElementById("wf-editor").hidden && wf.savedSig !== null && wfSig() !== wf.savedSig;
+}
+function wfLeaveText() {
+  const nm = document.getElementById("wfName").value.trim();
+  return nm ? "The workflow " + nm + " has unsaved changes." : "This new workflow isn't saved.";
+}
+function wfMarkSaved() { wf.savedSig = wfSig(); wfUpdateState(); }
+function wfUpdateState() {
+  const st = document.getElementById("wf-state");
+  if (!st || wf.savedSig === null) return;
+  const dirty = wfSig() !== wf.savedSig;
+  st.className = "wf-state" + (dirty ? " dirty" : wf.current ? " saved" : "");
+  st.textContent = dirty ? "Unsaved changes" : wf.current ? "Saved" : "New, not saved";
+  document.getElementById("wfDelete").disabled = !wf.current;
+  wfDetailsSummary();
+}
+function wfDetailsSummary() {
+  const ins = wfInputNames(), outs = wfOutputDefs();
+  document.getElementById("wf-details-sum").textContent =
+    (ins.length ? "Inputs: " + ins.join(", ") : "No inputs") + " · " +
+    (outs.length ? "Outputs: " + outs.map(o => o.name).join(", ") : "no outputs");
+}
+/* Ask before throwing edits away; true means go ahead. */
+function wfConfirmDiscard() {
+  return !wfIsDirty() || confirm(wfLeaveText() + "\n\nDiscard the changes?");
+}
+function wfBackToList() {
+  if (!wfConfirmDiscard()) return;
+  wf.savedSig = null;
+  wfShowView(false);
+  wfLoadList({ quiet: true });
 }
 
+function wfResetEditor() {
+  wf.current = null; wf.loadedName = ""; wf.savedSig = null;
+  wf.nodes = []; wf.edges = []; wf.inputs = []; wf.sel = null; wf.ioMeta = { in: {}, out: {} };
+  wfRunStatus = {}; wfHidePalette();
+  wfIO = { inx: null, iny: null, outx: null, outy: null };
+  ["wfName", "wfDesc", "wfInputs", "wfOutputs", "wfLoop", "wfOutputDir"].forEach(id => document.getElementById(id).value = "");
+  const panel = document.getElementById("wfRunPanel");
+  panel.hidden = true;
+  document.getElementById("wfResults").innerHTML = "";
+  document.getElementById("wf-run-state").textContent = "";
+}
+
+function wfNewClicked() {
+  if (!document.getElementById("wf-editor").hidden && !wfConfirmDiscard()) return;
+  wfResetEditor();
+  wfShowView(true);
+  document.getElementById("wf-details").open = true;
+  wfRender(); wfSelect(null); wfMsg("");
+  wfMarkSaved();
+  document.getElementById("wfName").focus();
+}
+
+/* Open a saved workflow in the editor; true when it loaded. */
 async function wfLoad(id) {
+  if (!document.getElementById("wf-editor").hidden && !wfConfirmDiscard()) return false;
+  let spec;
   try {
-    const spec = await (await gwFetch("/v1/workflows/" + encodeURIComponent(id))).json();
-    wf.current = spec.id || spec.name;
-    document.getElementById("wfName").value = spec.name || "";
-    document.getElementById("wfDesc").value = spec.description || "";
-    document.getElementById("wfInputs").value = (spec.inputs || []).map(i => i.name).join(", ");
-    document.getElementById("wfOutputs").value =
-      (spec.outputs || []).map(o => o.name + " = " + (o.value || "")).join("\n");
-    const lp = spec.loop;
-    document.getElementById("wfLoop").value = lp
-      ? ["max = " + (lp.max || 1)]
-          .concat(lp.until ? ["until = " + lp.until] : [])
-          .concat((lp.feedback || []).map(f => f.output + " -> " + f.input)).join("\n")
-      : "";
-    wf.nodes = (spec.nodes || []).map(n => ({
-      id: n.id, tool: n.tool, args: JSON.stringify(n.args || {}, null, 2),
-      x: (typeof n.x === "number" && n.x >= 0) ? n.x : -1,
-      y: (typeof n.y === "number" && n.y >= 0) ? n.y : -1
-    }));
-    wf.edges = (spec.edges || []).map(e => ({ from: e.from, to: e.to }));
-    const odirEl = document.getElementById("wfOutputDir");
-    if (odirEl) odirEl.value = spec.output_dir || "";
-    const ui = spec.ui || {};
-    wfIO = { inx: ui.in_x ?? null, iny: ui.in_y ?? null,
-             outx: ui.out_x ?? null, outy: ui.out_y ?? null };
-    wfRunStatus = {}; wfHidePalette();   // badges belong to a run, not a spec
-    wfAutoLayout();
-    document.getElementById("wfRunPanel").style.display = "none";
-    wfRender(); wfSelect(null); wfMsg("loaded " + wf.current);
-  } catch (e) { wfMsg("load failed: " + e); }
+    const r = await gwFetch("/v1/workflows/" + encodeURIComponent(id));
+    spec = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(spec.error || ("HTTP " + r.status));
+  } catch (e) {
+    if (document.getElementById("wf-editor").hidden) wfNote("Couldn't open " + id + ": " + (e.message || e), true);
+    else wfMsg("Couldn't open " + id + ": " + (e.message || e), "err");
+    return false;
+  }
+  wfResetEditor();
+  wf.current = spec.id || id;
+  wf.loadedName = spec.name || "";
+  document.getElementById("wfName").value = spec.name || "";
+  document.getElementById("wfDesc").value = spec.description || "";
+  document.getElementById("wfInputs").value = (spec.inputs || []).map(i => i.name).join(", ");
+  document.getElementById("wfOutputs").value =
+    (spec.outputs || []).map(o => o.name + " = " + (o.value || "")).join("\n");
+  const lp = spec.loop;
+  document.getElementById("wfLoop").value = lp
+    ? ["max = " + (lp.max || 1)]
+        .concat(lp.until ? ["until = " + lp.until] : [])
+        .concat((lp.feedback || []).map(f => f.output + " -> " + f.input)).join("\n")
+    : "";
+  wf.nodes = (spec.nodes || []).map(n => ({
+    id: n.id, tool: n.tool, args: JSON.stringify(n.args || {}, null, 2),
+    x: (typeof n.x === "number" && n.x >= 0) ? n.x : -1,
+    y: (typeof n.y === "number" && n.y >= 0) ? n.y : -1,
+    await: n.await   // no control for it here; kept so a save doesn't drop it
+  }));
+  wf.edges = (spec.edges || []).map(e => ({ from: e.from, to: e.to }));
+  /* The inputs' and outputs' types (and whether an input is required) have
+     no control here either: kept by name for the save. */
+  wf.ioMeta = { in: {}, out: {} };
+  (spec.inputs || []).forEach(i => wf.ioMeta.in[i.name] = { type: i.type, required: i.required });
+  (spec.outputs || []).forEach(o => wf.ioMeta.out[o.name] = { type: o.type });
+  document.getElementById("wfOutputDir").value = spec.output_dir || "";
+  const ui = spec.ui || {};
+  wfIO = { inx: ui.in_x ?? null, iny: ui.in_y ?? null,
+           outx: ui.out_x ?? null, outy: ui.out_y ?? null };
+  wfAutoLayout();
+  wfShowView(true);
+  document.getElementById("wf-details").open = false;
+  wfRender(); wfSelect(null); wfMsg("");
+  wfMarkSaved();
+  document.getElementById("wfCanvas").scrollTo(0, 0);
+  return true;
 }
 
 function wfAutoLayout() {
   // give any node without a position a staggered column slot
   let col = 0;
   wf.nodes.forEach(n => {
-    if (n.x < 0 || n.y < 0) { n.x = IO_GUTTER + col * (NODE_W + 40); n.y = 30 + (col % 2) * 90; col++; }
+    if (n.x < 0 || n.y < 0) { n.x = IO_GUTTER + col * (NODE_W + 48); n.y = 24 + (col % 2) * 96; col++; }
   });
 }
 
@@ -10506,35 +11010,32 @@ function wfCreateNode(tool, x, y) {
 }
 
 function wfAddNode() {
-  const tool = document.getElementById("wfPalette").value;
-  if (!tool) return;
-  wfCreateNode(tool, IO_GUTTER + (wf.nodes.length % 4) * (NODE_W + 40),
-    30 + (wf.nodes.length % 3) * 90);
+  const pal = document.getElementById("wfPalette");
+  const tool = pal.value;
+  if (!tool) { pal.focus(); wfMsg("Choose a step to add first.", ""); return; }
+  wfCreateNode(tool, IO_GUTTER + (wf.nodes.length % 4) * (NODE_W + 48),
+    24 + (wf.nodes.length % 3) * 96);
 }
 
-/* The floating add-node palette: summoned by double-clicking empty canvas,
-   creates the node AT that spot (every surveyed builder's primary path). One
-   source of truth for what exists: the same tool set the select offers. */
+/* The floating add-step palette: summoned by double-clicking empty canvas,
+   creates the step AT that spot. One source of truth for what exists: the
+   same tool set the select offers. */
 function wfShowPalette(x, y) {
   wfHidePalette();
   const canvas = document.getElementById("wfCanvas");
   const dropX = wfSnap(x), dropY = wfSnap(y);
-  wfPal = document.createElement("div");
-  wfPal.style.cssText = `position:absolute;left:${x}px;top:${y}px;z-index:5;width:220px;` +
-    `background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;` +
-    `box-shadow:var(--shadow-pop);padding:6px;display:flex;flex-direction:column;gap:6px`;
-  const inp = document.createElement("input");
-  inp.placeholder = "search tools…";
-  const list = document.createElement("div");
-  list.style.cssText = "max-height:180px;overflow:auto;display:flex;flex-direction:column;gap:2px";
+  wfPal = wfEl("div", "wf-pal");
+  wfPal.style.left = x + "px"; wfPal.style.top = y + "px";
+  const inp = wfEl("input");
+  inp.placeholder = "Search steps…"; inp.setAttribute("aria-label", "Search steps");
+  const list = wfEl("div", "wf-pal-list");
   const refresh = () => {
     const f = inp.value.trim().toLowerCase();
     list.innerHTML = "";
-    ["replicate", "llm"].concat(wf.tools.map(t => t.name))
+    ["llm", "replicate"].concat(wf.tools.map(t => t.name))
       .filter(t => !f || t.toLowerCase().includes(f)).slice(0, 40)
       .forEach(t => {
-        const b = document.createElement("button");
-        b.textContent = t; b.style.textAlign = "left";
+        const b = wfEl("button", "", t); b.type = "button";
         b.addEventListener("click", () => { wfHidePalette(); wfCreateNode(t, dropX, dropY); });
         list.appendChild(b);
       });
@@ -10544,7 +11045,7 @@ function wfShowPalette(x, y) {
     if (e.key === "Escape") { wfHidePalette(); e.stopPropagation(); }
     else if (e.key === "Enter") { const b = list.querySelector("button"); if (b) b.click(); }
   });
-  wfPal.appendChild(inp); wfPal.appendChild(list);
+  wfPal.append(inp, list);
   canvas.appendChild(wfPal);
   refresh();
   inp.focus();
@@ -10560,7 +11061,7 @@ function wfDuplicateSel() {
   while (wf.nodes.some(x => x.id === id)) id = n.id + (++k);
   const { x, y } = wfFreeSlot(n.x + WF_GRID, n.y + WF_GRID);
   delete wfRunStatus[id];   // a fresh copy has never run
-  wf.nodes.push({ id, tool: n.tool, args: n.args, x, y });
+  wf.nodes.push({ id, tool: n.tool, args: n.args, x, y, await: n.await });
   wfRender(); wfSelect(id);
 }
 
@@ -10573,9 +11074,9 @@ function wfFitView() {
   canvas.scrollTo({ left: Math.max(0, mx - 20), top: Math.max(0, my - 20), behavior: "smooth" });
 }
 
-/* Canvas shortcuts (n8n/ComfyUI conventions), active only while the workflow
-   tab is on screen and focus is not in a form field: Del removes the selected
-   node, Ctrl+D duplicates it, F fits the view, Esc closes the palette. */
+/* Canvas shortcuts (n8n/ComfyUI conventions), active only while the editor
+   is on screen and focus is not in a form field: Del removes the selected
+   step, Ctrl+D duplicates it, F fits the view, Esc closes the palette. */
 function wfKeydown(e) {
   const canvas = document.getElementById("wfCanvas");
   if (!canvas || canvas.offsetParent === null) return;
@@ -10605,7 +11106,11 @@ function wfDeleteNode(id) {
 function wfRenameSel() {
   const n = wf.nodes.find(x => x.id === wf.sel); if (!n) return;
   const nid = document.getElementById("wfInspId").value.trim();
-  if (!nid || (nid !== n.id && wf.nodes.some(x => x.id === nid))) { document.getElementById("wfInspId").value = n.id; return; }
+  if (!nid || (nid !== n.id && wf.nodes.some(x => x.id === nid))) {
+    document.getElementById("wfInspId").value = n.id;
+    if (nid) wfMsg("Another step is already called " + nid + ".", "err");
+    return;
+  }
   wf.edges.forEach(e => { if (e.from === n.id) e.from = nid; if (e.to === n.id) e.to = nid; });
   /* same node, new name: its badge travels with it */
   if (wfRunStatus[n.id]) { wfRunStatus[nid] = wfRunStatus[n.id]; delete wfRunStatus[n.id]; }
@@ -10616,9 +11121,13 @@ function wfSelect(id) {
   wf.sel = id;
   const insp = document.getElementById("wfInspect");
   const n = wf.nodes.find(x => x.id === id);
-  if (!n) { insp.style.display = "none"; wfRender(); return; }
-  insp.style.display = "flex";
-  document.getElementById("wfInspTool").textContent = n.tool;
+  if (!n) { insp.hidden = true; wfRender(); return; }
+  insp.hidden = false;
+  const [k, label] = wfKindOf(n.tool);
+  const kind = document.getElementById("wf-insp-kind");
+  kind.className = "wf-kind k-" + k; kind.textContent = label;
+  /* The tool's name, when the type label doesn't already say it. */
+  document.getElementById("wfInspTool").textContent = (k === "llm" || k === "model") ? "" : n.tool;
   document.getElementById("wfInspId").value = n.id;
   document.getElementById("wfInspArgs").value = n.args;
   const body = document.getElementById("wfInspBody");
@@ -10635,11 +11144,20 @@ function wfParseArgs(n) { try { return JSON.parse(n.args || "{}"); } catch (e) {
 function wfSetArgs(n, obj) {
   n.args = JSON.stringify(obj, null, 2);
   if (wf.sel === n.id) document.getElementById("wfInspArgs").value = n.args;
+  /* An LLM step's card shows the start of its prompt: keep it current. */
+  const card = n.tool === "llm" &&
+    document.querySelector('#wfCanvas .wf-node[data-node="' + CSS.escape(n.id) + '"] .wf-ntool');
+  if (card) {
+    const p = String(obj.prompt || "").trim().split("\n")[0];
+    card.textContent = p || n.tool; card.classList.toggle("p", !!p);
+  }
+  wfUpdateState();
 }
-function wfField(label, el) {
-  const d = document.createElement("label");
-  d.style.cssText = "font-size:12px;color:var(--text-2);display:flex;flex-direction:column;gap:2px";
-  d.appendChild(document.createTextNode(label)); d.appendChild(el);
+function wfField(label, el, hint) {
+  const d = wfEl("label", "wf-f" + (el.type === "checkbox" ? " chk" : ""));
+  if (el.type === "checkbox") { d.appendChild(el); d.appendChild(wfEl("span", "", label)); }
+  else { d.appendChild(wfEl("span", "", label)); d.appendChild(el); }
+  if (hint) d.appendChild(wfEl("small", "", hint));
   return d;
 }
 
@@ -10651,14 +11169,14 @@ async function wfRenderLlmForm(body, n) {
   }
   const provs = wf.providers.providers || [];
   const sel = document.createElement("select");
-  sel.innerHTML = '<option value="">(default provider)</option>' +
-    provs.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}${p.model ? " — " + escapeHtml(p.model) : ""}</option>`).join("");
+  sel.innerHTML = '<option value="">The default provider</option>' +
+    provs.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}${p.model ? " · " + escapeHtml(p.model) : ""}</option>`).join("");
   sel.value = cur.provider || "";
   const model = document.createElement("input");
-  model.value = cur.model || ""; model.placeholder = "model (blank = provider default)";
+  model.value = cur.model || ""; model.placeholder = "Blank: the provider's default";
   const prompt = document.createElement("textarea");
-  prompt.rows = 5; prompt.value = cur.prompt || "";
-  prompt.placeholder = "prompt — use {{inputs.x}} / {{nodes.id}}"; prompt.style.fontFamily = "inherit";
+  prompt.rows = 6; prompt.value = cur.prompt || "";
+  prompt.placeholder = "Summarise this:\n{{nodes.fetch}}";
   // Track whether the model field holds an auto-filled default or a value the
   // user typed. Only auto-filled defaults get replaced when the provider
   // changes, so switching providers doesn't leave the previous one's model.
@@ -10671,9 +11189,9 @@ async function wfRenderLlmForm(body, n) {
   });
   model.addEventListener("input", () => { modelAuto = false; upd(); });
   prompt.addEventListener("input", upd);
-  body.appendChild(wfField("provider", sel));
-  body.appendChild(wfField("model", model));
-  body.appendChild(wfField("prompt", prompt));
+  body.appendChild(wfField("Provider", sel));
+  body.appendChild(wfField("Model", model));
+  body.appendChild(wfField("Prompt", prompt, "Use {{inputs.name}} for an input and {{nodes.id}} for an earlier step's output."));
 }
 
 function wfExtractModels(j) {
@@ -10686,39 +11204,38 @@ function wfExtractModels(j) {
 
 function wfRenderReplicateForm(body, n) {
   const cur = wfParseArgs(n);
-  const sbox = document.createElement("input"); sbox.placeholder = "search Replicate models…";
-  const sbtn = document.createElement("button"); sbtn.textContent = "Search";
-  const srow = document.createElement("div"); srow.style.cssText = "display:flex;gap:4px"; srow.appendChild(sbox); srow.appendChild(sbtn);
-  const results = document.createElement("div"); results.style.cssText = "display:flex;flex-direction:column;gap:2px;max-height:130px;overflow:auto";
-  const formArea = document.createElement("div"); formArea.style.cssText = "display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border,#333);padding-top:5px";
-  body.appendChild(srow); body.appendChild(results); body.appendChild(formArea);
+  const sbox = wfEl("input"); sbox.placeholder = "Search Replicate models…"; sbox.setAttribute("aria-label", "Search Replicate models");
+  const sbtn = wfEl("button", "icon-btn"); sbtn.type = "button"; sbtn.innerHTML = icon("search") + "Search";
+  const srow = wfEl("div", "wf-search"); srow.append(sbox, sbtn);
+  const results = wfEl("div", "wf-pick");
+  const formArea = wfEl("div", "wf-sub");
+  body.append(srow, results, formArea);
+  const say = t => { results.innerHTML = ""; results.appendChild(wfEl("span", "wf-quiet", t)); };
   const doSearch = async () => {
     const q = sbox.value.trim(); if (!q) return;
-    results.innerHTML = '<span style="color:var(--text-3);font-size:12px">searching…</span>';
+    say("Searching…");
     try {
       const j = await (await gwFetch("/v1/replicate/search?q=" + encodeURIComponent(q))).json();
-      if (j && j.ok === false) { results.innerHTML = '<span style="color:var(--text-3);font-size:12px">' + escapeHtml(j.error || "search unavailable") + '</span>'; return; }
+      if (j && j.ok === false) { say(j.error || "Search isn't available."); return; }
       const models = wfExtractModels(j);
-      results.innerHTML = models.length ? "" : '<span style="color:var(--text-3);font-size:12px">no results (is the Replicate MCP connected + authorized?)</span>';
+      if (!models.length) { say("No models found. Is the Replicate MCP server connected and signed in?"); return; }
+      results.innerHTML = "";
       models.slice(0, 12).forEach(m => {
-        const b = document.createElement("button"); b.style.cssText = "text-align:left;font-size:12px";
-        b.textContent = m.owner + "/" + m.name; b.title = m.description || "";
+        const b = wfEl("button", "", m.owner + "/" + m.name); b.type = "button"; b.title = m.description || "";
         b.addEventListener("click", () => wfPickModel(m, n, formArea));
         results.appendChild(b);
       });
-    } catch (e) { results.innerHTML = '<span style="color:var(--text-3);font-size:12px">search failed: ' + escapeHtml(String(e)) + "</span>"; }
+    } catch (e) { say("Search failed: " + e); }
   };
   sbtn.addEventListener("click", doSearch);
   sbox.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); doSearch(); } });
-  if (cur.version) {
-    const p = document.createElement("div"); p.style.cssText = "font-size:12px;color:var(--text-2)";
-    p.textContent = "current version: " + cur.version + " — search to change the model/fields";
-    formArea.appendChild(p);
-  }
+  if (cur.version)
+    formArea.appendChild(wfEl("div", "wf-quiet", "Version " + cur.version + ". Search to change the model or its fields."));
 }
 
 async function wfPickModel(m, n, formArea) {
-  formArea.innerHTML = '<span style="color:var(--text-3);font-size:12px">loading ' + escapeHtml(m.owner + "/" + m.name) + "…</span>";
+  formArea.innerHTML = "";
+  formArea.appendChild(wfEl("span", "wf-quiet", "Loading " + m.owner + "/" + m.name + "…"));
   let schema = null, version = m.version;
   try {
     const j = await (await gwFetch("/v1/replicate/model?owner=" + encodeURIComponent(m.owner) + "&name=" + encodeURIComponent(m.name))).json();
@@ -10732,18 +11249,13 @@ async function wfPickModel(m, n, formArea) {
 
 function wfRenderModelForm(formArea, n, m, version, schema) {
   formArea.innerHTML = "";
-  const title = document.createElement("div"); title.style.cssText = "font-size:12px;font-weight:600";
-  title.textContent = m.owner + "/" + m.name + (version ? " @ " + String(version).slice(0, 8) : "");
-  formArea.appendChild(title);
+  formArea.appendChild(wfEl("div", "wf-sub-t", m.owner + "/" + m.name + (version ? " @ " + String(version).slice(0, 8) : "")));
   const curInput = (wfParseArgs(n).input) || {};
   const props = (schema && schema.properties) || {};
   const req = (schema && schema.required) || [];
   const keys = Object.keys(props).sort((a, b) => ((props[a]["x-order"] || 0) - (props[b]["x-order"] || 0)));
   const fields = {};
-  if (!keys.length) {
-    const w = document.createElement("div"); w.style.cssText = "font-size:12px;color:var(--text-3)";
-    w.textContent = "no input schema — set inputs in raw args"; formArea.appendChild(w);
-  }
+  if (!keys.length) formArea.appendChild(wfEl("div", "wf-quiet", "This model publishes no input schema. Set its inputs in the arguments as JSON."));
   keys.forEach(k => {
     const p = props[k]; let el;
     if (p.enum) { el = document.createElement("select"); el.innerHTML = p.enum.map(v => `<option>${escapeHtml(String(v))}</option>`).join(""); }
@@ -10770,7 +11282,7 @@ function wfRenderModelForm(formArea, n, m, version, schema) {
   collect();
 }
 
-/* ===== Input / Output boxes (Phase 2) =====
+/* ===== Input / Output boxes =====
    The workflow's interface, drawn as first-class boxes on the canvas: an INPUT
    source on the left listing the declared inputs, and an OUTPUT sink on the
    right listing the declared outputs. Their fields come from the form editors
@@ -10778,10 +11290,10 @@ function wfRenderModelForm(formArea, n, m, version, schema) {
    node that references {{inputs.X}} gets a wire from the Input box; a node named
    in an output template gets a wire to the Output box. So the canvas is a live
    diagram of "first model <- input, last model -> output". */
-const IO_W = 134;
+const IO_W = 144;
 /* Left gutter that new nodes start after, so auto-placed nodes never land under
-   the fixed INPUT box at (8,8). */
-const IO_GUTTER = 8 + IO_W + 20;
+   the INPUT box at its default (8,8). */
+const IO_GUTTER = 8 + IO_W + 40;
 function wfInputNames() {
   return document.getElementById("wfInputs").value.split(",").map(s => s.trim()).filter(Boolean);
 }
@@ -10796,29 +11308,26 @@ function wfOutputBoxX() {
   let r = 300; wf.nodes.forEach(n => r = Math.max(r, n.x + NODE_W + 60)); return r;
 }
 function wfIOBox(canvas, kind, x, y, fields) {
-  const el = document.createElement("div");
-  el.className = "wf-io wf-io-" + kind;
+  const el = wfEl("div", "wf-io wf-io-" + kind);
   el.dataset.kind = kind;
-  el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${IO_W}px;border:1px dashed var(--accent-line);` +
-    `border-radius:6px;background:var(--accent-soft);z-index:1;font-size:12px`;
-  const title = kind === "input" ? "Inputs" : "Outputs";
-  let rows = fields.map(f => {
+  el.style.left = x + "px"; el.style.top = y + "px"; el.style.width = IO_W + "px";
+  el.appendChild(wfEl("div", "wf-io-head", kind === "input" ? "Inputs" : "Outputs"));
+  fields.forEach(f => {
     const nm = typeof f === "string" ? f : f.name;
-    if (kind === "input")
-      return `<div class="wf-infield" data-in="${escapeHtml(nm)}" ` +
-        `title="click to copy {{inputs.${escapeHtml(nm)}}}" style="padding:2px 7px;white-space:nowrap;` +
-        `overflow:hidden;text-overflow:ellipsis;cursor:copy">${escapeHtml(nm)}</div>`;
-    const wired = f.value ? "" : ` <span style="color:var(--text-3);font-size:12px">·drop</span>`;
-    return `<div class="wf-outfield" data-out="${escapeHtml(nm)}" ` +
-      `title="drag a node's ● output here to set ${escapeHtml(nm)}${f.value ? " (now: " + escapeHtml(f.value) + ")" : ""}" ` +
-      `style="padding:2px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(nm)}${wired}</div>`;
-  }).join("");
-  if (!rows) rows = `<div style="padding:2px 7px;color:var(--text-3)">(none yet)</div>`;
-  const port = kind === "input"
-    ? `<div class="wf-port" style="position:absolute;right:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:var(--accent);border:2px solid var(--surface)"></div>`
-    : `<div class="wf-port" style="position:absolute;left:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:var(--text-3);border:2px solid var(--surface)"></div>`;
-  el.innerHTML = `<div class="wf-io-head" style="padding:4px 7px;font-weight:600;border-bottom:1px solid var(--border,#444);` +
-    `cursor:move">${title}</div>${rows}${port}`;
+    if (kind === "input") {
+      const d = wfEl("div", "wf-infield", nm);
+      d.dataset.in = nm; d.title = "Click to copy {{inputs." + nm + "}}";
+      el.appendChild(d);
+    } else {
+      const d = wfEl("div", "wf-outfield", nm);
+      d.dataset.out = nm;
+      d.title = "Drag a step's right dot here to set " + nm + (f.value ? " (now: " + f.value + ")" : "");
+      if (!f.value) d.appendChild(wfEl("span", "drop", " · drop"));
+      el.appendChild(d);
+    }
+  });
+  if (!fields.length) el.appendChild(wfEl("div", "wf-iofield-none", kind === "input" ? "None yet" : "Drop a step here"));
+  el.appendChild(wfEl("div", "wf-port"));
   canvas.appendChild(el);
 }
 
@@ -10847,7 +11356,7 @@ function wfStartIODrag(ev, el) {
     el.style.left = x + "px"; el.style.top = y + "px";
     if (kind === "input") { wfIO.inx = x; wfIO.iny = y; }
     else { wfIO.outx = x; wfIO.outy = y; }
-    wfDrawEdges();
+    wfDrawEdges(); wfUpdateState();
   }
   document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
 }
@@ -10857,6 +11366,9 @@ function wfStartIODrag(ev, el) {
 function wfStartPan(ev) {
   const canvas = document.getElementById("wfCanvas");
   if (ev.target !== canvas && ev.target.id !== "wfEdgeLayer") return;
+  /* The resize grip is in the canvas's own corner: leave that drag alone. */
+  const r = canvas.getBoundingClientRect();
+  if (ev.clientX > r.right - 18 && ev.clientY > r.bottom - 18) return;
   ev.preventDefault();
   const sx = ev.clientX, sy = ev.clientY,
         ox = canvas.scrollLeft, oy = canvas.scrollTop;
@@ -10867,10 +11379,13 @@ function wfStartPan(ev) {
   function up() { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); }
   document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
 }
+function wfInBoxXY()  { return { x: wfIO.inx ?? 8, y: wfIO.iny ?? 8 }; }
+function wfOutBoxXY() { return { x: wfIO.outx ?? wfOutputBoxX(), y: wfIO.outy ?? 8 }; }
 function wfRenderIOBoxes(canvas) {
   [...canvas.querySelectorAll(".wf-io")].forEach(e => e.remove());
-  wfIOBox(canvas, "input", (wfIO.inx ?? 8), (wfIO.iny ?? 8), wfInputNames());
-  wfIOBox(canvas, "output", (wfIO.outx ?? wfOutputBoxX()), (wfIO.outy ?? 8), wfOutputDefs());
+  const i = wfInBoxXY(), o = wfOutBoxXY();
+  wfIOBox(canvas, "input", i.x, i.y, wfInputNames());
+  wfIOBox(canvas, "output", o.x, o.y, wfOutputDefs());
   /* the IO boxes drag like nodes -- citizens of the space, not chrome */
   canvas.querySelectorAll(".wf-io .wf-io-head").forEach(h =>
     h.addEventListener("mousedown", ev => wfStartIODrag(ev, h.closest(".wf-io"))));
@@ -10879,7 +11394,7 @@ function wfRenderIOBoxes(canvas) {
   canvas.querySelectorAll(".wf-infield").forEach(el => el.addEventListener("click", () => {
     const t = "{{inputs." + el.dataset.in + "}}";
     (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
-      .then(() => wfMsg("copied " + t)).catch(() => wfMsg(t));
+      .then(() => wfMsg("Copied " + t)).catch(() => wfMsg(t));
   }));
 }
 
@@ -10905,40 +11420,63 @@ function wfSetOutputTemplate(name, template) {
   if (hit) hit.value = template; else defs.push({ name, value: template });
   ta.value = defs.map(o => o.name + " = " + o.value).join("\n");
   wfRender();
-  wfMsg("wired " + name + " ← " + template);
+  wfMsg("Output " + name + " now reads " + template);
+}
+
+/* The line under a step's tool: how the last run went for it. */
+function wfStatusLine(st) {
+  if (!st) return "";
+  if (st.st === "run") return "Running…";
+  if (st.st === "skip") return "Didn't run";
+  if (st.st === "err") return "Failed" + (st.line ? ": " + st.line : "");
+  return st.line || "Done";
 }
 
 function wfRender() {
   const canvas = document.getElementById("wfCanvas");
   // remove existing node elements (keep the svg edge layer)
-  [...canvas.querySelectorAll(".wf-node")].forEach(e => e.remove());
+  [...canvas.querySelectorAll(".wf-node,.wf-cempty")].forEach(e => e.remove());
   wf.nodes.forEach(n => {
-    const el = document.createElement("div");
-    el.className = "wf-node"; el.dataset.node = n.id;
-    el.style.cssText = `position:absolute;left:${n.x}px;top:${n.y}px;width:${NODE_W}px;` +
-      `border:1px solid ${n.id === wf.sel ? "var(--accent)" : "var(--border-strong)"};border-radius:6px;` +
-      `background:var(--surface-2);z-index:1;box-shadow:0 1px 3px rgba(0,0,0,.18);font-size:12px`;
-    const kind = (n.tool === "llm" || n.tool === "replicate") ? n.tool : "tool";
+    const el = wfEl("div", "wf-node" + (n.id === wf.sel ? " sel" : ""));
+    el.dataset.node = n.id;
+    el.style.left = n.x + "px"; el.style.top = n.y + "px"; el.style.width = NODE_W + "px";
     const st = wfRunStatus[n.id];
-    el.innerHTML =
-      `<div class="wf-head" style="cursor:move;padding:5px 7px;border-bottom:1px solid var(--border,#444);` +
-        `display:flex;gap:6px;align-items:center;border-radius:6px 6px 0 0;background:var(--surface-3)">` +
-        `<span style="font-weight:600">${escapeHtml(n.id)}</span>` +
-        (st ? `<span title="last run: ${st.ok ? "ok" : "failed"}" style="width:8px;height:8px;` +
-          `border-radius:50%;flex:0 0 auto;background:${st.ok ? "var(--ok)" : "var(--danger)"}"></span>` : "") +
-        `<span style="color:var(--text-3);font-size:12px;margin-left:auto">${escapeHtml(kind)}</span></div>` +
-      `<div style="padding:6px 7px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(n.tool)}</div>` +
-      (st && st.line ? `<div title="last run output" style="padding:0 7px 5px;color:var(--text-3);font-size:12px;` +
-        `white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(st.line)}</div>` : "") +
-      `<div class="wf-port wf-in"  data-node="${escapeHtml(n.id)}" title="input"  style="position:absolute;left:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:var(--text-3);border:2px solid var(--surface);cursor:crosshair"></div>` +
-      `<div class="wf-port wf-out" data-node="${escapeHtml(n.id)}" title="output" style="position:absolute;right:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:var(--accent);border:2px solid var(--surface);cursor:crosshair"></div>`;
+    if (st) el.dataset.st = st.st;
+    const [k, label] = wfKindOf(n.tool);
+    const head = wfEl("div", "wf-head");
+    head.title = "Drag to move";
+    head.append(wfEl("span", "wf-kind k-" + k, label), wfEl("span", "wf-nid", n.id));
+    el.appendChild(head);
+    /* Under the head: the tool's name, or for an LLM step the start of its
+       prompt (the type label already says it calls a model). */
+    const prompt = k === "llm" ? String(wfParseArgs(n).prompt || "").trim().split("\n")[0] : "";
+    const sub = wfEl("div", "wf-ntool" + (prompt ? " p" : ""), prompt || n.tool);
+    sub.title = prompt ? "Prompt: " + prompt : n.tool;
+    el.appendChild(sub);
+    if (st) {
+      const line = wfEl("div", "wf-nst");
+      line.append(wfEl("span", "wf-dot"), wfEl("span", "", wfStatusLine(st)));
+      line.title = wfStatusLine(st);
+      el.appendChild(line);
+    }
+    const pin = wfEl("div", "wf-port wf-in"); pin.dataset.node = n.id; pin.title = "Input: drop a connection here";
+    const pout = wfEl("div", "wf-port wf-out"); pout.dataset.node = n.id; pout.title = "Output: drag to another step or to Outputs";
+    el.append(pin, pout);
     canvas.appendChild(el);
-    el.querySelector(".wf-head").addEventListener("mousedown", ev => wfStartDrag(ev, n));
+    head.addEventListener("mousedown", ev => wfStartDrag(ev, n));
     el.addEventListener("click", ev => { if (!el.dataset.dragged) wfSelect(n.id); el.dataset.dragged = ""; });
-    el.querySelector(".wf-out").addEventListener("mousedown", ev => wfStartConnect(ev, n.id));
+    pout.addEventListener("mousedown", ev => wfStartConnect(ev, n.id));
   });
+  if (!wf.nodes.length) {
+    const e = wfEl("div", "wf-cempty");
+    e.innerHTML = icon("wf-flow");
+    e.append(wfEl("b", "", "No steps yet"),
+             wfEl("span", "", "Choose a step in the toolbar and add it, or double-click here to add one at this spot."));
+    canvas.appendChild(e);
+  }
   wfRenderIOBoxes(canvas);
   wfDrawEdges();
+  wfUpdateState();
 }
 
 function wfPortXY(id, which) {
@@ -10953,14 +11491,15 @@ function wfEdgePath(a, b) {
 
 function wfDrawEdges() {
   const svg = document.getElementById("wfEdgeLayer");
-  svg.innerHTML = "";
+  [...svg.querySelectorAll("path:not(marker path)")].forEach(p => p.remove());
   // Size the SVG to the full content extent (not just the visible pane) so
   // edges to nodes dragged/laid out beyond the viewport aren't clipped and
   // stay clickable-to-delete.
   const canvas = document.getElementById("wfCanvas");
   let cw = canvas.clientWidth, ch = canvas.clientHeight;
   wf.nodes.forEach(n => { cw = Math.max(cw, n.x + NODE_W + 40); ch = Math.max(ch, n.y + 140); });
-  cw = Math.max(cw, wfOutputBoxX() + IO_W + 20);   // keep the Output box + its wire in view
+  const ob = wfOutBoxXY();
+  cw = Math.max(cw, ob.x + IO_W + 20);   // keep the Output box + its wire in view
   svg.setAttribute("width", cw);  svg.setAttribute("height", ch);
   svg.style.width = cw + "px";    svg.style.height = ch + "px";
   wf.edges.forEach((ed, i) => {
@@ -10968,11 +11507,12 @@ function wfDrawEdges() {
     if (!a || !b) return;
     const p = document.createElementNS(NS, "path");
     p.setAttribute("class", "wf-edge");
-    p.setAttribute("d", wfEdgePath(a, b));
+    p.setAttribute("d", wfEdgePath(a, { x: b.x - 7, y: b.y }));   // the arrow's tip meets the port
     p.setAttribute("fill", "none"); p.setAttribute("stroke", "currentColor"); p.setAttribute("stroke-width", "2");
+    p.setAttribute("marker-end", "url(#wf-arrow)");
     p.style.pointerEvents = "stroke"; p.style.cursor = "pointer";
     const tip = document.createElementNS(NS, "title");
-    tip.textContent = ed.from + " → " + ed.to + "  (click to delete)";
+    tip.textContent = ed.from + " → " + ed.to + " (click to remove)";
     p.appendChild(tip);
     p.addEventListener("click", () => { wf.edges.splice(i, 1); wfRender(); });
     svg.appendChild(p);
@@ -10982,16 +11522,17 @@ function wfDrawEdges() {
   const ioEdge = (a, b) => {
     if (!a || !b) return;
     const p = document.createElementNS(NS, "path");
+    p.setAttribute("class", "wf-io-edge");
     p.setAttribute("d", wfEdgePath(a, b));
     p.setAttribute("fill", "none"); p.setAttribute("stroke", "currentColor"); p.setAttribute("stroke-width", "1.5");
-    p.setAttribute("stroke-dasharray", "4 3"); p.setAttribute("opacity", "0.7");
+    p.setAttribute("stroke-dasharray", "4 3");
     svg.appendChild(p);
   };
-  const inNames = wfInputNames();
-  const inPort = { x: 8 + IO_W, y: 8 + PORT_Y + 6 };
-  if (inNames.length)
+  const ib = wfInBoxXY();
+  const inPort = { x: ib.x + IO_W, y: ib.y + PORT_Y + 6 };
+  if (wfInputNames().length)
     wf.nodes.forEach(n => { if (/\{\{\s*inputs\./.test(n.args || "")) ioEdge(inPort, wfPortXY(n.id, "in")); });
-  const outPort = { x: wfOutputBoxX(), y: 8 + PORT_Y + 6 };
+  const outPort = { x: ob.x, y: ob.y + PORT_Y + 6 };
   wfOutputDefs().forEach(o => {
     const m = (o.value || "").match(/\{\{\s*nodes\.([A-Za-z0-9_\-]+)/);
     if (m) ioEdge(wfPortXY(m[1], "out"), outPort);
@@ -11017,7 +11558,7 @@ function wfStartDrag(ev, n) {
     /* snap the DROP (not the drag -- mid-drag snapping stutters) */
     n.x = wfSnap(n.x); n.y = wfSnap(n.y);
     el.style.left = n.x + "px"; el.style.top = n.y + "px";
-    wfDrawEdges();
+    wfDrawEdges(); wfUpdateState();
   }
   document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
 }
@@ -11050,8 +11591,10 @@ function wfStartConnect(ev, fromId) {
          node. Without this the box is only a target once an output already
          exists, so a workflow with none declared had nowhere to drop. */
       wfSetOutputTemplate(fromId, wfDefaultRef(fromId));
-    } else if (tgt && tgt.classList.contains("wf-in")) {
-      const toId = tgt.dataset.node;
+    } else {
+      /* Onto a step's left dot, or anywhere on the step: connect to it. */
+      const nodeEl = tgt && tgt.closest && tgt.closest(".wf-node");
+      const toId = nodeEl ? nodeEl.dataset.node : null;
       if (toId && toId !== fromId && !wf.edges.some(x => x.from === fromId && x.to === toId)) {
         wf.edges.push({ from: fromId, to: toId }); wfRender();
       }
@@ -11062,36 +11605,36 @@ function wfStartConnect(ev, fromId) {
 
 function wfBuildSpec() {
   const name = document.getElementById("wfName").value.trim();
-  const inputs = document.getElementById("wfInputs").value.split(",").map(s => s.trim()).filter(Boolean);
+  const inputs = wfInputNames();
   /* Outputs: one "name = template" per line -> [{name, value, type}]. The
      template is a {{nodes.ID.selector}} / {{inputs.NAME}} expression the engine
      resolves into the run's structured result. */
-  const outputs = document.getElementById("wfOutputs").value.split("\n")
-    .map(s => s.trim()).filter(Boolean).map(line => {
-      const eq = line.indexOf("=");
-      return {
-        name:  (eq >= 0 ? line.slice(0, eq) : line).trim(),
-        value: (eq >= 0 ? line.slice(eq + 1) : "").trim(),
-        type:  "string"
-      };
-    }).filter(o => o.name);
+  const meta = wf.ioMeta || { in: {}, out: {} };
+  const outputs = wfOutputDefs().map(o => ({ name: o.name, value: o.value,
+                                             type: (meta.out[o.name] || {}).type || "string" }));
   const nodes = [];
   for (const n of wf.nodes) {
     let args;
     try { args = JSON.parse(n.args || "{}"); }
-    catch (e) { throw new Error(`node "${n.id}": args is not valid JSON`); }
+    catch (e) { throw new Error(`The arguments of step ${n.id} aren't valid JSON.`); }
     const node = { id: n.id, tool: n.tool, args };
+    if (n.await) node.await = n.await;
     if (n.x >= 0) node.x = Math.round(n.x);
     if (n.y >= 0) node.y = Math.round(n.y);
     nodes.push(node);
   }
   const spec = {
     name, description: document.getElementById("wfDesc").value,
-    inputs: inputs.map(i => ({ name: i, type: "string", required: true })),
+    inputs: inputs.map(i => { const m = meta.in[i] || {};
+      return { name: i, type: m.type || "string", required: m.required !== undefined ? !!m.required : true }; }),
     outputs,
     nodes, edges: wf.edges.filter(e => e.from && e.to)
   };
-  const odir = (document.getElementById("wfOutputDir") || {}).value;
+  /* Editing a saved workflow under its own name: keep its id, so one whose
+     id is not its name saves over itself rather than beside it. A new name
+     saves a new workflow, as it always has. */
+  if (wf.current && name === wf.loadedName) spec.id = wf.current;
+  const odir = document.getElementById("wfOutputDir").value;
   if (odir && odir.trim()) spec.output_dir = odir.trim();
   /* view state: node x/y ride on the nodes; the ui block carries what has
      no node to ride on. Shared shape with Studio, so the two clients cannot
@@ -11122,65 +11665,172 @@ function wfBuildLoop() {
 
 async function wfSave() {
   let spec;
-  try { spec = wfBuildSpec(); } catch (e) { wfMsg("✗ " + e.message); return false; }
-  if (!spec.name) { wfMsg("✗ name is required"); return false; }
+  try { spec = wfBuildSpec(); } catch (e) { wfMsg(e.message, "err"); return false; }
+  if (!spec.name) { wfMsg("Give the workflow a name first.", "err"); document.getElementById("wfName").focus(); return false; }
+  const btn = document.getElementById("wfSave");
+  btn.disabled = true;
   try {
     const r = await gwFetch("/v1/workflows", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(spec) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.saved) { wf.current = j.id || spec.name; wfMsg("✓ saved " + wf.current); wfLoadList(); return true; }
-    wfMsg("✗ " + (j.detail || j.error || ("HTTP " + r.status))); return false;
-  } catch (e) { wfMsg("✗ " + e); return false; }
+    if (r.ok && j.saved) {
+      wf.current = j.id || spec.name; wf.loadedName = spec.name;
+      wfMarkSaved();
+      wfMsg("Saved. Agents can call it as " + wfToolName(wf.current) + ".", "ok");
+      return true;
+    }
+    const why = String(j.detail || j.error || ("HTTP " + r.status)).trim();
+    wfMsg("Couldn't save: " + why, "err"); return false;
+  } catch (e) { wfMsg("Couldn't save: " + e, "err"); return false; }
+  finally { btn.disabled = false; }
 }
 
-async function wfDelete() {
-  if (!wf.current) { wfNewClicked(); return; }
-  if (!confirm("Delete workflow " + wf.current + "?")) return;
-  await gwFetch("/v1/workflows/" + encodeURIComponent(wf.current), { method: "DELETE" });
-  wfNewClicked(); wfLoadList();
+async function wfDelete(id, name) {
+  if (!id) return;
+  if (!confirm("Delete the workflow " + (name || id) + "?\n\nAgents lose the tool " + wfToolName(id) +
+               ". This can't be undone.")) return;
+  let err = "";
+  try {
+    const r = await gwFetch("/v1/workflows/" + encodeURIComponent(id), { method: "DELETE" });
+    if (!r.ok) err = (await r.json().catch(() => ({}))).error || ("HTTP " + r.status);
+  } catch (e) { err = String(e); }
+  if (err) {
+    if (document.getElementById("wf-editor").hidden) wfNote("Couldn't delete " + (name || id) + ": " + err, true);
+    else wfMsg("Couldn't delete: " + err, "err");
+    return;
+  }
+  if (wf.current === id) { wf.savedSig = null; wfShowView(false); }
+  wfNote("Deleted " + (name || id) + ".");
+  wfLoadList({ quiet: true });
 }
 
+/* Run: save first (a run reads the saved workflow), then ask for the
+   inputs. With none to ask for it starts straight away. */
 async function wfRun() {
-  let spec;
-  try { spec = wfBuildSpec(); } catch (e) { wfMsg("✗ " + e.message); return; }
-  if (!spec.name) { wfMsg("✗ save the workflow first"); return; }
-  if (!(await wfSave())) return;
-  const panel = document.getElementById("wfRunPanel"), inbox = document.getElementById("wfRunInputs");
-  panel.style.display = "block"; inbox.innerHTML = "";
+  if (wf.running) return;
+  if ((!wf.current || wfIsDirty()) && !(await wfSave())) return;
+  const panel = document.getElementById("wfRunPanel"), form = document.getElementById("wfRunInputs");
+  panel.hidden = false;
+  form.innerHTML = "";
+  const names = wfInputNames();
   const fields = {};
-  spec.inputs.forEach(inp => {
-    const row = document.createElement("div");
-    row.style.cssText = "display:flex;gap:6px;align-items:center";
-    row.innerHTML = `<label style="width:110px;font-size:12px">${escapeHtml(inp.name)}</label>`;
-    const inEl = document.createElement("input"); inEl.style.flex = "1";
-    row.appendChild(inEl); inbox.appendChild(row); fields[inp.name] = inEl;
+  names.forEach(nm => {
+    const inp = wfEl("input"); inp.name = nm; inp.autocomplete = "off"; inp.spellcheck = false;
+    fields[nm] = inp;
+    form.appendChild(wfField(nm, inp));
   });
-  const go = document.createElement("button"); go.textContent = "Execute";
-  go.addEventListener("click", async () => {
+  const go = wfEl("div", "wf-run-go");
+  const start = wfEl("button", "primary"); start.type = "submit"; start.id = "wf-run-go";
+  start.innerHTML = icon("play") + "Start run";
+  go.appendChild(start);
+  form.appendChild(go);
+  form.onsubmit = e => {
+    e.preventDefault();
     const inputs = {}; Object.keys(fields).forEach(k => inputs[k] = fields[k].value);
-    document.getElementById("wfResults").textContent = "running…";
-    try {
-      const j = await (await gwFetch("/v1/workflows/" + encodeURIComponent(spec.name) + "/run",
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(inputs) })).json();
-      /* per-node canvas badges + first-line previews */
-      wfRunStatus = {};
-      (j.nodes || []).forEach(n => {
-        if (n.node) wfRunStatus[n.node] =
-          { ok: !!n.ok, line: String(n.error || n.text || "").split("\n")[0].slice(0, 40) };
-      });
-      wfRender();
-      const lines = (j.nodes || []).map(n => `${n.ok ? "✓" : "✗"} ${n.node} (${n.tool})` + (n.error ? "  ! " + n.error : "") + (n.text ? "\n    " + n.text : ""));
-      document.getElementById("wfResults").textContent =
-        (j.ok ? "OK\n" : "FAILED: " + (j.error || "") + "\n") +
-        (j.output ? "output: " + j.output + "\n" : "") +
-        (j.output_dir ? "output files: " + j.output_dir + "\n" : "") +
-        (j.output_dir_error ? "output files NOT written: " + j.output_dir_error + "\n" : "") +
-        "\n" + lines.join("\n");
-    } catch (e) { document.getElementById("wfResults").textContent = "run error: " + e; }
-  });
-  inbox.appendChild(go);
+    wfStartRun(inputs);
+  };
+  panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  if (!names.length) wfStartRun({});
+  else fields[names[0]].focus();
 }
 
-function wfMsg(m) { document.getElementById("wfMsg").textContent = m; }
+async function wfStartRun(inputs) {
+  const id = wf.current;
+  if (!id || wf.running) return;
+  wf.running = true;
+  const state = document.getElementById("wf-run-state"), out = document.getElementById("wfResults");
+  const startBtn = document.getElementById("wf-run-go"), runBtn = document.getElementById("wfRun");
+  if (startBtn) startBtn.disabled = true;
+  runBtn.disabled = true;
+  out.innerHTML = "";
+  /* The route runs the whole workflow before it answers: until then every
+     step shows as running. */
+  wfRunStatus = {};
+  wf.nodes.forEach(n => wfRunStatus[n.id] = { st: "run" });
+  wfRender();
+  const t0 = Date.now();
+  const tick = () => { state.textContent = "Running " + wfPlural(wf.nodes.length, "step") + " · " +
+                                           ((Date.now() - t0) / 1000).toFixed(1) + " s"; };
+  state.className = "wf-run-state run"; tick();
+  clearInterval(wfRunTick); wfRunTick = setInterval(tick, 200);
+  let j = null, err = "";
+  try {
+    const r = await gwFetch("/v1/workflows/" + encodeURIComponent(id) + "/run",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(inputs) });
+    j = await r.json().catch(() => null);
+    if (!r.ok && !(j && j.nodes)) err = (j && j.error) || ("HTTP " + r.status);
+  } catch (e) { err = String(e); }
+  clearInterval(wfRunTick); wfRunTick = null;
+  const secs = ((Date.now() - t0) / 1000).toFixed(1) + " s";
+  wf.running = false;
+  if (startBtn) startBtn.disabled = false;
+  runBtn.disabled = false;
+  if (wf.current !== id) return;   // another workflow was opened meanwhile
+  const res = (j && j.nodes) || [];
+  wfRunStatus = {};
+  res.forEach(n => {
+    if (n.node) wfRunStatus[n.node] =
+      { st: n.ok ? "ok" : "err", line: String(n.error || n.text || "").split("\n")[0].slice(0, 80) };
+  });
+  if (err) wfRunStatus = {};
+  else wf.nodes.forEach(n => { if (!wfRunStatus[n.id]) wfRunStatus[n.id] = { st: "skip" }; });
+  wfRender();
+  wfRenderResults(j, res, err, secs);
+}
+
+function wfRenderResults(j, res, err, secs) {
+  const state = document.getElementById("wf-run-state"), out = document.getElementById("wfResults");
+  out.innerHTML = "";
+  const okRun = !err && j && j.ok;
+  const failed = res.find(n => !n.ok);
+  state.className = "wf-run-state";
+  state.textContent = err ? "Didn't run" : (okRun ? "Finished" : "Failed") + " in " + secs;
+  const sum = wfEl("div", "wf-sum " + (okRun ? "ok" : "err"));
+  sum.innerHTML = icon(okRun ? "check" : "alert");
+  const d = wfEl("div");
+  if (err) {
+    d.appendChild(wfEl("b", "", "The run didn't start"));
+    d.appendChild(wfEl("span", "m", err));
+  } else if (okRun) {
+    d.appendChild(wfEl("b", "", "Run finished"));
+    d.appendChild(wfEl("span", "m", res.filter(n => n.ok).length + " of " + wfPlural(wf.nodes.length, "step") + " ran · " + secs));
+  } else {
+    d.appendChild(wfEl("b", "", failed ? "Failed at step " + failed.node : "Run failed"));
+    const why = (j && j.error) || (failed && failed.error) || "";
+    if (why) d.appendChild(wfEl("span", "m", why));
+  }
+  sum.appendChild(d);
+  out.appendChild(sum);
+  if (j && j.output) out.appendChild(wfEl("div", "wf-quiet", "Output: " + j.output));
+  if (j && j.output_dir) out.appendChild(wfEl("div", "wf-quiet", "Output files: " + j.output_dir));
+  if (j && j.output_dir_error) out.appendChild(wfEl("div", "wf-quiet", "Output files not written: " + j.output_dir_error));
+  if (err) return;
+  const ol = wfEl("ol", "wf-steps");
+  const seen = new Set();
+  const row = (id, tool, cls, pill, text) => {
+    const li = wfEl("li", "wf-step " + cls);
+    li.dataset.node = id;
+    li.appendChild(wfEl("span", "wf-dot"));
+    const l1 = wfEl("div", "wf-step-l1");
+    l1.append(wfEl("b", "", id), wfEl("code", "", tool), wfEl("span", "wf-tag " + (cls === "ok" ? "ok" : cls === "err" ? "err" : ""), pill));
+    li.appendChild(l1);
+    if (text) li.appendChild(wfEl("pre", "wf-step-out", text));
+    ol.appendChild(li);
+  };
+  res.forEach(n => {
+    seen.add(n.node);
+    row(n.node, n.tool || "", n.ok ? "ok" : "err", n.ok ? "Done" : "Failed", n.ok ? (n.text || "") : (n.error || n.text || ""));
+  });
+  wf.nodes.forEach(n => { if (!seen.has(n.id)) row(n.id, n.tool, "skip", "Didn't run", ""); });
+  out.appendChild(ol);
+}
+
+/* The line under the editor's bar: what the last action did. kind: "", ok, err. */
+function wfMsg(m, kind) {
+  const el = document.getElementById("wfMsg");
+  el.className = "wf-msgline" + (kind ? " " + kind : "");
+  el.innerHTML = m && kind ? icon(kind === "ok" ? "check" : "alert") : "";
+  if (m) el.appendChild(wfEl("span", "", m));
+}
 
 /* ===== Misc helpers ===== */
 function escapeHtml(s) {
