@@ -7,6 +7,10 @@
 
    usage: node fpos-webui-chat.js <base-url> <token> <message> <expected-reply>
 
+   With FPOS_WEBUI_SCREENSHOT=<prefix> in the environment, the page is
+   saved once the reply shows, tool cards open, as <prefix>-dark.png and
+   <prefix>-light.png (1280x900 at 2x).
+
    Prints "ok: ..." and exits 0 when the reply shows; "skip: ..." and exits
    0 without Playwright; "FAIL: ..." and exits 1 otherwise, with what the
    page did (its /v1 requests and how they ended, its errors, the
@@ -24,8 +28,10 @@ if (!base || !expected) { console.log("FAIL: usage: fpos-webui-chat.js <base-url
   const trail = [], errors = [];
   let browser, page, state = null;
   try {
+    const shot = process.env.FPOS_WEBUI_SCREENSHOT;
     browser = await chromium.launch();
-    page = await browser.newPage();
+    page = await browser.newPage(shot ? { viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2,
+                                          colorScheme: "dark" } : {});
     page.on("pageerror", e => errors.push(String(e)));
     page.on("console", m => { if (m.type() === "error") errors.push(m.text()); });
     const short = r => r.method() + " " + new URL(r.url()).pathname;
@@ -54,6 +60,16 @@ if (!base || !expected) { console.log("FAIL: usage: fpos-webui-chat.js <base-url
       const log = document.querySelector("#log");
       return log && log.textContent.includes(text);
     }, expected, { timeout: 240000 });
+    if (shot) {
+      await page.waitForFunction(() => typeof streaming === "undefined" || !streaming, null, { timeout: 60000 })
+        .catch(() => {});
+      await page.evaluate(() => document.querySelectorAll("details.tool-card").forEach(d => { d.open = true; }));
+      await page.waitForTimeout(500);
+      await page.screenshot({ path: shot + "-dark.png" });
+      await page.emulateMedia({ colorScheme: "light" });
+      await page.waitForTimeout(500);
+      await page.screenshot({ path: shot + "-light.png" });
+    }
     console.log("ok: the reply showed in the page (loaded in " + loaded + ", replied at " + secs() + ")" +
                 (errors.length ? "; page errors: " + errors.join("; ") : ""));
     await browser.close();

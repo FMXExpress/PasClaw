@@ -34,8 +34,9 @@ over the serial port the way the system's own tests do
     fake model, /v1/chat/completions streaming (SSE: the tool's line reaches
     this machine before the model is asked for the rest), the /v1/logs and
     /v1/desktop/events feeds, /v1/background, the web UI in headless
-    Chromium sending a chat message (when node and Playwright are here,
-    scripts/fpos-webui-chat.js), and `pasclaw agent --attach` inside the
+    Chromium sending a chat message whose turn runs `uname -s` inside the
+    system (when node and Playwright are here, scripts/fpos-webui-chat.js;
+    FPOS_WEBUI_SCREENSHOT=<prefix> saves the page), and `pasclaw agent --attach` inside the
     system talking to that gateway.
 
 usage: test-fpos-qemu.py <FPOS_DIR> <pasclaw-binary> <work-dir>
@@ -149,6 +150,14 @@ class Model(http.server.BaseHTTPRequestHandler):
             return self.answer('hi over https from the fake model', None)
         if 'attached' in prompt:
             return self.answer('hi to the attached terminal', None)
+        if 'which system' in prompt and len(tool_results) == 0:
+            return self.answer(None, [('shell_exec', {'command': 'uname -s'})])
+        if 'which system' in prompt:
+            # Said only when the command's output came back from inside
+            # FreePascalOS: the browser check looks for this sentence.
+            if 'FreePascalOS' in str(tool_results[-1].get('content')):
+                return self.answer(BROWSER_REPLY, None)
+            return self.answer('uname -s printed something else', None)
         return self.answer('hi from the fake model', None)
 
     def answer(self, text, calls, hold=False):
@@ -211,6 +220,7 @@ class Model(http.server.BaseHTTPRequestHandler):
 
 STREAMED = 'Streaming works inside FreePascalOS: alpha beta gamma delta.'
 GATEWAY_STREAMED = 'The gateway streams out of FreePascalOS: one two three four five.'
+BROWSER_REPLY = 'This gateway runs inside FreePascalOS: `uname -s` printed **FreePascalOS** there.'
 
 # `pasclaw gateway` inside FreePascalOS listens on GATEWAY_PORT; QEMU
 # forwards a free port on this machine's loopback to it.
@@ -419,7 +429,7 @@ def gateway_checks(gw):
          isinstance(desktop, tuple) and desktop[1] is not None and b'"hello"' in desktop[1]),
         ('gateway: GET /v1/background answers', background[0] == 200
          and as_json(background[2]) is not None),
-        ('gateway: the web UI in Chromium sends a chat message and shows the reply',
+        ('gateway: the web UI in Chromium runs a turn (uname -s inside FreePascalOS) and shows the reply',
          None if browser is None else (isinstance(browser, tuple) and browser[0] is True)),
         ('agent --attach inside FreePascalOS: a turn through the gateway there',
          'hi to the attached terminal' in gw.get('attach', '')
@@ -429,14 +439,16 @@ def gateway_checks(gw):
 
 def browser_chat(port):
     """The web UI the gateway serves, in headless Chromium (Playwright,
-    scripts/fpos-webui-chat.js): a chat message sent from the page gets the
-    fake model's reply. True / False, or None when node or Playwright is
-    not there."""
+    scripts/fpos-webui-chat.js): a chat message sent from the page runs
+    `uname -s` inside FreePascalOS, and the reply the fake model gives only
+    when that printed FreePascalOS shows. True / False, or None when node
+    or Playwright is not there. With FPOS_WEBUI_SCREENSHOT=<prefix> set,
+    the page is also saved as <prefix>-dark.png and <prefix>-light.png."""
     if not shutil.which('node'):
         return None
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fpos-webui-chat.js')
     r = subprocess.run(['node', script, 'http://127.0.0.1:%d' % port, GATEWAY_TOKEN,
-                        'hello from the browser', 'hi from the fake model'],
+                        'which system is this gateway on?', BROWSER_REPLY.replace('`', '').replace('*', '')],
                        capture_output=True, text=True, timeout=600)
     out = (r.stdout + r.stderr).strip()
     if r.returncode == 0 and out.startswith('skip'):
