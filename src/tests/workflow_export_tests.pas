@@ -190,7 +190,8 @@ begin
   Check(Has('program wf_all_kinds_v2;', Src), 'program name is wf_<id>');
   Check(Has('PasClaw.Workflow.Standalone', Src), 'runs on PasClaw''s engine');
   Check(Has('{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}', Src), 'Delphi-compatible mode switch');
-  Check(Has('fpc -MDelphi -Sh -Fubuild/lib -FEbuild wf_all_kinds_v2.dpr', Src), 'says how to build it');
+  Check(Has('fpc -MDelphi -Sh -Fubuild/lib -Fusrc/pkg/*', Src) and Has('-FU/tmp/wf-units -FEbuild wf_all_kinds_v2.dpr', Src),
+        'says how to build it: build/lib first, the sources after, units in a folder of their own');
   Check(Has('Halt(RunStandaloneWorkflow(WorkflowSpec));', Src), 'runs the embedded spec');
   Check(not Has('*)' + 'x', Src) and (Pos('*)', Src) = Pos('*)' + sLineBreak + 'program', Src)),
         'nothing in the header closes its comment early');

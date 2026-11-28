@@ -894,11 +894,16 @@ begin
     L.Add('  through the same permission rules, and the providers and MCP servers from your');
     L.Add('  PasClaw config ($PASCLAW_HOME/config.json). No key is written into this file.');
     L.Add('');
-    L.Add('  Build it from a PasClaw source checkout (FPC 3.2+), after `make`:');
-    L.Add('    fpc -MDelphi -Sh -Fubuild/lib -FEbuild ' + Base + '.dpr');
-    L.Add('  or straight from the sources, without make:');
-    L.Add('    mkdir -p /tmp/wf-units && fpc -MDelphi -Sh -Fusrc/pkg/* -Fusrc/pkg/memory/localvector \');
-    L.Add('      -Fusrc/pkg/vendor/zpaq -Fuvendor/Indy/Lib/* -Fivendor/Indy/Lib/* \');
+    { One command for both cases. build/lib comes first, so after `make` the
+      compiled units are used as they are; the sources come after it, so a
+      unit that is out of date there (an incremental build leaves some) is
+      compiled again, into a folder of its own -- build/lib is never
+      written. With only -Fubuild/lib that case failed ("Can't find unit"). }
+    L.Add('  Build it from a PasClaw source checkout (FPC 3.2+); after `make` it uses the');
+    L.Add('  compiled units in build/lib, and it works without make too:');
+    L.Add('    mkdir -p /tmp/wf-units && fpc -MDelphi -Sh -Fubuild/lib -Fusrc/pkg/* \');
+    L.Add('      -Fusrc/pkg/memory/localvector -Fusrc/pkg/vendor/zpaq \');
+    L.Add('      -Fuvendor/Indy/Lib/* -Fivendor/Indy/Lib/* \');
     L.Add('      -Fu/usr/lib/lazarus/3.0/components/lazutils -FU/tmp/wf-units -FEbuild ' + Base + '.dpr');
     L.Add('  Delphi: add the same source folders to the project''s search path.');
     L.Add('');

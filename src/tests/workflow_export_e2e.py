@@ -41,6 +41,8 @@ usage: workflow_export_e2e.py <pasclaw-binary>
 import http.server
 import json
 import os
+import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -338,12 +340,21 @@ def main():
             lib = os.path.join(os.path.dirname(binary), "lib")
             units = os.path.join(work, "units")
             os.makedirs(units)
-            r = subprocess.run([fpc, "-MDelphi", "-Sh", "-Fu" + lib, "-FE" + work, "-FU" + units, dpr],
-                               cwd=ROOT, capture_output=True, text=True, timeout=300)
+            # The build command the export's own header gives, run as written
+            # but for its three folders: this build's lib, a private unit
+            # folder and the work folder for the program.
+            head = exports["pascal"].split("*)")[0]
+            m = re.search(r"&& (fpc .*?\.dpr)", head.replace("\\\n", " "), re.S)
+            if not m:
+                fail("the Pascal export's header gives no build command:\n" + head)
+            argv = shlex.split(m.group(1))
+            argv = [fpc] + [{"-Fubuild/lib": "-Fu" + lib, "-FU/tmp/wf-units": "-FU" + units,
+                             "-FEbuild": "-FE" + work}.get(a, a) for a in argv[1:-1]] + [dpr]
+            r = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True, timeout=300)
             exe = os.path.join(work, "wf_demo")
             if r.returncode != 0 or not os.path.exists(exe):
-                fail("the Pascal export does not compile:\n" + r.stdout[-3000:])
-            ok("the Pascal export compiles with fpc -MDelphi -Sh -Fu<build>/lib")
+                fail("the Pascal export does not compile with the command in its header:\n" + r.stdout[-3000:])
+            ok("the Pascal export compiles with the command its header gives")
             env = dict(os.environ, PASCLAW_HOME=home_a, NO_COLOR="1")
             r = subprocess.run([exe, "--input", "topic=" + topic, "--json", "--no-files"], cwd=work, env=env,
                                capture_output=True, text=True, timeout=120)
