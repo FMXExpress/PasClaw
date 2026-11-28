@@ -120,8 +120,11 @@ uses
     libfb / FreeTDS / Oracle OCI / unixODBC) is loaded lazily at connect time,
     so a missing lib only fails that connection -- it doesn't break the build or
     other engines. }
-  sqlite3conn, pqconnection, mysql57conn, mysql80conn,
+  sqlite3conn,
+  {$IFNDEF FREEPASCALOS}   { FreePascalOS has none of these client libraries }
+  pqconnection, mysql57conn, mysql80conn,
   ibconnection, mssqlconn, odbcconn, oracleconnection,
+  {$ENDIF}
   {$ELSE}
   Data.DB, System.JSON,
   FireDAC.Comp.Client, FireDAC.Stan.Def, FireDAC.Stan.Async,

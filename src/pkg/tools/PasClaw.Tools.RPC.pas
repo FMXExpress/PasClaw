@@ -69,13 +69,20 @@ interface
 
 uses
   SysUtils, Classes, SyncObjs,
+  {$IFNDEF FREEPASCALOS}
   IdTCPServer, IdContext, IdGlobal, IdSocketHandle,
+  {$ENDIF}
   PasClaw.Tools.Registry;
 
 type
+  (* On FreePascalOS (no Indy socket stack) the server never listens:
+     Start raises, and execute_code runs its script without the
+     `pasclaw __tool` callback, as it does wherever a bind fails. *)
   TToolRPCServer = class
   private
+    {$IFNDEF FREEPASCALOS}
     FServer:   TIdTCPServer;
+    {$ENDIF}
     FRegistry: TToolRegistry;
     FDispatcher: IToolDispatcher;   { when set, every request goes through it }
     FToken:    string;
@@ -84,7 +91,9 @@ type
     FBindIP:   string;
     FAdvertiseHost: string;
     FLock:     TCriticalSection;
+    {$IFNDEF FREEPASCALOS}
     procedure OnExecute(Ctx: TIdContext);
+    {$ENDIF}
     procedure WriteInfoFile;
     procedure DeleteInfoFile;
   public
@@ -217,14 +226,18 @@ begin
     call. nil keeps the registry-only path for harnesses without a loop. }
   FDispatcher := Dispatcher;
   FInfoPath := InfoPath;
+  {$IFNDEF FREEPASCALOS}
   FServer   := TIdTCPServer.Create(nil);
   FServer.OnExecute := OnExecute;
+  {$ENDIF}
 end;
 
 destructor TToolRPCServer.Destroy;
 begin
   Stop;
+  {$IFNDEF FREEPASCALOS}
   FServer.Free;
+  {$ENDIF}
   FLock.Free;
   inherited Destroy;
 end;
@@ -292,6 +305,17 @@ begin
   if FileExists(FInfoPath) then SysUtils.DeleteFile(FInfoPath);
 end;
 
+{$IFDEF FREEPASCALOS}
+procedure TToolRPCServer.Start;
+begin
+  raise Exception.Create('not available on FreePascalOS (no socket server)');
+end;
+
+procedure TToolRPCServer.Stop;
+begin
+  DeleteInfoFile;
+end;
+{$ELSE}
 procedure TToolRPCServer.Start;
 var
   IP: string;
@@ -476,6 +500,7 @@ begin
     RespObj.Free;
   end;
 end;
+{$ENDIF}
 
 function DiscoverRunningRPC(out Port: Integer;
                             out Token, Host, ErrMsg: string): Boolean;

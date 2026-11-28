@@ -95,6 +95,9 @@ uses
   {$IFDEF UNIX}
   , BaseUnix, TermIO
   {$ENDIF}
+  {$IFDEF FREEPASCALOS}
+  , PasClaw.Platform.FreePascalOS   { console echo, for ReadSecretLine }
+  {$ENDIF}
   {$IF DEFINED(POSIX) AND NOT DEFINED(FPC)}
   , Posix.Termios   { Delphi/Linux+macOS: tcgetattr/tcsetattr for ECHO control }
   {$IFEND}
@@ -431,9 +434,26 @@ begin
   if HaveMode then PrintLn;
 end;
 {$ENDIF}
-{ Bare/unknown platform (none of Windows, FPC/Unix, or Delphi/POSIX): no way to
-  turn off terminal echo, so fall back to a plain read. }
-{$IF NOT DEFINED(UNIX) AND NOT DEFINED(POSIX) AND NOT DEFINED(MSWINDOWS)}
+{$IFDEF FREEPASCALOS}
+{ FreePascalOS: the console's echo bit, through libsystem. }
+var
+  HaveTerm: Boolean;
+begin
+  Print(Prompt);
+  Flush(Output);
+  HaveTerm := FposSetConsoleEcho(False);
+  try
+    ReadLn(Result);
+  finally
+    if HaveTerm then FposSetConsoleEcho(True);
+  end;
+  if HaveTerm then PrintLn;
+end;
+{$ENDIF}
+{ Bare/unknown platform (none of Windows, FPC/Unix, Delphi/POSIX or
+  FreePascalOS): no way to turn off terminal echo, so fall back to a
+  plain read. }
+{$IF NOT DEFINED(UNIX) AND NOT DEFINED(POSIX) AND NOT DEFINED(MSWINDOWS) AND NOT DEFINED(FREEPASCALOS)}
 begin
   { Unknown platform -- fall through to plain echoing read so the
     program still runs. }

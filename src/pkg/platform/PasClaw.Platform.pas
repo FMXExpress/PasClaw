@@ -246,7 +246,9 @@ implementation
 uses
   {$IFDEF FPC}
     Process
-    {$IFDEF MSWINDOWS}, Windows {$ELSE}, BaseUnix {$ENDIF}
+    {$IFDEF MSWINDOWS}, Windows {$ELSE}
+    {$IFDEF FREEPASCALOS}, PasClaw.Platform.FreePascalOS {$ELSE}, BaseUnix {$ENDIF}
+    {$ENDIF}
                                            { Windows: GetOEMCP +
                                              MultiByteToWideChar for the
                                              cmd.exe output decode.
@@ -364,7 +366,7 @@ begin
   if Path = '' then GProcFSRoot := '/proc' else GProcFSRoot := Path;
 end;
 
-{$IFNDEF MSWINDOWS}
+{$IFNDEF MSWINDOWS}{$IFNDEF FREEPASCALOS}
 { /proc entries report size 0, so anything that stats first and reads
   that many bytes comes back empty. Read until EOF instead. }
 function ReadProcFile(const Path: string): string;
@@ -598,16 +600,21 @@ begin
     Pids.Free;
   end;
 end;
-{$ENDIF}
+{$ENDIF}{$ENDIF}
 
 procedure TerminateProcessTree(Pid: Integer);
-{$IFNDEF MSWINDOWS}
+{$IFNDEF MSWINDOWS}{$IFNDEF FREEPASCALOS}
 var
   Tree: TList;
   i: Integer;
-{$ENDIF}
+{$ENDIF}{$ENDIF}
 begin
   if Pid <= 1 then Exit;
+  {$IFDEF FREEPASCALOS}
+  { libsystem's process list gives the parents; see the unit. }
+  FposTerminateProcessTree(Pid);
+  Exit;
+  {$ENDIF}
   {$IFDEF MSWINDOWS}
   (* taskkill rather than a Toolhelp32 walk: /T is the documented tree
      kill, and the snapshot API's declarations differ enough between
@@ -628,7 +635,7 @@ begin
   {$ELSE}
   DetachedTaskkill(Pid);
   {$ENDIF}
-  {$ELSE}
+  {$ELSE}{$IFNDEF FREEPASCALOS}
   Tree := TList.Create;
   try
     CollectTree(Pid, Tree);
@@ -641,7 +648,7 @@ begin
   finally
     Tree.Free;
   end;
-  {$ENDIF}
+  {$ENDIF}{$ENDIF}
 end;
 
 function DecodeShellOutputBytes(const Bytes: TBytes;
@@ -899,6 +906,7 @@ var
   N, Total, TimeoutMs: Integer;
   StartT: TDateTime;
   TimedOut: Boolean;
+  {$IFDEF FREEPASCALOS}Drained: Boolean;{$ENDIF}
 begin
   Result := -1;
   Output := '';
@@ -943,11 +951,18 @@ begin
     TimeoutMs := EffectiveShellTimeoutMs;
     StartT := Now;
     TimedOut := False;
-    while P.Running or (P.Output.NumBytesAvailable > 0) do
+    {$IFDEF FREEPASCALOS}Drained := False;{$ENDIF}
+    while (P.Running or (P.Output.NumBytesAvailable > 0))
+          {$IFDEF FREEPASCALOS} and not Drained {$ENDIF} do
     begin
       while P.Output.NumBytesAvailable > 0 do
       begin
         N := P.Output.Read(Buf, SizeOf(Buf));
+        {$IFDEF FREEPASCALOS}
+        { FreePascalOS reports a pipe whose writer is gone as readable
+          for good, and reading it gives 0: that is its end. }
+        if N <= 0 then begin Drained := not P.Running; Break; end;
+        {$ENDIF}
         if N > 0 then begin M.WriteBuffer(Buf, N); Inc(Total, N); end;
         if Total > OneShotMaxBytes then
         begin
@@ -1013,6 +1028,7 @@ var
   Name, Existing: string;
   StartT: TDateTime;
   TimedOut: Boolean;
+  {$IFDEF FREEPASCALOS}Drained: Boolean;{$ENDIF}
 begin
   Result := -1;
   Output := '';
@@ -1083,11 +1099,18 @@ begin
     TimeoutMs := EffectiveShellTimeoutMs;
     StartT := Now;
     TimedOut := False;
-    while P.Running or (P.Output.NumBytesAvailable > 0) do
+    {$IFDEF FREEPASCALOS}Drained := False;{$ENDIF}
+    while (P.Running or (P.Output.NumBytesAvailable > 0))
+          {$IFDEF FREEPASCALOS} and not Drained {$ENDIF} do
     begin
       while P.Output.NumBytesAvailable > 0 do
       begin
         N := P.Output.Read(Buf, SizeOf(Buf));
+        {$IFDEF FREEPASCALOS}
+        { FreePascalOS reports a pipe whose writer is gone as readable
+          for good, and reading it gives 0: that is its end. }
+        if N <= 0 then begin Drained := not P.Running; Break; end;
+        {$ENDIF}
         if N > 0 then begin M.WriteBuffer(Buf, N); Inc(Total, N); end;
         if Total > OneShotMaxBytes then
         begin

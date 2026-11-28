@@ -160,7 +160,9 @@ implementation
 
 uses
   PasClaw.Utils,
-{$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
+{$IF Defined(FREEPASCALOS)}
+  PasClaw.HTTP.FreePascalOS;     { libhttp: FreePascalOS has no Indy stack }
+{$ELSEIF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
   System.Net.URLClient, System.Net.HttpClient;
 {$ELSE}
   IdHTTP, IdSSLOpenSSL, IdSSLOpenSSLHeaders,
@@ -253,7 +255,176 @@ begin
   Result := False;
 end;
 
-{$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
+{$IF Defined(FREEPASCALOS)}
+(* ============================================================
+   FreePascalOS backend -- the system's libhttp, through
+   PasClaw.HTTP.FreePascalOS (src/fpos, built only by `make fpos`).
+   TLS is libtls, so there is no OpenSSL to look for; the
+   HTTP(S)_PROXY variables are not read (libhttp has no proxy).
+   ============================================================ *)
+
+function EnsureOpenSSL(out ErrMsg: string): Boolean;
+begin
+  ErrMsg := '';
+  Result := True;
+end;
+
+{ One request. The body of a 2xx answer goes to RespStream when there is
+  one, else into Result.Body; any other answer's body is in Result.Body
+  either way (where Indy's EIdHTTPProtocolException.ErrorMessage has it). }
+function FposRequest(const Method, URL: string; HasBody: Boolean;
+                     const Body, ContentType: string;
+                     const Headers: array of THeaderPair;
+                     TimeoutSeconds: Integer;
+                     const UserAgent, Accept: string;
+                     OnRedirect: THTTPRedirectGuard;
+                     RespStream: TStream): THTTPResult;
+var
+  X: TFposHttpExchange;
+  Mem: TMemoryStream;
+  Raw: RawByteString;
+  i: Integer;
+begin
+  Result.StatusCode  := 0;
+  Result.Body        := '';
+  Result.ContentType := '';
+  Result.ErrorMsg    := '';
+  SetLength(Result.RespHeaders, 0);
+  X := FposNewExchange(Method, URL, TimeoutSeconds);
+  for i := 0 to High(Headers) do
+    FposAddHeader(X, Headers[i].Name, Headers[i].Value);
+  X.HasBody := HasBody;
+  if HasBody then
+  begin
+    { string is UTF-8 throughout PasClaw's FPC builds: the bytes go as is. }
+    X.Body := RawByteString(Body);
+    X.ContentType := ContentType;
+  end;
+  X.UserAgent  := UserAgent;
+  X.Accept     := Accept;
+  X.OnRedirect := OnRedirect;
+  Mem := nil;
+  if RespStream = nil then Mem := TMemoryStream.Create;
+  try
+    if RespStream <> nil then
+      FposHttpExecute(X, RespStream)
+    else
+      FposHttpExecute(X, Mem);
+    Result.StatusCode  := X.StatusCode;
+    Result.ContentType := X.RespContentType;
+    Result.ErrorMsg    := X.ErrorMsg;
+    SetLength(Result.RespHeaders, Length(X.RespNames));
+    for i := 0 to High(X.RespNames) do
+    begin
+      Result.RespHeaders[i].Name  := X.RespNames[i];
+      Result.RespHeaders[i].Value := X.RespValues[i];
+    end;
+    if (Mem <> nil) and (Mem.Size > 0) then
+    begin
+      SetString(Raw, PAnsiChar(Mem.Memory), Mem.Size);
+      Result.Body := string(Raw);
+    end
+    else if X.ErrorBody <> '' then
+      Result.Body := string(X.ErrorBody);
+    TagUTF8(Result.Body);
+  finally
+    Mem.Free;
+  end;
+end;
+
+function PostJSON(const URL, JSON: string;
+                  const Headers: array of THeaderPair;
+                  TimeoutSeconds: Integer): THTTPResult;
+begin
+  Result := FposRequest('POST', URL, True, JSON, 'application/json; charset=utf-8',
+                        Headers, TimeoutSeconds, '', 'application/json', nil, nil);
+end;
+
+function PutJSON(const URL, JSON: string;
+                 const Headers: array of THeaderPair;
+                 TimeoutSeconds: Integer): THTTPResult;
+begin
+  Result := FposRequest('PUT', URL, True, JSON, 'application/json; charset=utf-8',
+                        Headers, TimeoutSeconds, '', 'application/json', nil, nil);
+end;
+
+function GetJSONURL(const URL: string;
+                    const Headers: array of THeaderPair;
+                    TimeoutSeconds: Integer): THTTPResult;
+begin
+  Result := FposRequest('GET', URL, False, '', '', Headers, TimeoutSeconds,
+                        '', 'application/json', nil, nil);
+end;
+
+function GetURL(const URL: string;
+                const Headers: array of THeaderPair;
+                TimeoutSeconds: Integer;
+                const UserAgent: string;
+                const Accept: string;
+                OnRedirect: THTTPRedirectGuard): THTTPResult;
+begin
+  Result := FposRequest('GET', URL, False, '', '', Headers, TimeoutSeconds,
+                        UserAgent, Accept, OnRedirect, nil);
+end;
+
+function PostRaw(const URL, ContentType, Body: string;
+                 const Headers: array of THeaderPair;
+                 TimeoutSeconds: Integer;
+                 const UserAgent: string;
+                 const Accept: string): THTTPResult;
+begin
+  Result := FposRequest('POST', URL, True, Body, ContentType + '; charset=utf-8',
+                        Headers, TimeoutSeconds, UserAgent, Accept, nil, nil);
+end;
+
+function PostJSONToStream(const URL, JSON: string;
+                          RespStream: TStream;
+                          const Headers: array of THeaderPair;
+                          TimeoutSeconds: Integer;
+                          const UserAgent: string;
+                          const Accept: string;
+                          out StatusCode: Integer;
+                          out ErrMsg: string): Boolean;
+var
+  R: THTTPResult;
+  A: string;
+begin
+  A := Accept;
+  if A = '' then A := 'application/json';
+  R := FposRequest('POST', URL, True, JSON, 'application/json; charset=utf-8',
+                   Headers, TimeoutSeconds, UserAgent, A, nil, RespStream);
+  StatusCode := R.StatusCode;
+  ErrMsg := R.ErrorMsg;
+  { As the Indy backend: an error answer's body is the provider's own
+    explanation, so it is the message. }
+  if (R.Body <> '') and ((StatusCode < 200) or (StatusCode >= 300)) then
+    ErrMsg := R.Body;
+  Result := (StatusCode >= 200) and (StatusCode < 300);
+end;
+
+function GetURLToStream(const URL: string; Stream: TStream;
+                        const Headers: array of THeaderPair;
+                        TimeoutSeconds: Integer): THTTPResult;
+begin
+  Result := FposRequest('GET', URL, False, '', '', Headers, TimeoutSeconds,
+                        '', '*/*', nil, Stream);
+  Result.Body := '';
+end;
+
+function GetURLToStreamGuarded(const URL: string;
+                                RespStream: TStream;
+                                const Headers: array of THeaderPair;
+                                TimeoutSeconds: Integer;
+                                const UserAgent: string;
+                                const Accept: string;
+                                OnRedirect: THTTPRedirectGuard): THTTPResult;
+begin
+  Result := FposRequest('GET', URL, False, '', '', Headers, TimeoutSeconds,
+                        UserAgent, Accept, OnRedirect, RespStream);
+  Result.Body := '';
+end;
+
+{$ELSEIF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
 (* ============================================================
    TNetHTTPClient backend -- Delphi only, opt-in via -DPASCLAW_NETHTTP.
    TLS via the OS (SChannel on Windows, Secure Transport on macOS,

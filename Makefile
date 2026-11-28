@@ -970,6 +970,94 @@ test-xp:
 		echo "  skip: test-xp needs the win32 toolchain (make xp-toolchain)"; \
 	else $(MAKE) --no-print-directory xp && python3 -I scripts/check-xp-imports.py $(XPDIR)/pasclaw.exe; fi
 
+# ---- FreePascalOS (docs/freepascalos.md) ----
+# pasclaw for FreePascalOS (x86-64 UEFI, https://github.com/xeons/FreePascalOS),
+# built with that system's own compiler target (-Tfreepascalos) from a
+# checkout of it in FPOS_DIR, where `make userland` (or at least
+# libsystem and libhttp) has been built. The binary links the system's
+# libraries (libsystem, libhttp, libtls, ...), which are GPLv3: see
+# docs/freepascalos.md before handing one to anybody.
+# Two compiles, then ld:
+#   1. src/fpos/fpospackages.pas: the FPC package units PasClaw uses,
+#      from FPC's package sources (FPOS_FPC_SOURCE, the 3.2.2 tree the
+#      system's compiler was built from; fcl-process from the system's
+#      port of it), with the packages' own settings, into $(FPOSDIR)/pkg
+#      -- what an FPC install ships precompiled on the other targets;
+#   2. PasClaw itself, -MDelphi -Sh as everywhere, into $(FPOSDIR)/lib,
+#      src/fpos (the FreePascalOS-only units) on its path;
+#   3. ld, as FreePascalOS links its own programs (userland/userland.mk).
+# Always a clean build: the compiler leaves objects only (-Cn) and ld
+# takes every one of them, so none may be left from an earlier build.
+FPOS_DIR        ?= /home/user/xeons/freepascalos
+FPOS_ARCH       ?= amd64
+FPOS_PPC        ?= $(FPOS_DIR)/build/toolchain/ppcx64
+FPOS_BUILD       = $(FPOS_DIR)/build/$(FPOS_ARCH)
+FPOS_RTL         = $(FPOS_BUILD)/rtl-user
+FPOS_USER        = $(FPOS_BUILD)/user
+FPOS_FPC_SOURCE ?= $(firstword $(wildcard /usr/share/fpcsrc/$(FPC_VERSION) /usr/lib/fpc/src /usr/lib/fpc/$(FPC_VERSION)/source))
+FPOSDIR          = $(BUILDDIR)/fpos
+# The system libraries pasclaw links, most dependent first.
+FPOS_LIBS        = http tls compression coreutils cryptography system
+FPOS_LIB_UNITS   = system cryptography coreutils compression tls http
+FPOS_PACKAGES    = fcl-json/src fcl-base/src fcl-db/src/base fcl-db/src/sqldb fcl-db/src/sqldb/sqlite fcl-db/src/dbase \
+	sqlite/src hash/src paszlib/src regexpr/src rtl-generics/src rtl-generics/src/inc rtl-objpas/src/inc
+FPOS_PROCESS     = $(FPOS_DIR)/toolchain/fpc/packages/fcl-process/src
+FPOS_COMMON      = -n -O2 -OoNOSTACKFRAME -Tfreepascalos -Cg -Cn -ve -Fi$(FPOS_DIR)/shared \
+	-Fu$(FPOS_RTL) $(foreach l,$(FPOS_LIB_UNITS),-Fu$(FPOS_USER)/$(l))
+FPOS_PKGFLAGS    = $(FPOS_COMMON) -S2h -Fusrc/fpos \
+	-Fi$(FPOS_PROCESS)/freepascalos -Fu$(FPOS_FPC_SOURCE)/packages/fcl-process/src \
+	-Fi$(FPOS_FPC_SOURCE)/packages/fcl-process/src \
+	$(foreach p,$(FPOS_PACKAGES),-Fu$(FPOS_FPC_SOURCE)/packages/$(p) -Fi$(FPOS_FPC_SOURCE)/packages/$(p)) \
+	-FU$(FPOSDIR)/pkg
+FPOS_FPCFLAGS    = $(FPOS_COMMON) -MDelphi -Sh -Fu$(FPOSDIR)/pkg -Fusrc/fpos \
+	$(foreach d,$(UNIT_DIRS),-Fu$(d)) $(foreach d,$(ZPAQ_UNIT_DIRS),-Fu$(d)) \
+	-FU$(FPOSDIR)/lib -FE$(FPOSDIR)
+FPOS_LDFLAGS     = -pie --no-dynamic-linker --hash-style=sysv -z max-page-size=4096 -z noexecstack -e _start
+
+# True when everything `make fpos` needs is there.
+FPOS_READY = test -x $(FPOS_PPC) && test -f $(FPOS_RTL)/si_prc.o && \
+	test -f $(FPOS_USER)/lib/libhttp.so && test -d "$(FPOS_FPC_SOURCE)/packages/fcl-json"
+
+.PHONY: fpos test-fpos-build test-fpos-qemu
+
+fpos:
+	@$(FPOS_READY) || { echo "no FreePascalOS toolchain at $(FPOS_DIR): build its compiler and userland there"; \
+		echo "  (make; make build/$(FPOS_ARCH)/user/lib/libhttp.so), or set FPOS_DIR -- see docs/freepascalos.md"; exit 1; }
+	@rm -rf $(FPOSDIR) && mkdir -p $(FPOSDIR)/lib $(FPOSDIR)/pkg
+	$(FPOS_PPC) $(FPOS_PKGFLAGS) src/fpos/fpospackages.pas
+	@# uuchar: the RTL unit {$mode delphiunicode} loads (the PDF reader).
+	$(FPOS_PPC) $(FPOS_PKGFLAGS) $(FPOS_FPC_SOURCE)/rtl/inc/uuchar.pp
+	PASCLAW_VERSION='$(VERSION)' $(FPOS_PPC) $(FPOS_FPCFLAGS) src/pasclaw/PasClaw.dpr
+	ld $(FPOS_LDFLAGS) -o $(FPOSDIR)/pasclaw $(FPOSDIR)/pkg/*.o $(FPOSDIR)/lib/*.o $(FPOS_RTL)/si_prc.o \
+		-L$(FPOS_USER)/lib $(foreach l,$(FPOS_LIBS),-l$(l))
+	@echo "built $(FPOSDIR)/pasclaw for FreePascalOS -- it links GPLv3 libraries, see docs/freepascalos.md"
+
+# Builds pasclaw for FreePascalOS (in a build folder of its own) and
+# checks the result is a position independent x86-64 ELF program that
+# needs the system's libraries and nothing of Indy's or OpenSSL's: the
+# guard that keeps the FreePascalOS build building. Skips without the
+# FreePascalOS toolchain.
+FPOS_TEST_BIN = $(BUILDDIR)/fpos-test/fpos/pasclaw
+test-fpos-build:
+	@if ! { $(FPOS_READY); } 2>/dev/null; then \
+		rm -rf $(BUILDDIR)/fpos-test; \
+		echo "  skip: test-fpos-build needs the FreePascalOS toolchain in FPOS_DIR (docs/freepascalos.md)"; \
+	else mkdir -p $(BUILDDIR) && \
+		if $(MAKE) --no-print-directory BUILDDIR=$(BUILDDIR)/fpos-test fpos > $(BUILDDIR)/fpos-test.log 2>&1; then \
+			python3 -I scripts/check-fpos-binary.py $(FPOS_TEST_BIN); \
+		else grep -E 'Error|Fatal|error:' $(BUILDDIR)/fpos-test.log | head -30; \
+			echo "FAIL: test-fpos-build: make fpos failed (log: $(BUILDDIR)/fpos-test.log)"; exit 1; fi; fi
+
+# That pasclaw inside FreePascalOS, in QEMU (scripts/test-fpos-qemu.py):
+# version, a turn against a fake model on this machine over HTTP and
+# HTTPS, the file and shell tools, a saved session, and `pasclaw acp`
+# streaming. Needs QEMU, OVMF, e2fsprogs/fdisk and `make esp` in
+# FPOS_DIR; skips without them.
+test-fpos-qemu: test-fpos-build
+	@if [ ! -f $(FPOS_TEST_BIN) ]; then \
+		echo "  skip: test-fpos-qemu needs the FreePascalOS build (test-fpos-build)"; \
+	else python3 -I scripts/test-fpos-qemu.py $(FPOS_DIR) $(FPOS_TEST_BIN) $(BUILDDIR)/fpos-qemu; fi
+
 # PCLAW.EXE itself, in DOSBox-X, its COM1 wired to the bridge. Skips
 # without dosbox-x or the DOS toolchain.
 test-dos-dosbox: $(BIN)
@@ -1915,7 +2003,7 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 # that falls back to the default home never writes to ~/.pasclaw.
 # `make test TEST_JOBS=1` runs them one at a time; `make test-all` runs
 # them with whatever -j you give it, without those steps.
-TEST_TARGETS = smoke test-updater-versions test-advisor test-advisor-e2e test-mcp-client test-mcp-client-e2e test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-verify-routes test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-code-outline test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-gateway-local-only test-gateway-listen-fail test-config-save-env-markers test-provider-models-e2e test-webui-model-picker-e2e test-acp test-streaming test-stale-units test-context-usage test-context-usage-e2e test-provider-error-e2e test-provider-usage test-usage-stats-e2e test-stats-reset-e2e test-oneshot-session-e2e test-fs-relative-path-e2e test-webui-sessions-e2e test-decision-models test-decision-models-e2e test-workflows-e2e test-dos test-dos-dosbox test-xp test-webui-markdown test-acp-e2e test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version test-background-view test-background-view-e2e test-webui-background-e2e test-webui-settings-e2e test-webui-relay-e2e test-webui-mcp-e2e test-webui-cron-e2e test-webui-chat-e2e test-webui-files-e2e test-webui-stats-e2e test-webui-vault-e2e test-webui-checkpoints-e2e test-webui-logs-e2e test-webui-skills-e2e test-webui-kb-e2e test-webui-memory-e2e test-webui-workflow-e2e
+TEST_TARGETS = smoke test-updater-versions test-advisor test-advisor-e2e test-mcp-client test-mcp-client-e2e test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip lint-utf8-file-io test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-workspace-listing test-steering-fastpath test-verify test-verify-routes test-turn-clock test-max-iter-notice test-tool-cancel test-delphi-iface-types test-plan-build-mode test-config-profile test-tool-rpc test-skill-args test-instructions test-runfile test-worktree test-permissions test-codemode test-rpc-gate test-skills-shell-gate test-shell-timeout test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-tiers test-backup test-maintain test-memory-static-embed test-browser-tools lint-browser-shape test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-code-outline test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-mcp-disclosure test-desktop-reveal test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-gateway-local-only test-gateway-listen-fail test-config-save-env-markers test-provider-models-e2e test-webui-model-picker-e2e test-acp test-streaming test-stale-units test-context-usage test-context-usage-e2e test-provider-error-e2e test-provider-usage test-usage-stats-e2e test-stats-reset-e2e test-oneshot-session-e2e test-fs-relative-path-e2e test-webui-sessions-e2e test-decision-models test-decision-models-e2e test-workflows-e2e test-dos test-dos-dosbox test-xp test-webui-markdown test-acp-e2e test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop lint-version test-background-view test-background-view-e2e test-webui-background-e2e test-webui-settings-e2e test-webui-relay-e2e test-webui-mcp-e2e test-webui-cron-e2e test-webui-chat-e2e test-webui-files-e2e test-webui-stats-e2e test-webui-vault-e2e test-webui-checkpoints-e2e test-webui-logs-e2e test-webui-skills-e2e test-webui-kb-e2e test-webui-memory-e2e test-webui-workflow-e2e test-fpos-build test-fpos-qemu
 TEST_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 # --output-sync is GNU make 4's; make 3.81 (macOS) interleaves instead.
 TEST_SYNC = $(if $(filter 3.%,$(MAKE_VERSION)),,--output-sync=target)

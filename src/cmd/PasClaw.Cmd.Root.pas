@@ -36,8 +36,13 @@ uses
   PasClaw.Cmd.Onboard,
   PasClaw.Cmd.Agent,
   PasClaw.Cmd.Auth,
+  {$IFDEF FREEPASCALOS}
+  PasClaw.Cmd.Unavailable,  (* gateway, serve, relay, bridge, tui and __tool
+                               say why they are missing (src/fpos) *)
+  {$ELSE}
   PasClaw.Cmd.Gateway,
   PasClaw.Cmd.Serve,
+  {$ENDIF}
   PasClaw.Cmd.Status,
   PasClaw.Cmd.Version,
   PasClaw.Cmd.Cron,
@@ -59,7 +64,9 @@ uses
   PasClaw.Cmd.Membench,
   PasClaw.Cmd.Memory,
   PasClaw.Cmd.KB,
+  {$IFNDEF FREEPASCALOS}
   PasClaw.Cmd.ToolRPC,
+  {$ENDIF}
   PasClaw.Cmd.Export,
   PasClaw.Cmd.Init,         (* Pascal-driven AGENTS.md bootstrap -- complements
                                Cmd.Runbook's tool-driven variant *)
@@ -68,17 +75,21 @@ uses
   PasClaw.Cmd.Plan,         (* `pasclaw plan` -- plan-mode sibling to build,
                                writes workspace/PLAN.md via plan_write *)
   PasClaw.Cmd.Runbook,
+  {$IFNDEF FREEPASCALOS}
   PasClaw.Cmd.Relay,        (* `pasclaw relay` -- worker client polling
                                a remote gateway's /v1/relay/poll *)
+  {$ENDIF}
   PasClaw.Cmd.Heartbeat,
   PasClaw.Cmd.Backup,       (* `pasclaw backup` / `pasclaw restore` *)
   PasClaw.Cmd.Maintain,     (* `pasclaw maintain` -- the nightly pass *)
   PasClaw.Cmd.Route,        (* `pasclaw route report` -- model usage split *)
   PasClaw.Cmd.DecisionModel, (* `pasclaw decision-model` -- bench + gate for decision models *)
   PasClaw.Cmd.Permissions,  (* `pasclaw permissions list|test` -- the ordered rule list *)
-  PasClaw.Cmd.Workflow,     (* `pasclaw workflow` -- saved workflows, approve agent-saved ones *)
-  PasClaw.Cmd.Bridge,       (* `pasclaw bridge` -- the DOS client's serial link to the gateway *)
-  PasClaw.Cmd.TUI;
+  PasClaw.Cmd.Workflow      (* `pasclaw workflow` -- saved workflows, approve agent-saved ones *)
+  {$IFNDEF FREEPASCALOS}
+  , PasClaw.Cmd.Bridge      (* `pasclaw bridge` -- the DOS client's serial link to the gateway *)
+  , PasClaw.Cmd.TUI
+  {$ENDIF};
 
 type
   TSubCmd = record

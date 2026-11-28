@@ -90,6 +90,7 @@ uses
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   {$IFNDEF FPC}System.IOUtils,{$ENDIF}
   {$IF DEFINED(POSIX) AND NOT DEFINED(FPC)}Posix.Base,{$IFEND}   { libc / _PU for setenv }
+  {$IFDEF FREEPASCALOS}PasClaw.Platform.FreePascalOS,{$ENDIF}     { setenv there }
   PasClaw.CliUI,
   PasClaw.Logger,
   PasClaw.Utils,
@@ -118,6 +119,9 @@ begin
   {$IFEND}
   {$IFDEF MSWINDOWS}
   Windows.SetEnvironmentVariable(PChar(Name), PChar(Value));
+  {$ENDIF}
+  {$IFDEF FREEPASCALOS}
+  FposSetEnvironmentVariable(Name, Value);
   {$ENDIF}
 end;
 

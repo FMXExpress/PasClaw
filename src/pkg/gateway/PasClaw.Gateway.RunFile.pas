@@ -89,6 +89,7 @@ uses
   {$IFDEF FPC}
     {$IFDEF UNIX}BaseUnix,{$ENDIF}
     {$IFDEF MSWINDOWS}Windows,{$ENDIF}
+    {$IFDEF FREEPASCALOS}PasClaw.Platform.FreePascalOS,{$ENDIF}
   {$ELSE}
     {$IFDEF MSWINDOWS}Winapi.Windows,{$ELSE}Posix.Signal, Posix.Unistd, Posix.Errno,{$ENDIF}
   {$ENDIF}
@@ -154,13 +155,15 @@ begin
     CloseHandle(H);
   end;
   {$ELSE}
-    {$IFDEF FPC}
+    {$IFDEF FREEPASCALOS}
+    Result := FposProcessExists(Pid);
+    {$ELSE}{$IFDEF FPC}
     { kill(pid, 0): 0 = alive and ours, EPERM = alive but not ours (still
       alive), ESRCH = gone. }
     Result := (fpKill(Pid, 0) = 0) or (fpGetErrno = ESysEPERM);
     {$ELSE}
     Result := (kill(Pid, 0) = 0) or (GetLastError = EPERM);
-    {$ENDIF}
+    {$ENDIF}{$ENDIF}
   {$ENDIF}
 end;
 
@@ -282,6 +285,12 @@ procedure InstallStopSignalHandler;
 begin
   SetConsoleCtrlHandler(@ConsoleHandler, True);
 end;
+{$ELSE}{$IFDEF FREEPASCALOS}
+{ FreePascalOS has no signal handlers: Ctrl-C and `kill` end the program
+  as they would one that installed none. }
+procedure InstallStopSignalHandler;
+begin
+end;
 {$ELSE}
   {$IFDEF FPC}
 procedure OnStopSignal(Sig: cint); cdecl;
@@ -308,7 +317,7 @@ begin
   signal(SIGTERM, TSignalHandler(@OnStopSignal));
 end;
   {$ENDIF}
-{$ENDIF}
+{$ENDIF}{$ENDIF}
 
 function GatewayBaseURL(const Info: TGatewayRunInfo): string;
 var

@@ -75,6 +75,11 @@ type
   {$ifdef linux}
   const dllname='onnxruntime.so';
   {$endif}
+  { FreePascalOS has no ONNX Runtime; the name only has to exist so the
+    loader can report it missing. }
+  {$ifdef FREEPASCALOS}
+  const dllname='onnxruntime.so';
+  {$endif}
   {$ifdef ONNX_NEW_VERSION}
   const ORT_API_VERSION = 13;
   {$else}

@@ -81,6 +81,7 @@ uses
   PasClaw.Workspaces,
   SysUtils, Classes,
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
+  {$IFDEF FREEPASCALOS}PasClaw.Platform.FreePascalOS,{$ENDIF}   { setenv there }
   PasClaw.CliUI,
   PasClaw.Config,            { GetHome -- ResolveHome's local-default fallback }
   PasClaw.Logger,
@@ -156,6 +157,9 @@ begin
     Windows.SetEnvironmentVariable(PChar(Name), nil)
   else
     Windows.SetEnvironmentVariable(PChar(Name), PChar(Value));
+  {$ENDIF}
+  {$IFDEF FREEPASCALOS}
+  FposSetEnvironmentVariable(Name, Value);
   {$ENDIF}
 end;
 
