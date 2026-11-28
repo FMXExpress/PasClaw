@@ -30,14 +30,19 @@ over the serial port the way the system's own tests do
     on its FreePascalOS socket stack, src/fpos/indy), reached from this
     machine through a port QEMU forwards to it: /v1/health, the web UI at
     / (the embedded resource), /v1/config with its secrets masked, a
-    request refused without the gateway token, /v1/chat answered by the
+    request refused without the gateway token, the token taken from
+    ?token= but not from ?to-ken= (exact string comparisons,
+    src/fpos/PasClaw.Compare.FreePascalOS.pas), /v1/chat answered by the
     fake model, /v1/chat/completions streaming (SSE: the tool's line reaches
     this machine before the model is asked for the rest), the /v1/logs and
     /v1/desktop/events feeds, /v1/background, the web UI in headless
     Chromium sending a chat message whose turn runs `uname -s` inside the
     system (when node and Playwright are here, scripts/fpos-webui-chat.js;
-    FPOS_WEBUI_SCREENSHOT=<prefix> saves the page), and `pasclaw agent --attach` inside the
-    system talking to that gateway.
+    FPOS_WEBUI_SCREENSHOT=<prefix> saves the page), and `pasclaw agent
+    --attach` inside the system talking to that gateway;
+  - `pasclaw serve` in the background on a second forwarded port: its
+    OpenAI-compatible /v1/chat/completions, and MCP's initialize and
+    tools/list on /mcp.
 
 usage: test-fpos-qemu.py <FPOS_DIR> <pasclaw-binary> <work-dir>
 
@@ -133,6 +138,8 @@ class Model(http.server.BaseHTTPRequestHandler):
         if 'TOOLS-PLEASE' in prompt:
             seen = ' | '.join(str(m.get('content'))[:160].replace('\n', ' ') for m in tool_results)
             return self.answer('TOOLS-DONE: ' + seen, None)
+        if 'from serve' in prompt:
+            return self.answer(SERVE_REPLY, None)
         if not body.get('tools'):
             return self.answer('summary', None)
         if 'gateway stream check' in prompt and len(tool_results) == 0:
@@ -220,11 +227,14 @@ class Model(http.server.BaseHTTPRequestHandler):
 
 STREAMED = 'Streaming works inside FreePascalOS: alpha beta gamma delta.'
 GATEWAY_STREAMED = 'The gateway streams out of FreePascalOS: one two three four five.'
+SERVE_REPLY = 'hi from the fake model, through pasclaw serve'
 BROWSER_REPLY = 'This gateway runs inside FreePascalOS: `uname -s` printed **FreePascalOS** there.'
 
 # `pasclaw gateway` inside FreePascalOS listens on GATEWAY_PORT; QEMU
 # forwards a free port on this machine's loopback to it.
 GATEWAY_PORT = 18790
+# `pasclaw serve` inside, on a port of its own, forwarded the same way.
+SERVE_PORT = 18791
 GATEWAY_TOKEN = 'fpos-gateway-test-token-7d1e'
 
 
@@ -328,6 +338,24 @@ class Gateway:
             conn.close()
         return r.getheader('Content-Type') or '', deltas, done
 
+    def mcp(self, method, params, request_id):
+        """A JSON-RPC request to /mcp (MCP over HTTP); the answer, from
+        JSON or from the first SSE event."""
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=120)
+        try:
+            conn.request('POST', '/mcp', body=json.dumps({'jsonrpc': '2.0', 'id': request_id,
+                                                          'method': method, 'params': params}).encode(),
+                         headers={'Authorization': 'Bearer ' + GATEWAY_TOKEN,
+                                  'Content-Type': 'application/json',
+                                  'Accept': 'application/json, text/event-stream'})
+            r = conn.getresponse()
+            body = r.read()
+            if b'data:' in body and not body.lstrip().startswith(b'{'):
+                body = body.split(b'data:', 1)[1].split(b'\n', 1)[0]
+            return r.status, json.loads(body or b'null')
+        finally:
+            conn.close()
+
     def first_event(self, path, seconds=30):
         """The content type and first `data:` event of an SSE feed that
         stays open (/v1/logs, /v1/desktop/events), then hangs up."""
@@ -403,6 +431,14 @@ def gateway_checks(gw):
     health = as_json(gw.get('health') or b'') or {}
     index, config, refused = answer('index'), answer('config'), answer('config-no-token')
     chat, background = answer('chat'), answer('background')
+    query_token, near_token = answer('query-token'), answer('query-near-token')
+    serve_chat = answer('serve-chat')
+    serve_mcp = None
+    got = gw.get('serve-mcp')
+    if (isinstance(got, tuple) and len(got) == 2 and got[0][0] == 200 and got[1][0] == 200
+            and 'result' in (got[0][1] or {})
+            and len(((got[1][1] or {}).get('result') or {}).get('tools') or []) > 0):
+        serve_mcp = got
     stream = gw.get('stream')
     if not (isinstance(stream, tuple) and len(stream) == 3):
         stream = ('', [], False)
@@ -416,6 +452,8 @@ def gateway_checks(gw):
          config[0] == 200 and as_json(config[2]) is not None and b'sk-test' not in config[2]
          and GATEWAY_TOKEN.encode() not in config[2] and '•••'.encode() in config[2]),
         ('gateway: a request without the token is refused (401)', refused[0] == 401),
+        ('gateway: parameters are looked up by exact name (?token= accepted, ?to-ken= refused)',
+         query_token[0] == 200 and near_token[0] == 401),
         ('gateway: POST /v1/chat answered by the fake model on 10.0.2.2',
          chat[0] == 200 and (as_json(chat[2]) or {}).get('content') == 'hi from the fake model'),
         ('gateway: /v1/chat/completions streams (SSE): the tool, then the answer',
@@ -431,6 +469,12 @@ def gateway_checks(gw):
          and as_json(background[2]) is not None),
         ('gateway: the web UI in Chromium runs a turn (uname -s inside FreePascalOS) and shows the reply',
          None if browser is None else (isinstance(browser, tuple) and browser[0] is True)),
+        ('serve: GET /v1/health through its own forwarded port',
+         (as_json(gw.get('serve-health') or b'') or {}).get('status') == 'ok'),
+        ('serve: POST /v1/chat/completions (OpenAI API) answered through the fake model',
+         serve_chat[0] == 200 and (((as_json(serve_chat[2]) or {}).get('choices') or [{}])[0]
+                                   .get('message') or {}).get('content') == SERVE_REPLY),
+        ('serve: /mcp answers initialize and lists its tools', serve_mcp is not None),
         ('agent --attach inside FreePascalOS: a turn through the gateway there',
          'hi to the attached terminal' in gw.get('attach', '')
          and 'ATTACH-EXIT=0' in gw.get('attach', '')),
@@ -553,7 +597,8 @@ def main():
         f.write(SMOKE.replace('@PORT@', str(port)).replace('@TLSPORT@', str(tls_port))
                 .replace('@CAPEM@', ca_pem).lstrip())
     with open(os.path.join(user, 'bin', 'pasclaw-gateway-log'), 'w') as f:
-        f.write('echo GW-LOG-BEGIN\ncat /tmp/gw.log\necho GW-LOG-END\n')
+        f.write('echo GW-LOG-BEGIN\ncat /tmp/gw.log\necho "---- pasclaw serve (/tmp/serve.log) ----"\n'
+                'cat /tmp/serve.log\necho GW-LOG-END\n')
     with open(os.path.join(user, 'bin', 'pasclaw-attach'), 'w') as f:
         f.write(ATTACH.replace('@TOKEN@', GATEWAY_TOKEN).lstrip())
 
@@ -579,6 +624,9 @@ def main():
     accel = ['-accel', 'kvm', '-cpu', 'host'] if os.environ.get('ACCEL') == 'kvm' else ['-cpu', 'max']
     # The gateway's port inside, reached from here on host_port.
     host_port = free_port()
+    serve_host_port = free_port()
+    while serve_host_port == host_port:
+        serve_host_port = free_port()
     qemu = subprocess.Popen(
         ['qemu-system-x86_64', '-machine', 'q35', *accel, '-m', '1G', '-smp', '2',
          '-drive', 'if=pflash,format=raw,readonly=on,file=' + code,
@@ -586,7 +634,8 @@ def main():
          '-drive', 'format=raw,file=fat:rw:' + os.path.join(work, 'esp'),
          '-drive', 'format=raw,cache=unsafe,file=' + disk,
          '-device', 'isa-debug-exit,iobase=0xf4,iosize=0x04',
-         '-netdev', 'user,id=net0,hostfwd=tcp:127.0.0.1:%d-:%d' % (host_port, GATEWAY_PORT),
+         '-netdev', 'user,id=net0,hostfwd=tcp:127.0.0.1:%d-:%d,hostfwd=tcp:127.0.0.1:%d-:%d'
+         % (host_port, GATEWAY_PORT, serve_host_port, SERVE_PORT),
          '-device', 'virtio-net-pci,netdev=net0',
          '-serial', 'pipe:' + serial, '-display', 'none', '-no-reboot'],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -636,6 +685,28 @@ def main():
 
     gateway = {}
 
+    def serve_part(attempt):
+        """`pasclaw serve` (the OpenAI-compatible server, MCP on /mcp) in
+        the background inside FreePascalOS, with a home of its own, asked
+        from this machine through the second forwarded port."""
+        for line in ('mkdir -p /tmp/pcs', 'cat /tmp/pch/config.json > /tmp/pcs/config.json',
+                     'env PASCLAW_HOME=/tmp/pcs NO_COLOR=1 PASCLAW_GATEWAY_TOKEN=%s '
+                     'pasclaw serve --addr 0.0.0.0 --port %d > /tmp/serve.log 2>&1 &'
+                     % (GATEWAY_TOKEN, SERVE_PORT)):
+            start = len(received)
+            type_line(line)
+            wait_for(PROMPT, 30, start)
+        sv = Gateway(serve_host_port, lambda: collect(0.05))
+        attempt('serve-health', lambda: sv.wait_up(300))
+        if gateway['serve-health'] is None:
+            return
+        attempt('serve-chat', lambda: sv.request('POST', '/v1/chat/completions', {
+            'model': 'm', 'messages': [{'role': 'user', 'content': 'say hi from serve'}]}))
+        attempt('serve-mcp', lambda: (
+            sv.mcp('initialize', {'protocolVersion': '2025-03-26', 'capabilities': {},
+                                  'clientInfo': {'name': 'test-fpos-qemu', 'version': '1'}}, 1),
+            sv.mcp('tools/list', {}, 2)))
+
     def gateway_part():
         """`pasclaw gateway` in the background inside FreePascalOS (its
         output in /tmp/gw.log), asked from this machine through the
@@ -662,6 +733,13 @@ def main():
             attempt('index', lambda: gw.request('GET', '/', token=None))
             attempt('config', lambda: gw.request('GET', '/v1/config'))
             attempt('config-no-token', lambda: gw.request('GET', '/v1/config', token=None))
+            # The token as a query parameter, then under a name that only
+            # differs by punctuation: TStrings lookups (Params.Values) go
+            # through AnsiCompareText, which PasClaw.Compare.FreePascalOS
+            # makes exact there.
+            attempt('query-token', lambda: gw.request('GET', '/v1/config?token=' + GATEWAY_TOKEN, token=None))
+            attempt('query-near-token',
+                    lambda: gw.request('GET', '/v1/config?to-ken=' + GATEWAY_TOKEN, token=None))
             attempt('chat', lambda: gw.request('POST', '/v1/chat', {'message': 'say hi'}))
             attempt('stream', gw.stream_chat)
             attempt('logs', lambda: gw.first_event('/v1/logs'))
@@ -676,6 +754,7 @@ def main():
             gateway['attach'] = section(
                 received[attach_start:].decode('utf-8', 'replace').replace('\r', ''),
                 'ATTACH-BEGIN\n', 'ATTACH-END')
+            serve_part(attempt)
         # (a script, so that the markers are not in the typing's echo)
         log_start = len(received)
         type_line('sh /bin/pasclaw-gateway-log')
@@ -784,7 +863,8 @@ def main():
         print('---- pasclaw acp, typed on the console ----')
         print(acp[:6000])
         print('---- pasclaw gateway, asked from this machine ----')
-        for name in ('health', 'chat', 'stream', 'logs', 'desktop-events', 'browser', 'attach'):
+        for name in ('health', 'chat', 'stream', 'logs', 'desktop-events', 'browser', 'attach',
+                     'serve-health', 'serve-chat', 'serve-mcp'):
             print('%s: %s' % (name, str(gateway.get(name))[:1500]))
         print('seconds: %s' % gateway.get('seconds'))
         print('---- its log (/tmp/gw.log) ----')

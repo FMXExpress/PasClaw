@@ -18,6 +18,10 @@ program PasClaw;
 {$APPTYPE CONSOLE}
 
 uses
+  {$IFDEF FREEPASCALOS}
+  PasClaw.Compare.FreePascalOS,  { first: exact string comparisons before any
+                                   other unit's initialization fills a list }
+  {$ENDIF}
   {$IFDEF FPC}{$IFDEF UNIX}
   cthreads,            { FPC/Linux: pull in pthreads so Indy can use TThread }
   cmem,

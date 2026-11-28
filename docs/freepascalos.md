@@ -45,7 +45,8 @@ Indy over the system's sockets.
 >   `webui.html` embedded in the binary as a resource.
 > - `GET /v1/config` with the token answers with its secrets masked (the
 >   provider key and the gateway token are not in it); the same request
->   without the token is refused with 401.
+>   without the token is refused with 401. The token is taken from
+>   `?token=`, and not from `?to-ken=` (see the string comparisons below).
 > - `POST /v1/chat` is answered by the fake model on the host (10.0.2.2).
 > - `POST /v1/chat/completions` with `stream: true` streams (SSE): the
 >   model asks for `write_file`, the gateway streams the call's line and
@@ -55,16 +56,21 @@ Indy over the system's sockets.
 > - `GET /v1/logs` streams the log, `GET /v1/desktop/events` says hello
 >   (both SSE, kept open), `GET /v1/background` answers.
 > - The web UI, loaded in headless Chromium (Playwright) through the
->   forwarded port with the token in its storage, sends a chat message and
->   shows the fake model's reply.
+>   forwarded port with the token in its storage, sends a chat message;
+>   the turn runs `uname -s` inside FreePascalOS, and the page shows the
+>   reply the fake model gives only when that printed `FreePascalOS`.
 > - `pasclaw agent --attach` inside FreePascalOS runs a turn through that
 >   gateway (Indy's client to Indy's server over the loopback interface).
 > - `execute_code`'s script calls back into the tools with `pasclaw __tool`
 >   (a TCP connection to the turn's tool server) and writes a file.
+> - `pasclaw serve` (the OpenAI-compatible server), started in the
+>   background with a home of its own and asked through a second forwarded
+>   port: `GET /v1/health`, a `POST /v1/chat/completions` answered through
+>   the fake model, and MCP's `initialize` and `tools/list` on `/mcp`.
 >
 > Not tried yet: a real provider over the internet (the system trusts the
 > Mozilla CA list in `/etc/ssl/certs/ca-certificates.crt`, so it should
-> work), the interactive `pasclaw agent` prompt, `serve`, `relay`,
+> work), the interactive `pasclaw agent` prompt, `relay`,
 > `bridge --listen`, the chat channels, and real hardware.
 
 ## The license of a FreePascalOS build
@@ -249,7 +255,8 @@ system in its way, but has not been run there yet.
 | `write_file`, `read_file`, `shell_exec` (and its timeout), `execute_code` and its `pasclaw __tool` callback | tried: commands run through the system's `/bin/sh` with `TProcess`; a command past its timeout is ended with the processes it started; `execute_code` runs `bash` scripts with `sh`, as FreePascalOS has no bash; the callback is a TCP connection to the turn's tool server on the loopback interface |
 | `gateway`: its API, the web UI, SSE, the token | tried, from the host through a forwarded port, and from Chromium; Indy's HTTP server on its FreePascalOS socket stack. Plain HTTP (see above) |
 | `agent --attach` | tried, to a gateway on the same system; `http://` gateways only |
-| `serve`, the inbound MCP server, LINE / WhatsApp webhooks, Telegram, Matrix, IRC | built in (the gateway's server, or `libhttp`) |
+| `serve`: `/v1/chat/completions`, the inbound MCP server on `/mcp` | tried, from the host through a second forwarded port (the gateway's server) |
+| LINE / WhatsApp webhooks, Telegram, Matrix, IRC | built in (the gateway's server, or `libhttp`) |
 | `relay` | built in; `http://` gateways only (Indy's TLS is OpenSSL) |
 | `bridge --listen` | built in; `--serial` says serial ports are not supported there |
 | The other file tools, sessions, memory notes, skills, checkpoints, backups, workflows, cron management, `config`, `model`, `status`, `doctor`, `session`, `workspace`, `project` | built in (plain files) |
@@ -279,14 +286,14 @@ system in its way, but has not been run there yet.
   boots it in QEMU with `init=/bin/sh` (and `test-exit`, so QEMU ends with
   the shell), and drives the shell over the serial port as FreePascalOS's own
   `scripts/test-input.py` does. A fake OpenAI-compatible model runs on the
-  host, over HTTP and over HTTPS. QEMU forwards a free port on the host's
-  loopback to the gateway's port inside; the script starts the gateway in
-  the background and asks it from the host with `http.client`, and loads
-  its web UI in headless Chromium with `scripts/fpos-webui-chat.js` when
+  host, over HTTP and over HTTPS. QEMU forwards two free ports on the
+  host's loopback, to the gateway's port and to `serve`'s inside; the
+  script starts each in the background and asks it from the host with
+  `http.client`, and loads the gateway's web UI in headless Chromium with `scripts/fpos-webui-chat.js` when
   node has Playwright (that check is skipped otherwise). The checks are
   the ones in the status box above; `FPOS_QEMU_VERBOSE=1` prints the whole
   session, the gateway's answers and its log. It takes about 45 seconds
-  under TCG, the gateway's part about 15 of them. It needs
+  under TCG, the gateway's and `serve`'s part about 15 of them. It needs
   `qemu-system-x86`, `ovmf`, `e2fsprogs`, `fdisk` and `openssl`, and
   `make esp` in FreePascalOS; it skips without them.
 
@@ -299,6 +306,7 @@ system in its way, but has not been run there yet.
 | `PasClaw.Platform.FreePascalOS` | the system calls: ending a process tree (the process list's parents), process checks, the console's size and echo, setting an environment variable, resolving a name |
 | `PasClaw.HTTP.FreePascalOS` | HTTP and HTTPS through `libhttp`'s `THttpClient`; the body goes to the caller's stream as it arrives; redirects are followed hop by hop so a guard sees each one; credentials are not carried to another origin |
 | `PasClaw.Cmd.Unavailable` | the command left out (`tui`), saying why |
+| `PasClaw.Compare.FreePascalOS` | exact string comparisons. FreePascalOS's SysUtils compares text by the Unicode collation algorithm, whose root collation gives punctuation and spaces no weight: `AnsiCompareText('X-Foo', 'XFoo')` is 0 there, and so every `TStringList` lookup, sort and duplicate check could match names that differ only by punctuation (the gateway took `?to-ken=` as `?token=`; Indy read `GET /x HTTP/1.1` as the path `/x HTTP/1`). This unit, the program's first, swaps the string manager's comparisons for exact ones before any other unit starts: bytes for case-sensitive ones, the same after Unicode upper-casing for case-insensitive ones |
 | `fphttpclient`, `opensslsockets`, `dynlibs`, `dos`, `masks` | the small parts of FPC and Lazarus units PasClaw's units name that have no FreePascalOS version (`TFPHTTPClient.Get` over `libhttp`; FPC's dynlibs without its per-OS include; `GetFAttr` for paszlib's gzio; `MatchesMask`) |
 | `fpospackages` | the list of FPC package units to compile first |
 
@@ -315,7 +323,7 @@ as upstream. When Indy moves, these are the files to look at.
 | `IdStackFreePascalOS` | new: Indy's socket stack, a `TIdStackBSDBase` over libsystem's `Sys.Sockets` (an Int64 handle per socket, errors returned by each call and kept per thread for `WSGetLastError`), names through `Sys.HostNames`, local addresses through `Sys.NetworkInterfaces`; Indy's socket options translated into the system's; readiness (`TIdSocketList`, Indy's `select()`) with `WaitForSocket` for one socket and `WaitForHandles` for several. It registers itself with `SetStackClass` |
 | `IdStackConsts` | the BSD socket names the Unix headers give Indy elsewhere, with Linux's numbers; the `Id_WSAE*` errors (FreePascalOS's error codes are Linux's errno numbers) |
 | `IdStack` | names `IdStackFreePascalOS` so every program using Indy links it, and leaves the stack class to its `SetStackClass` call |
-| `IdGlobal` | thread and process types, `CurrentProcessId`, `Ticks64` (the monotonic `GetTickCount64`), `IndySleep`; text encodings without iconv (UTF-8, the system's own, and single byte code pages); `TextIsSame` and friends byte for byte: FreePascalOS's `AnsiCompareText` collates by the Unicode algorithm, which passes over punctuation (`'.'` and `' '` compare equal), and Indy found the HTTP version's space by it |
+| `IdGlobal` | thread and process types, `CurrentProcessId`, `Ticks64` (the monotonic `GetTickCount64`), `IndySleep`; text encodings without iconv (UTF-8, the system's own, and single byte code pages). Its text comparisons are upstream's: `PasClaw.Compare.FreePascalOS` makes `AnsiCompareText` exact |
 | `IdGlobalProtocols` | a file's GMT date, `GetClockValue`, the default charset |
 
 Indy's TLS (`IdSSLOpenSSL`) is left out: `PasClaw.Client.Api` (the gateway

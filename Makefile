@@ -1060,7 +1060,8 @@ test-fpos-build:
 # HTTPS, the file and shell tools, a saved session, `pasclaw acp`
 # streaming, and `pasclaw gateway` asked from this machine through a
 # forwarded port (its API, SSE, the web UI -- in Chromium when node has
-# Playwright -- and `agent --attach` inside). Needs QEMU, OVMF,
+# Playwright -- and `agent --attach` inside), and `pasclaw serve` through
+# a second one (/v1/chat/completions, MCP on /mcp). Needs QEMU, OVMF,
 # e2fsprogs/fdisk and `make esp` in FPOS_DIR; skips without them.
 test-fpos-qemu: test-fpos-build
 	@if [ ! -f $(FPOS_TEST_BIN) ]; then \

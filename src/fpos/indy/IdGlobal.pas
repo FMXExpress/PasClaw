@@ -24,10 +24,9 @@
     - GOSType otUnix, GPathDelim '/' and INFINITE, as on Unix;
     - text encodings: no iconv there, so the code page path, with
       LocaleCharsFromUnicode() / UnicodeFromLocaleChars() written here for
-      UTF-8 (the system's own) and single byte code pages;
-    - TextIsSame, TextStartsWith, TextEndsWith and IndyCompareStr compare
-      byte for byte (ASCII case folded): FreePascalOS's AnsiCompareText()
-      collates by the Unicode algorithm, which passes over punctuation.
+      UTF-8 (the system's own) and single byte code pages.
+  (TextIsSame and the like are upstream's: PasClaw.Compare.FreePascalOS
+  makes AnsiCompareText() exact there.)
 }
 {
   $Log$
@@ -9678,24 +9677,13 @@ begin
   Insert(Source, S, Index);
 end;
 
-{$IFDEF FREEPASCALOS}
-// FreePascalOS's AnsiCompareText() and AnsiCompareStr() collate by the
-// Unicode collation algorithm, which passes over punctuation and spaces:
-// '.' and ' ', "X-Foo" and "XFoo" compare equal there. What Indy compares
-// is protocol text (commands, header names, tokens), so it is compared
-// byte for byte there, case folded for ASCII.
-{$ENDIF}
 function TextIsSame(const A1, A2: string): Boolean;
 {$IFDEF USE_INLINE}inline;{$ENDIF}
 begin
   {$IFDEF DOTNET}
   Result := System.String.Compare(A1, A2, True) = 0;
   {$ELSE}
-    {$IFDEF FREEPASCALOS}
-  Result := CompareText(A1, A2) = 0;
-    {$ELSE}
   Result := AnsiCompareText(A1, A2) = 0;
-    {$ENDIF}
   {$ENDIF}
 end;
 
@@ -9745,11 +9733,7 @@ begin
     Result := CompareString(LOCALE_USER_DEFAULT, NORM_IGNORECASE, PChar(S), LLen, PChar(SubS), LLen) = 2;
         {$ENDIF}
       {$ELSE}
-        {$IFDEF FREEPASCALOS}
-    Result := CompareText(Copy(S, 1, LLen), SubS) = 0;
-        {$ELSE}
     Result := AnsiCompareText(Copy(S, 1, LLen), SubS) = 0;
-        {$ENDIF}
       {$ENDIF}
     {$ENDIF}
   end;
@@ -9793,11 +9777,7 @@ begin
     Result := CompareString(LOCALE_USER_DEFAULT, NORM_IGNORECASE, P, LLen, PChar(SubS), LLen) = 2;
         {$ENDIF}
       {$ELSE}
-        {$IFDEF FREEPASCALOS}
-    Result := CompareText(Copy(S, Length(S)-LLen+1, LLen), SubS) = 0;
-        {$ELSE}
     Result := AnsiCompareText(Copy(S, Length(S)-LLen+1, LLen), SubS) = 0;
-        {$ENDIF}
       {$ENDIF}
     {$ENDIF}
   end;
@@ -9829,11 +9809,7 @@ begin
   {$IFDEF DOTNET}
   Result := CompareStr(A1, A2);
   {$ELSE}
-    {$IFDEF FREEPASCALOS}
-  Result := CompareStr(A1, A2);
-    {$ELSE}
   Result := AnsiCompareStr(A1, A2);
-    {$ENDIF}
   {$ENDIF}
 end;
 
