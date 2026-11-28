@@ -1,5 +1,6 @@
 ﻿(*
-  PasClaw.Cmd.Workflow -- `pasclaw workflow list | pending | show | approve | reject`.
+  PasClaw.Cmd.Workflow -- `pasclaw workflow list | pending | show | approve |
+  reject | run | export | import`.
 
   A workflow the agent saves (workflow_save) is staged for the operator,
   not saved, unless config.workflows_auto_approve is on: it runs, and is
@@ -29,7 +30,12 @@ uses
   PasClaw.CliUI,
   PasClaw.Workflow,
   PasClaw.Workflow.Store,
-  PasClaw.Workflow.Tools;   { WorkflowToolName }
+  PasClaw.Workflow.Tools,   { WorkflowToolName }
+  PasClaw.Workflow.Export,  { export --lang python | pascal | workflow }
+  PasClaw.Workflow.Share,   { import of a workflow file }
+  PasClaw.Workflow.Standalone,  { run }
+  PasClaw.Config,
+  PasClaw.Utils;
 
 procedure Help;
 begin
@@ -38,6 +44,9 @@ begin
   PrintLn('       pasclaw workflow show <id>');
   PrintLn('       pasclaw workflow approve <id> [--sha256 <hex>]');
   PrintLn('       pasclaw workflow reject <id>');
+  PrintLn('       pasclaw workflow run <id> [--input NAME=VALUE ...] [--json] [--no-files]');
+  PrintLn('       pasclaw workflow export <id> --lang python|pascal|workflow [-o FILE]');
+  PrintLn('       pasclaw workflow import <file|url> [--as <new-id>] [--replace] [--approve]');
   PrintLn;
   PrintLn('  list     Saved workflows, each with the tool name it is served as.');
   PrintLn('  pending  Workflows the agent saved that wait for your approval.');
@@ -46,6 +55,149 @@ begin
   PrintLn('  approve  Save the staged workflow: it runs, and becomes the tool wf_<id>.');
   PrintLn('           --sha256 refuses if the staged file changed since `show`.');
   PrintLn('  reject   Discard the staged workflow.');
+  PrintLn('  run      Run a saved workflow here, through the same gates; prints its outputs.');
+  PrintLn('  export   The workflow as code: a standalone Python script (python), an Object');
+  PrintLn('           Pascal program on PasClaw''s engine (pascal), or the portable workflow');
+  PrintLn('           file to share (workflow). Printed to stdout unless -o FILE.');
+  PrintLn('  import   Load a workflow file (a path or an http(s) URL). It is staged for');
+  PrintLn('           approval like an agent''s workflow; --approve saves it at once.');
+  PrintLn('           --as renames it; --replace replaces a workflow of the same id.');
+end;
+
+function DoRun(const Argv: array of string): Integer;
+var
+  Spec: TWorkflowSpec;
+  Err: string;
+  Rest: array of string;
+  i: Integer;
+begin
+  if Length(Argv) < 2 then begin PrintLn('Usage: pasclaw workflow run <id> [--input NAME=VALUE ...] [--json]'); Exit(2); end;
+  if not LoadWorkflow(Argv[1], Spec, Err) then
+  begin
+    PrintErr(Err);
+    Exit(1);
+  end;
+  SetLength(Rest, Length(Argv) - 2);
+  for i := 2 to High(Argv) do Rest[i - 2] := Argv[i];
+  Result := RunWorkflowCommand(WorkflowToJSON(Spec), 'pasclaw workflow run ' + Argv[1], Rest);
+end;
+
+function DoExport(const Argv: array of string): Integer;
+var
+  Spec: TWorkflowSpec;
+  Id, Lang, OutFile, Err, Text, FileName: string;
+  Cfg: TConfig;
+  i: Integer;
+begin
+  Id := '';
+  Lang := '';
+  OutFile := '';
+  i := 1;
+  while i <= High(Argv) do
+  begin
+    if ((Argv[i] = '--lang') or (Argv[i] = '--format')) and (i < High(Argv)) then
+    begin Lang := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if ((Argv[i] = '-o') or (Argv[i] = '--output')) and (i < High(Argv)) then
+    begin OutFile := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Id = '' then Id := Argv[i];
+    Inc(i);
+  end;
+  if (Id = '') or (Lang = '') then
+  begin
+    PrintErr('Usage: pasclaw workflow export <id> --lang python|pascal|workflow [-o FILE]');
+    Exit(2);
+  end;
+  if not LoadWorkflow(Id, Spec, Err) then
+  begin
+    PrintErr(Err);
+    Exit(1);
+  end;
+  Spec.Id := Id;
+  Cfg := LoadConfig;
+  if not ExportWorkflowAs(Spec, Lang, Cfg, Text, FileName, Err) then
+  begin
+    PrintErr(Err);
+    Exit(2);
+  end;
+  if OutFile = '' then
+  begin
+    Write(Text);
+    Exit(0);
+  end;
+  try
+    WriteFileText(OutFile, Text);
+  except
+    on E: Exception do
+    begin
+      PrintErr('cannot write ' + OutFile + ': ' + E.Message);
+      Exit(1);
+    end;
+  end;
+  PrintErr('wrote ' + OutFile + ' (' + Lang + ')');
+  Result := 0;
+end;
+
+function DoImport(const Argv: array of string): Integer;
+var
+  Src, AsId, Body, Err: string;
+  Replace, Approve: Boolean;
+  R: TWorkflowImportResult;
+  i: Integer;
+begin
+  Src := '';
+  AsId := '';
+  Replace := False;
+  Approve := False;
+  i := 1;
+  while i <= High(Argv) do
+  begin
+    if (Argv[i] = '--as') and (i < High(Argv)) then begin AsId := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--replace' then begin Replace := True; Inc(i); Continue; end;
+    if Argv[i] = '--approve' then begin Approve := True; Inc(i); Continue; end;
+    if Src = '' then Src := Argv[i];
+    Inc(i);
+  end;
+  if Src = '' then
+  begin
+    PrintLn('Usage: pasclaw workflow import <file|url> [--as <new-id>] [--replace] [--approve]');
+    Exit(2);
+  end;
+  if (Pos('://', Src) > 0) then
+  begin
+    if not FetchWorkflowURL(Src, WORKFLOW_FILE_MAX_BYTES, Body, Err) then
+    begin
+      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'import failed: ' + Err);
+      Exit(1);
+    end;
+  end
+  else
+    try
+      Body := ReadFileText(Src);
+    except
+      on E: Exception do
+      begin
+        PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'import failed: cannot read ' + Src + ': ' + E.Message);
+        Exit(1);
+      end;
+    end;
+  if not ImportWorkflowFile(Body, AsId, Replace, Approve, LoadConfig, nil, R, Err) then
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'import failed: ' + Err);
+    Exit(1);
+  end;
+  if R.Staged then
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'imported ' + R.Id + ' -- staged for approval; it does not run ' +
+            'until approved. Read it: pasclaw workflow show ' + R.Id + '   Approve: pasclaw workflow approve ' + R.Id)
+  else
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'imported and approved ' + R.Id + ' -- it runs now, and is the tool ' +
+            WorkflowToolName(R.Id));
+  if R.Replaces then PrintLn('  It replaces the workflow "' + R.Id + '" that was here.');
+  if Length(R.Missing) > 0 then
+  begin
+    PrintLn(Ansi.Yellow + 'Missing on this machine (the workflow will fail at these steps until added):' + Ansi.Reset);
+    for i := 0 to High(R.Missing) do PrintLn('  - ' + R.Missing[i]);
+  end;
+  Result := 0;
 end;
 
 function DoList: Integer;
@@ -207,6 +359,9 @@ begin
   else if Sub = 'show'    then Result := DoShow(Argv)
   else if Sub = 'approve' then Result := DoApprove(Argv)
   else if Sub = 'reject'  then Result := DoReject(Argv)
+  else if Sub = 'run'     then Result := DoRun(Argv)
+  else if Sub = 'export'  then Result := DoExport(Argv)
+  else if Sub = 'import'  then Result := DoImport(Argv)
   else if (Sub = 'help') or (Sub = '-h') or (Sub = '--help') then
   begin
     Help;

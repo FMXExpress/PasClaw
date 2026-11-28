@@ -163,8 +163,17 @@ const NOTES = "Release notes\n\nThe gateway now indexes PDFs and Markdown into t
     /* ---- search ---- */
     await page.fill("#kb-q", "gateway");
     await page.press("#kb-q", "Enter");
-    const s = await (await fetch(url + "/v1/kb/search?q=gateway")).json();
-    if (s.hits.length < 3) fail("GET /v1/kb/search found " + s.hits.length + " hits");
+    /* Under make test's parallel load the route can answer before the
+       uploaded files are searchable (no "hits" at all): ask until it does. */
+    let s = {};
+    try {
+      await until(async () => {
+        s = await (await fetch(url + "/v1/kb/search?q=gateway")).json();
+        return Array.isArray(s.hits) && s.hits.length >= 3;
+      }, "GET /v1/kb/search to find the three documents", 30000);
+    } catch (e) { fail("GET /v1/kb/search: " + JSON.stringify(s)); }
+    /* the page searched before the route was ready: search again */
+    await page.press("#kb-q", "Enter");
     await until(async () => (await page.$$("#kb-results .kb-hit")).length === s.hits.length, s.hits.length + " hits");
     const hitNames = await texts("#kb-results .kb-hit .kb-name");
     if (!eq(hitNames.map(base), s.hits.map(h => base(h.path)))) fail("the hits " + JSON.stringify(hitNames) + " are not the route's, in order");

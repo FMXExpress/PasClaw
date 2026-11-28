@@ -409,8 +409,12 @@ begin
         Item := Arr.ItemObject(i);
         if Item = nil then Continue;
         try
-          if IsMask(Item.GetStr('env', '')) then
+          { Each variable's value is masked on its own (KEY=•••;...), so
+            any mask in env means a value was redacted. }
+          if Pos(RawByteString(MaskedSecretPlaceholder), RawByteString(Item.GetStr('env', ''))) > 0 then
             Add('mcp_servers[' + Item.GetStr('name', IntToStr(i)) + '].env');
+          if Pos(RawByteString(MaskedSecretPlaceholder), RawByteString(Item.GetStr('args', ''))) > 0 then
+            Add('mcp_servers[' + Item.GetStr('name', IntToStr(i)) + '].args');
         finally
           Item.Free;
         end;

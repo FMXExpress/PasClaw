@@ -1283,6 +1283,13 @@ const
    input. Exposed for tests. *)
 function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): string;
 
+(* An HTTP MCP server's args are its Authorization header value, sent as
+   is ("Bearer r8_..."): `pasclaw mcp install` writes the token there. The
+   scheme word stays and the credential becomes MaskedSecretPlaceholder
+   ("Bearer •••"); a ${VAR} marker is shown as it is (not a secret). A
+   stdio server's args are its command line and come back unchanged. *)
+function MaskMCPArgs(const Cmd, Args: string): string;
+
 (* The read side of the same contract: a config JSON with every populated
    secret -- providers[].api_key, mcp_servers[].env, gateway.token,
    web_search.api_key, decision_models.backends[].api_key, channels[].
@@ -3702,6 +3709,76 @@ begin
   end;
 end;
 
+(* mcp_servers[].env is `KEY=value` pairs separated by `;`. The names are
+   not the secret and the web UI edits the variables one by one, so only
+   the VALUES are masked: "GITHUB_TOKEN=x;DEBUG=1" reads back as
+   "GITHUB_TOKEN=•••;DEBUG=•••". An empty value stays empty (nothing to
+   hide), and a part with no `=` is masked whole. *)
+{ A + B, byte for byte. On FPC a plain + of strings with different
+  codepage tags (this unit's literals vs the JSON parser's output) converts
+  through the widestring manager, and without a UTF-8 one the mask's bytes
+  become '?'. Delphi's UnicodeString has no such issue. }
+function EnvCat(const A, B: string): string;
+{$IFDEF FPC}
+var
+  R: RawByteString;
+begin
+  if B = '' then Exit(A);
+  if A = '' then Exit(B);
+  SetLength(R, Length(A) + Length(B));
+  Move(A[1], R[1], Length(A));
+  Move(B[1], R[Length(A) + 1], Length(B));
+  Result := R;
+end;
+{$ELSE}
+begin
+  Result := A + B;
+end;
+{$ENDIF}
+
+function MaskMCPEnv(const Env: string): string;
+var
+  Rest, Part: string;
+  p: Integer;
+begin
+  Result := '';
+  Rest := Env;
+  while Rest <> '' do
+  begin
+    p := Pos(';', Rest);
+    if p > 0 then begin Part := Copy(Rest, 1, p - 1); Rest := Copy(Rest, p + 1, MaxInt); end
+    else begin Part := Rest; Rest := ''; end;
+    Part := Trim(Part);
+    if Part = '' then Continue;
+    if Result <> '' then Result := EnvCat(Result, ';');
+    p := Pos('=', Part);
+    if p <= 1 then Result := EnvCat(Result, MaskedSecretPlaceholder)
+    else if p = Length(Part) then Result := EnvCat(Result, Part)
+    else Result := EnvCat(EnvCat(Result, Copy(Part, 1, p)), MaskedSecretPlaceholder);
+  end;
+end;
+
+function MaskMCPArgs(const Cmd, Args: string): string;
+var
+  T, Lower: string;
+  p, i: Integer;
+  Scheme: Boolean;
+begin
+  Result := Args;
+  T := Trim(Args);
+  Lower := LowerCase(Trim(Cmd));
+  if (T = '') or not ((Copy(Lower, 1, 7) = 'http://') or (Copy(Lower, 1, 8) = 'https://')) then Exit;
+  if Pos('${', T) > 0 then Exit;
+  p := Pos(' ', T);
+  Scheme := p > 1;
+  for i := 1 to p - 1 do
+    if not CharInSet(T[i], ['A'..'Z', 'a'..'z', '-']) then Scheme := False;
+  if Scheme then
+    Result := EnvCat(Copy(T, 1, p), MaskedSecretPlaceholder)   { EnvCat: keeps the placeholder's bytes UTF-8 }
+  else
+    Result := MaskedSecretPlaceholder;
+end;
+
 function MaskConfigSecretsJSON(const JSON: string): string;
 var
   Root, Item, Item2: TJsonObject;
@@ -3745,9 +3822,12 @@ begin
         if Item = nil then Continue;
         try
           { env strings are KEY=value pairs -- anything from an API key to a
-            bearer token. Mask the whole string when non-empty. }
+            bearer token. Every value is masked; the names stay (MaskMCPEnv). }
           if Item.GetStr('env', '') <> '' then
-            Item.PutStr('env', MaskedSecretPlaceholder);
+            Item.PutStr('env', MaskMCPEnv(Item.GetStr('env', '')));
+          { an HTTP server's args are its Authorization header value }
+          if Item.GetStr('args', '') <> '' then
+            Item.PutStr('args', MaskMCPArgs(Item.GetStr('cmd', ''), Item.GetStr('args', '')));
         finally
           Item.Free;
         end;
@@ -3928,6 +4008,96 @@ function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): stri
     end;
   end;
 
+  { Does S hold the mask anywhere? Raw bytes, for IsMask's reason. }
+  function HasMask(const S: string): Boolean;
+  begin
+    {$IFDEF FPC}
+    Result := Pos(RawByteString(MaskedSecretPlaceholder), RawByteString(S)) > 0;
+    {$ELSE}
+    Result := Pos(MaskedSecretPlaceholder, S) > 0;
+    {$ENDIF}
+  end;
+
+  { The value of variable Key in a `KEY=value;...` env string, '' if absent. }
+  function EnvValueOf(const Env, Key: string): string;
+  var
+    Rest, Part: string;
+    p: Integer;
+  begin
+    Result := '';
+    Rest := Env;
+    while Rest <> '' do
+    begin
+      p := Pos(';', Rest);
+      if p > 0 then begin Part := Copy(Rest, 1, p - 1); Rest := Copy(Rest, p + 1, MaxInt); end
+      else begin Part := Rest; Rest := ''; end;
+      Part := Trim(Part);
+      p := Pos('=', Part);
+      if (p > 1) and (Copy(Part, 1, p - 1) = Key) then Exit(Copy(Part, p + 1, MaxInt));
+    end;
+  end;
+
+  { mcp_servers[].env as MaskMCPEnv masks it: each `KEY=<mask>` takes the
+    value of KEY in the current server's env. The bare mask (the whole
+    string masked, as before per-variable masking) keeps the current env
+    whole. A typed value goes as typed. }
+  function RestoreMCPEnv(const Edited, Current: string): string;
+  var
+    Rest, Part: string;
+    p: Integer;
+  begin
+    if IsMask(Trim(Edited)) then Exit(Current);
+    Result := '';
+    Rest := Edited;
+    while Rest <> '' do
+    begin
+      p := Pos(';', Rest);
+      if p > 0 then begin Part := Copy(Rest, 1, p - 1); Rest := Copy(Rest, p + 1, MaxInt); end
+      else begin Part := Rest; Rest := ''; end;
+      Part := Trim(Part);
+      if Part = '' then Continue;
+      p := Pos('=', Part);
+      if (p > 1) and IsMask(Copy(Part, p + 1, MaxInt)) then
+        Part := EnvCat(Copy(Part, 1, p), EnvValueOf(Current, Copy(Part, 1, p - 1)))
+      else if IsMask(Part) then
+        Continue;   { a masked part with no name: nothing to match it by }
+      if Result <> '' then Result := EnvCat(Result, ';');
+      Result := EnvCat(Result, Part);
+    end;
+  end;
+
+  procedure RestoreMCPServers(Edited, Current: TJsonObject);
+  var
+    EdArr, CurArr: TJsonArray;
+    i: Integer;
+    It: TJsonObject;
+  begin
+    EdArr := Edited.ChildArray('mcp_servers');
+    if EdArr = nil then Exit;
+    CurArr := nil;
+    try
+      if Current <> nil then CurArr := Current.ChildArray('mcp_servers');
+      for i := 0 to EdArr.Count - 1 do
+      begin
+        It := EdArr.ItemObject(i);
+        if It = nil then Continue;
+        try
+          if HasMask(It.GetStr('env', '')) then
+            It.PutStr('env', RestoreMCPEnv(It.GetStr('env', ''),
+              LookupBy(CurArr, 'name', It.GetStr('name', ''), 'env')));
+          { args come back masked whole ("Bearer •••"): keep the saved value }
+          if HasMask(It.GetStr('args', '')) then
+            It.PutStr('args', LookupBy(CurArr, 'name', It.GetStr('name', ''), 'args'));
+        finally
+          It.Free;
+        end;
+      end;
+    finally
+      if CurArr <> nil then CurArr.Free;
+      EdArr.Free;
+    end;
+  end;
+
   { Restore the top-level array ArrKey's Field from Current, matched by
     KeyField. Owns nothing it does not free. }
   procedure RestoreTopArray(Edited, Current: TJsonObject;
@@ -4016,18 +4186,8 @@ begin
         if EdArr <> nil then EdArr.Free;
       end;
 
-      { mcp_servers[].env -- matched by server name. }
-      EdArr  := Edited.ChildArray('mcp_servers');
-      try
-        if Current <> nil then CurArr := Current.ChildArray('mcp_servers') else CurArr := nil;
-        try
-          RestoreArray(EdArr, CurArr, 'env');
-        finally
-          if CurArr <> nil then CurArr.Free;
-        end;
-      finally
-        if EdArr <> nil then EdArr.Free;
-      end;
+      { mcp_servers[].env -- matched by server name, then per variable. }
+      RestoreMCPServers(Edited, Current);
 
       { decision_models.backends[].api_key -- matched by backend name. }
       EdGw := Edited.ChildObject('decision_models');

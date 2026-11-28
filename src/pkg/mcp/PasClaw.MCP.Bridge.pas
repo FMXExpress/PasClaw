@@ -84,6 +84,24 @@ function ConnectMCPServerList(const Servers: array of TMCPServer; Cfg: TConfig;
                               Reg: TToolRegistry): TMCPClientList;
 procedure FreeMCPClients(var Clients: TMCPClientList);
 
+{ Connect one more server into a process that is already running: the
+  gateway, when a saved config adds a server or turns one on. Same as the
+  boot path (cached tools first, the live connect on a thread of its own),
+  and the loader is drained by the next FreeMCPClients, whatever list that
+  is given. Only ever adds: False, and nothing started, when Server is
+  disabled or a server of that name was already started in this process --
+  its state, client and registered tools stay as they are until a restart. }
+function ConnectMCPServerLive(const Server: TMCPServer; Cfg: TConfig;
+                              Reg: TToolRegistry): Boolean;
+
+{ True when a server of this name was started in this process. }
+function MCPServerStarted(const Name: string): Boolean;
+
+{ What a server was (or would be) started with -- command, arguments,
+  environment and code mode -- as one string to compare a saved entry
+  against the running one. Never shown: it holds the env values. }
+function MCPServerSpec(const S: TMCPServer): string;
+
 { Invoke a bridged MCP tool by its namespaced registry name (e.g.
   `replicate__create_prediction`) and return BOTH the flattened text and the
   raw result-object JSON. The workflow engine uses this to feed one tool's
@@ -102,6 +120,8 @@ type
     ServerName:      string;   { serverInfo.name the server reported }
     ServerVersion:   string;
     Error:           string;   { why the connect failed (State = failed) }
+    Spec:            string;   { MCPServerSpec of what it was started with;
+                                 holds env values -- compare it, never send it }
   end;
   TMCPServerStatusArray = array of TMCPServerStatus;
 
@@ -159,6 +179,7 @@ type
     FCompact:     Boolean;            { snapshot of Cfg.MCPCompactResults }
     FInfo:        TMCPServerInfo;     { what the live client negotiated }
     FSettled:     TEvent;             { set once the connect is ready or failed }
+    FSpec:        string;             { MCPServerSpec it was started with }
   public
     constructor Create(const AName: string; ACompact: Boolean = False);
     destructor  Destroy; override;
@@ -212,6 +233,14 @@ const
 
 var
   GStates: TList;  { TList of TMCPServerState -- owned; freed in FreeMCPClients }
+  { Guards GStates' list itself: ConnectMCPServerLive adds to it from a
+    gateway request thread while tool calls and GET /v1/mcp walk it. The
+    states it holds are freed only at teardown, so a pointer read under the
+    lock stays good after it. }
+  GStatesLock: TCriticalSection;
+  { Loaders ConnectMCPServerLive started; FreeMCPClients drains them with
+    the list it is given. Guarded by GStatesLock. }
+  GLateLoaders: TList;
 
 constructor TMCPServerState.Create(const AName: string; ACompact: Boolean);
 begin
@@ -271,6 +300,7 @@ begin
     Result.ServerName      := FInfo.Name;
     Result.ServerVersion   := FInfo.Version;
     Result.Error           := FError;
+    Result.Spec            := FSpec;
   finally
     FLock.Release;
   end;
@@ -282,9 +312,34 @@ var
 begin
   SetLength(Result, 0);
   if GStates = nil then Exit;
-  SetLength(Result, GStates.Count);
-  for i := 0 to GStates.Count - 1 do
-    Result[i] := TMCPServerState(GStates[i]).Status;
+  GStatesLock.Acquire;
+  try
+    SetLength(Result, GStates.Count);
+    for i := 0 to GStates.Count - 1 do
+      Result[i] := TMCPServerState(GStates[i]).Status;
+  finally
+    GStatesLock.Release;
+  end;
+end;
+
+function MCPServerStarted(const Name: string): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  if GStates = nil then Exit;
+  GStatesLock.Acquire;
+  try
+    for i := 0 to GStates.Count - 1 do
+      if SameText(TMCPServerState(GStates[i]).Name, Name) then Exit(True);
+  finally
+    GStatesLock.Release;
+  end;
+end;
+
+function MCPServerSpec(const S: TMCPServer): string;
+begin
+  Result := S.Cmd + #1 + S.Args + #1 + S.Env + #1 + BoolToStr(S.CodeMode, True);
 end;
 
 procedure TMCPServerState.SetFailed(const Err: string);
@@ -426,7 +481,7 @@ function MCPCallStructured(const NamespacedName, ArgsJSON: string;
   out ResultText, ResultJSON, ErrMsg: string): Boolean;
 var
   i, P: Integer;
-  St: TMCPServerState;
+  St, Found: TMCPServerState;
   Prefix, Bare: string;
 begin
   Result := False;
@@ -440,18 +495,31 @@ begin
   end;
   { Match against the longest applicable server prefix. Server names can
     themselves contain underscores, so probe FName + '__' rather than
-    splitting on the first '__'. }
-  for i := 0 to GStates.Count - 1 do
-  begin
-    St := TMCPServerState(GStates[i]);
-    Prefix := St.Name + '__';
-    if (Length(NamespacedName) > Length(Prefix)) and
-       (Copy(NamespacedName, 1, Length(Prefix)) = Prefix) then
+    splitting on the first '__'. The lookup holds GStatesLock; the call
+    does not (a state is never freed while the process serves calls). }
+  Found := nil;
+  Bare := '';
+  GStatesLock.Acquire;
+  try
+    for i := 0 to GStates.Count - 1 do
     begin
-      Bare := Copy(NamespacedName, Length(Prefix) + 1, MaxInt);
-      Result := St.CallToolStructured(Bare, ArgsJSON, ResultText, ResultJSON, ErrMsg);
-      Exit;
+      St := TMCPServerState(GStates[i]);
+      Prefix := St.Name + '__';
+      if (Length(NamespacedName) > Length(Prefix)) and
+         (Copy(NamespacedName, 1, Length(Prefix)) = Prefix) then
+      begin
+        Bare := Copy(NamespacedName, Length(Prefix) + 1, MaxInt);
+        Found := St;
+        Break;
+      end;
     end;
+  finally
+    GStatesLock.Release;
+  end;
+  if Found <> nil then
+  begin
+    Result := Found.CallToolStructured(Bare, ArgsJSON, ResultText, ResultJSON, ErrMsg);
+    Exit;
   end;
   { Fallback: no exact server-prefix match. This happens when a synthesized
     name (e.g. the replicate node's replicate__create_predictions) assumes a
@@ -462,14 +530,24 @@ begin
   if P > 0 then
   begin
     Bare := Copy(NamespacedName, P + 2, MaxInt);
-    for i := 0 to GStates.Count - 1 do
-    begin
-      St := TMCPServerState(GStates[i]);
-      if St.FindDispatchFor(Bare) <> nil then
+    GStatesLock.Acquire;
+    try
+      for i := 0 to GStates.Count - 1 do
       begin
-        Result := St.CallToolStructured(Bare, ArgsJSON, ResultText, ResultJSON, ErrMsg);
-        Exit;
+        St := TMCPServerState(GStates[i]);
+        if St.FindDispatchFor(Bare) <> nil then
+        begin
+          Found := St;
+          Break;
+        end;
       end;
+    finally
+      GStatesLock.Release;
+    end;
+    if Found <> nil then
+    begin
+      Result := Found.CallToolStructured(Bare, ArgsJSON, ResultText, ResultJSON, ErrMsg);
+      Exit;
     end;
   end;
   ErrMsg := Format('no MCP tool named "%s" (no server prefix or bare-name match)', [NamespacedName]);
@@ -480,6 +558,41 @@ begin
   Result := (Length(S) >= 7) and
             ((LowerCase(Copy(S, 1, 7)) = 'http://') or
              ((Length(S) >= 8) and (LowerCase(Copy(S, 1, 8)) = 'https://')));
+end;
+
+{ mcp_servers[].env, `KEY=value` pairs separated by `;`, as the lines a
+  child's environment takes. The caller frees the list. }
+function MCPEnvLines(const Env: string): TStringList;
+var
+  Rest, Part: string;
+  p: Integer;
+begin
+  Result := TStringList.Create;
+  Rest := Env;
+  while Rest <> '' do
+  begin
+    p := Pos(';', Rest);
+    if p > 0 then begin Part := Copy(Rest, 1, p - 1); Rest := Copy(Rest, p + 1, MaxInt); end
+    else begin Part := Rest; Rest := ''; end;
+    Part := Trim(Part);
+    if Pos('=', Part) > 1 then Result.Add(Part);
+  end;
+end;
+
+{ The Authorization header for an HTTP server: what `mcp install` put in
+  args, else an `Authorization` variable in env (docs/mcp.md). }
+function HttpAuthOf(const S: TMCPServer): string;
+var
+  L: TStringList;
+begin
+  Result := S.Args;
+  if Result <> '' then Exit;
+  L := MCPEnvLines(S.Env);
+  try
+    Result := L.Values['Authorization'];
+  finally
+    L.Free;
+  end;
 end;
 
 function NamespacedToolName(const Server, Tool: string): string;
@@ -595,9 +708,9 @@ begin
   {$ENDIF}
   try
     if IsHttpUrl(FCfg.Cmd) then
-      FClient := TMCPHttpClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args)
+      FClient := TMCPHttpClient.Create(FCfg.Name, FCfg.Cmd, HttpAuthOf(FCfg))
     else
-      FClient := TMCPStdioClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args);
+      FClient := TMCPStdioClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args, FCfg.Env);
     if Terminated then Exit;
     if not FClient.Connect(MCPConnectTimeoutMs, Err) then
     begin
@@ -719,7 +832,13 @@ begin
     if Servers[i].CodeMode then AnyCodeMode := True;
 
     State := TMCPServerState.Create(Servers[i].Name, Cfg.MCPCompactResults);
-    GStates.Add(State);
+    State.FSpec := MCPServerSpec(Servers[i]);
+    GStatesLock.Acquire;
+    try
+      GStates.Add(State);
+    finally
+      GStatesLock.Release;
+    end;
 
     { Cache pass: register cached tools with the state in lsLoading. }
     CachedCount := 0;
@@ -780,6 +899,28 @@ begin
   if AnyCodeMode then RegisterCodeCatalogTool(Reg);
 end;
 
+function ConnectMCPServerLive(const Server: TMCPServer; Cfg: TConfig;
+                              Reg: TToolRegistry): Boolean;
+var
+  One: array of TMCPServer;
+  Started: TMCPClientList;
+  i: Integer;
+begin
+  Result := False;
+  if (Reg = nil) or (not Server.Enabled) or (Trim(Server.Name) = '') then Exit;
+  if MCPServerStarted(Server.Name) then Exit;
+  SetLength(One, 1);
+  One[0] := Server;
+  Started := ConnectMCPServerList(One, Cfg, Reg);
+  GStatesLock.Acquire;
+  try
+    for i := 0 to High(Started) do GLateLoaders.Add(Started[i]);
+  finally
+    GStatesLock.Release;
+  end;
+  Result := Length(Started) > 0;
+end;
+
 procedure FreeMCPClients(var Clients: TMCPClientList);
 const
   { Per-loader budget. A finished or fresh-cache loader signals DoneEvent
@@ -788,11 +929,25 @@ const
     connect WaitFor. }
   ShutdownWaitMs = 1000;
 var
-  i: Integer;
+  i, j: Integer;
   Loader: TMCPLoader;
   Abandoned: Boolean;
 begin
   Abandoned := False;
+  { Servers connected after boot are drained with the boot list. }
+  GStatesLock.Acquire;
+  try
+    if GLateLoaders.Count > 0 then
+    begin
+      i := Length(Clients);
+      SetLength(Clients, i + GLateLoaders.Count);
+      for j := 0 to GLateLoaders.Count - 1 do
+        Clients[i + j] := TThread(GLateLoaders[j]);
+      GLateLoaders.Clear;
+    end;
+  finally
+    GStatesLock.Release;
+  end;
   for i := 0 to High(Clients) do
     if Clients[i] <> nil then
     begin
@@ -834,16 +989,25 @@ begin
     process is exiting, so the leak is reclaimed by the OS momentarily. }
   if not Abandoned then
   begin
-    for i := 0 to GStates.Count - 1 do
-      TMCPServerState(GStates[i]).Free;
-    GStates.Clear;
+    GStatesLock.Acquire;
+    try
+      for i := 0 to GStates.Count - 1 do
+        TMCPServerState(GStates[i]).Free;
+      GStates.Clear;
+    finally
+      GStatesLock.Release;
+    end;
   end;
 end;
 
 initialization
   GStates := TList.Create;
+  GStatesLock := TCriticalSection.Create;
+  GLateLoaders := TList.Create;
 
 finalization
+  GLateLoaders.Free;
+  GStatesLock.Free;
   GStates.Free;
 
 end.
