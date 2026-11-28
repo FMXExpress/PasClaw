@@ -41,6 +41,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 - [Chat channels](./channels.md) — Telegram, Discord, Slack, Teams, LINE, WhatsApp, Matrix, IRC, Email.
 - [DOS](./dos.md) — `PCLAW.EXE`, the agent on an MS-DOS PC, reaching the model over a serial line through `pasclaw bridge`.
 - [Windows XP](./windows-xp.md) — the full `pasclaw.exe` built for 32-bit Windows with Free Pascal, made to load on XP; HTTPS through OpenSSL, no bridge.
+- [FreePascalOS](./freepascalos.md) — `pasclaw` for the x86-64 UEFI OS written in Free Pascal, with its own compiler target; HTTPS through the system's `libhttp`; what is left out, and the GPLv3 note for binaries.
 - [Embedding in your own app](./embedding.md) — `TPasClawAgent` / `TPasClawServer` `TComponent`s for VCL/FMX/CLI binaries.
 
 ## Operations
