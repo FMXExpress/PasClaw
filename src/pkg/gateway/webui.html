@@ -208,9 +208,61 @@
   .hexbar .hexpos{color:var(--text-3);font-size:12px;font-family:var(--mono)}
   .hexdump{font-family:var(--mono);font-size:12px;line-height:1.45;white-space:pre}
 
-  /* Panels that open under the toolbar: per-chat parameters, context. */
-  .chat-params,.ctx-panel{display:flex;flex-direction:column;padding:.8rem .9rem;
-    border-bottom:1px solid var(--border);background:var(--surface)}
+  /* ===== The right column =====
+     The left column's mirror: a header, then vertical panes about the open
+     chat (app, background, context, parameters), each with a head that
+     folds it. It scrolls as a whole; the app pane's frame has its own
+     height, which drags. */
+  .rc-col{flex:0 0 21rem;min-width:0;border-left:1px solid var(--border);
+    display:flex;flex-direction:column;background:var(--surface);overflow:hidden}
+  .rc-col.collapsed,.rc-splitter.collapsed{display:none}
+  .chat-splitter.rc-splitter{margin-left:0;margin-right:-3px}
+  .rc-head{display:flex;align-items:center;gap:.35rem;padding:.6rem .6rem .45rem .8rem;flex:none}
+  .rc-head .title{margin-right:auto;font-size:12px;font-weight:600;color:var(--text-2)}
+  .rc-head .icon-btn{border-color:transparent;padding:.2rem .3rem}
+  .rc-panes{position:relative;flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:0 0 1rem}
+  .rc-pane{border-top:1px solid var(--border)}
+  .rc-pane[hidden]{display:none}
+  .rc-pane-h{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:.15rem;margin:0;
+    padding:.2rem .45rem .2rem .3rem;background:var(--surface);font:inherit}
+  .rc-pane-btn{flex:1;min-width:0;display:flex;align-items:center;gap:.45rem;background:none;border:0;
+    padding:.38rem .35rem;border-radius:var(--radius);font-size:12px;font-weight:600;color:var(--text-2);
+    text-align:left;white-space:nowrap}
+  .rc-pane-btn:hover{background:var(--surface-2);color:var(--text)}
+  .rc-pane-btn::before{content:"";flex:none;width:.4rem;height:.4rem;margin:0 .15rem 0 .2rem;
+    border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+    transform:rotate(45deg);opacity:.75;transition:transform .12s}
+  .rc-pane-btn[aria-expanded=false]::before{transform:rotate(-45deg)}
+  .rc-pane-meta{min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:400;color:var(--text-3);
+    font-variant-numeric:tabular-nums}
+  .rc-pane-meta:empty{display:none}
+  .rc-ibtn{flex:none;border-color:transparent;padding:.22rem .32rem;text-decoration:none}
+  .rc-ibtn.rc-txt{padding:.18rem .45rem;font-size:12px}
+  .rc-pane-body{padding:.15rem .8rem .8rem}
+  .rc-pane-body[hidden]{display:none}
+  .rc-pane.rc-flash>.rc-pane-h .rc-pane-btn{background:var(--accent-soft);color:var(--accent)}
+  .rc-note{font-size:12px;color:var(--text-3);line-height:1.5;margin:.35rem 0 0}
+  .rc-note code{font-size:11.5px}
+  /* App: the project's own app, live, framed from its app route. */
+  .rc-app-wrap{position:relative;height:min(46vh,30rem);min-height:10rem;resize:vertical;overflow:hidden;
+    border:1px solid var(--border);border-radius:8px;background:#fff}
+  .rc-app-wrap:empty{display:none}
+  .rc-app-wrap iframe{display:block;width:100%;height:100%;border:0;background:#fff}
+  /* Background: this chat's jobs, the Background tab's rows made small. */
+  .rc-bg-list{display:flex;flex-direction:column;gap:.15rem}
+  .rc-bg-item{display:flex;flex-direction:column;gap:.15rem;width:100%;text-align:left;
+    background:none;border:1px solid transparent;border-radius:var(--radius);padding:.4rem .5rem;
+    color:var(--text);font-size:12.5px}
+  .rc-bg-item:hover{background:var(--surface-2);border-color:var(--border)}
+  .rc-bg-l1{display:flex;align-items:center;gap:.45rem;min-width:0}
+  .rc-bg-l1 .rc-bg-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550}
+  .rc-bg-l1 .rc-bg-time{color:var(--text-3);font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .rc-bg-l2{color:var(--text-2);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+    overflow-wrap:anywhere}
+  .rc-bg-l2.mono{font-family:var(--mono);font-size:11.5px}
+  .rc-bg-empty{font-size:12.5px;color:var(--text-3);padding:.3rem .1rem}
+  /* Parameters and context, now panes of the column. */
+  .chat-params,.ctx-panel{display:flex;flex-direction:column}
   .chat-params{gap:.6rem}
   .chat-params[hidden]{display:none}
   .chat-params .pf{display:flex;flex-direction:column;gap:.25rem;font-size:12px;font-weight:500;
@@ -234,7 +286,7 @@
     --ctx-project:#1baf7a;--ctx-skills:#eda100;--ctx-tools:#e87ba4;--ctx-mcp:#008300;
     --ctx-messages:#6250d6}
   #ctx-toggle .ctx-btn-n{font-variant-numeric:tabular-nums}
-  .ctx-panel{gap:.6rem;max-height:55vh;overflow:auto}
+  .ctx-panel{gap:.6rem}
   .ctx-panel[hidden]{display:none}
   .ctx-head{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
   .ctx-title{font-size:12px;font-weight:600;color:var(--text-2)}
@@ -2605,6 +2657,9 @@
     #tab-chat{position:relative}
     aside.sessions{position:absolute;z-index:30;top:0;bottom:0;left:0;width:min(18rem,85vw);
       flex-basis:auto !important;box-shadow:var(--shadow-pop),0 0 0 100vmax rgba(8,10,14,.45)}
+    /* ...and so does the right column, from the right. */
+    .rc-col{position:absolute;z-index:30;top:0;bottom:0;right:0;width:min(22rem,88vw);
+      flex-basis:auto !important;border-left:0;box-shadow:var(--shadow-pop),0 0 0 100vmax rgba(8,10,14,.45)}
     .chat-splitter{display:none}
     #log .row.u>.bub{max-width:88%}
     .chat-empty-title{font-size:18px}
@@ -2684,6 +2739,7 @@
   <symbol id="i-chat-send" viewBox="0 0 16 16"><path d="M8 13V3.25M4 7.25l4-4 4 4"/></symbol>
   <symbol id="i-chat-down" viewBox="0 0 16 16"><path d="M8 3v9.75M4 8.75l4 4 4-4"/></symbol>
   <symbol id="i-chat-bubble" viewBox="0 0 16 16"><path d="M3.5 2.75h9a1.75 1.75 0 0 1 1.75 1.75v5a1.75 1.75 0 0 1-1.75 1.75H8.25L5 13.5v-2.25H3.5A1.75 1.75 0 0 1 1.75 9.5v-5A1.75 1.75 0 0 1 3.5 2.75Z"/><path d="M5.25 6.25h5.5M5.25 8.5h3.5"/></symbol>
+  <symbol id="i-chat-panel-right" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M10 3v10"/></symbol>
   <symbol id="i-files-folder" viewBox="0 0 16 16"><path d="M2 4.25c0-.7.55-1.25 1.25-1.25h2.9l1.5 1.75h5.1c.7 0 1.25.55 1.25 1.25v6.25c0 .7-.55 1.25-1.25 1.25h-9.5C2.55 13.5 2 12.95 2 12.25z"/></symbol>
   <symbol id="i-files-up" viewBox="0 0 16 16"><path d="M8 13V3.5M4.25 7.25 8 3.5l3.75 3.75"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 16 16"><path d="M4.75 12.5h6.75a2.75 2.75 0 0 0 .3-5.48 4 4 0 0 0-7.7 1.1A2.2 2.2 0 0 0 4.75 12.5Z"/></symbol>
@@ -2753,44 +2809,8 @@
         <button class="icon-btn" id="chat-redo" aria-label="Redo file edits" title="Redo (zpaq backend only)"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg></button>
         <button class="icon-btn" id="chat-files-btn" title="Download files created in this chat"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg><span class="lbl">Files</span></button>
         <div id="chat-files-menu" class="fs-menu" hidden></div>
-      </div>
-      <div id="chat-params" class="chat-params" hidden>
-        <label class="pf">System prompt
-          <textarea id="p-system" rows="3"
-            placeholder="Override the system prompt for this chat (blank = PasClaw default)"></textarea>
-        </label>
-        <div class="pf-row">
-          <label class="pf preset-pf">Preset
-            <select id="p-preset"><option value="">—</option></select>
-          </label>
-          <button class="icon-btn" id="p-preset-save"  title="Save the system prompt above as a preset">Save preset</button>
-          <button class="icon-btn" id="p-preset-del"   title="Delete the selected preset">Delete</button>
-        </div>
-        <div class="pf-row">
-          <label class="pf num-pf">Temperature
-            <input id="p-temp" type="number" step="0.1" min="0" max="2" placeholder="default">
-          </label>
-          <label class="pf num-pf">Max tokens
-            <input id="p-maxtok" type="number" min="1" step="1" placeholder="default">
-          </label>
-          <button class="icon-btn" id="p-reset" title="Clear all per-chat parameters">Reset</button>
-        </div>
-      </div>
-      <div id="ctx-panel" class="ctx-panel" hidden>
-        <div class="ctx-head">
-          <span class="ctx-title">Context</span>
-          <span id="ctx-total" class="ctx-total">counting…</span>
-          <label class="ctx-win" title="The model's context window in tokens. Empty = the gateway's context_window setting, else the compaction point.">Window
-            <input id="ctx-window" type="number" min="1000" step="1000" placeholder="auto"></label>
-          <button class="icon-btn" id="ctx-refresh" type="button" aria-label="Count again" title="Count again"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
-        </div>
-        <div class="ctx-barwrap"><div id="ctx-bar" class="ctx-bar" role="img"></div></div>
-        <ul id="ctx-legend" class="ctx-legend"></ul>
-        <div id="ctx-note" class="ctx-note"></div>
-        <details class="ctx-more" data-k="system"><summary>System prompt, by section<span class="n" id="ctx-sys-n"></span></summary><div id="ctx-sys"></div></details>
-        <details class="ctx-more" data-k="tools"><summary>Tools<span class="n" id="ctx-tools-n"></span></summary><div id="ctx-tools"></div></details>
-        <details class="ctx-more" data-k="messages"><summary>Messages<span class="n" id="ctx-msgs-n"></span></summary><div id="ctx-msgs"></div></details>
-        <div class="ctx-foot">Estimated at about 4 characters per token, the rule PasClaw's compaction uses; your provider's own count will differ somewhat. Counts what the next message would send, before your new text.</div>
+        <button class="icon-btn" id="rc-toggle" type="button" aria-controls="rc-col" aria-expanded="false"
+          aria-label="Show or hide the details column" title="Details: app, background work, context, parameters (Ctrl+.)"><svg class="ic" aria-hidden="true"><use href="#i-chat-panel-right"/></svg></button>
       </div>
       <div id="log"></div>
       <div class="chat-empty" id="chat-empty">
@@ -2829,6 +2849,91 @@
         </div>
       </form>
     </div>
+    <!-- The right column: the left one's mirror. Vertical panes about the
+         open chat -- its app (a Desktop project chat), its background jobs,
+         what its context is made of, and its parameters -- each collapsible.
+         Closed by default; its open state, width and collapsed panes are
+         remembered. On a phone it is a drawer over the transcript. -->
+    <div class="chat-splitter rc-splitter collapsed" id="rc-splitter" title="Drag to resize"></div>
+    <aside class="rc-col collapsed" id="rc-col" aria-label="Chat details">
+      <header class="rc-head">
+        <span class="title">Details</span>
+        <button class="icon-btn" id="rc-close" type="button" aria-label="Close the details column" title="Close (Ctrl+.)"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <div class="rc-panes" id="rc-panes">
+        <section class="rc-pane" data-pane="app" id="rc-pane-app" hidden>
+          <h3 class="rc-pane-h">
+            <button type="button" class="rc-pane-btn" aria-expanded="true" aria-controls="rc-body-app">App<span class="rc-pane-meta" id="rc-app-name"></span></button>
+            <button type="button" class="icon-btn rc-ibtn" id="rc-app-reload" aria-label="Reload the app" title="Reload the app"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+            <a class="icon-btn rc-ibtn" id="rc-app-open" href="/desktop" target="_blank" rel="noopener noreferrer" aria-label="Open in a window" title="Open in a window (PasClaw Desktop)"><svg class="ic" aria-hidden="true"><use href="#i-vlt-link"/></svg></a>
+          </h3>
+          <div class="rc-pane-body" id="rc-body-app">
+            <div class="rc-app-wrap" id="rc-app-wrap"></div>
+            <div class="rc-note" id="rc-app-note" hidden></div>
+          </div>
+        </section>
+        <section class="rc-pane" data-pane="background" id="rc-pane-background">
+          <h3 class="rc-pane-h">
+            <button type="button" class="rc-pane-btn" aria-expanded="true" aria-controls="rc-body-background">Background<span class="rc-pane-meta" id="rc-bg-count"></span></button>
+            <button type="button" class="icon-btn rc-ibtn rc-txt" id="rc-bg-all" title="Every chat's jobs, on the Background tab">All jobs</button>
+          </h3>
+          <div class="rc-pane-body" id="rc-body-background">
+            <div class="rc-bg-list" id="rc-bg-list"></div>
+          </div>
+        </section>
+        <section class="rc-pane" data-pane="context" id="rc-pane-context">
+          <h3 class="rc-pane-h">
+            <button type="button" class="rc-pane-btn" aria-expanded="true" aria-controls="rc-body-context">Context<span class="rc-pane-meta" id="rc-ctx-sum"></span></button>
+            <button class="icon-btn rc-ibtn" id="ctx-refresh" type="button" aria-label="Count again" title="Count again"><svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+          </h3>
+          <div class="rc-pane-body" id="rc-body-context">
+            <div id="ctx-panel" class="ctx-panel">
+              <div class="ctx-head">
+                <span id="ctx-total" class="ctx-total">counting…</span>
+                <label class="ctx-win" title="The model's context window in tokens. Empty = the gateway's context_window setting, else the compaction point.">Window
+                  <input id="ctx-window" type="number" min="1000" step="1000" placeholder="auto"></label>
+              </div>
+              <div class="ctx-barwrap"><div id="ctx-bar" class="ctx-bar" role="img"></div></div>
+              <ul id="ctx-legend" class="ctx-legend"></ul>
+              <div id="ctx-note" class="ctx-note"></div>
+              <details class="ctx-more" data-k="system"><summary>System prompt, by section<span class="n" id="ctx-sys-n"></span></summary><div id="ctx-sys"></div></details>
+              <details class="ctx-more" data-k="tools"><summary>Tools<span class="n" id="ctx-tools-n"></span></summary><div id="ctx-tools"></div></details>
+              <details class="ctx-more" data-k="messages"><summary>Messages<span class="n" id="ctx-msgs-n"></span></summary><div id="ctx-msgs"></div></details>
+              <div class="ctx-foot">Estimated at about 4 characters per token, the rule PasClaw's compaction uses; your provider's own count will differ somewhat. Counts what the next message would send, before your new text.</div>
+            </div>
+          </div>
+        </section>
+        <section class="rc-pane" data-pane="params" id="rc-pane-params">
+          <h3 class="rc-pane-h">
+            <button type="button" class="rc-pane-btn" aria-expanded="true" aria-controls="rc-body-params">Parameters<span class="rc-pane-meta" id="rc-params-sum"></span></button>
+          </h3>
+          <div class="rc-pane-body" id="rc-body-params">
+            <div id="chat-params" class="chat-params">
+              <label class="pf">System prompt
+                <textarea id="p-system" rows="4"
+                  placeholder="Override the system prompt for this chat (blank = PasClaw default)"></textarea>
+              </label>
+              <div class="pf-row">
+                <label class="pf preset-pf">Preset
+                  <select id="p-preset"><option value="">—</option></select>
+                </label>
+                <button class="icon-btn" id="p-preset-save"  title="Save the system prompt above as a preset">Save preset</button>
+                <button class="icon-btn" id="p-preset-del"   title="Delete the selected preset">Delete</button>
+              </div>
+              <div class="pf-row">
+                <label class="pf num-pf">Temperature
+                  <input id="p-temp" type="number" step="0.1" min="0" max="2" placeholder="default">
+                </label>
+                <label class="pf num-pf">Max tokens
+                  <input id="p-maxtok" type="number" min="1" step="1" placeholder="default">
+                </label>
+                <button class="icon-btn" id="p-reset" title="Clear all per-chat parameters">Reset</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </aside>
   </div>
 
   <div id="tab-memory" class="tab">
@@ -4222,6 +4327,8 @@ function renderSessions() {
     li.textContent = q ? "no matches" : "no saved chats yet";
     ul.appendChild(li);
   }
+  /* The list marks the open chat; the right column follows it. */
+  rcSyncChat();
 }
 
 /* Render the in-memory active conversation (after a local mutation --
@@ -4234,6 +4341,7 @@ function renderActive() {
   if (run) attachLiveBubble(run);
   /* Another conversation (or a cleared one): its context differs. */
   if (typeof ctxRefreshSoon === "function") ctxRefreshSoon();
+  rcSyncChat();
 }
 
 /* Switch to a stored session: pull its transcript and show it. Allowed
@@ -9358,6 +9466,7 @@ async function bgRefresh(prompt) {
   bg.running = j.running || 0;
   bg.historyMax = j.history_max || 50;
   bgBadge();
+  rcRenderBg();   /* the open chat's jobs, in the Chat tab's right column */
   if (!bgTabActive()) return;
   renderBgList();
   if (bg.open) bgLoadDetail(bg.open, false);
@@ -9372,7 +9481,9 @@ function bgSchedule() {
   clearTimeout(bg.timer);
   bg.timer = null;
   if (document.hidden) return;
-  const ms = bgTabActive() ? 2000 : (bg.running > 0 ? 5000 : 15000);
+  /* The Chat tab's Background pane watching a job of its chat run counts
+     as watching. */
+  const ms = bgTabActive() || rcBgWatching() ? 2000 : (bg.running > 0 ? 5000 : 15000);
   bg.timer = setTimeout(async () => { await bgRefresh(false); bgSchedule(); }, ms);
 }
 function bgPoke() { bgRefresh(false).then(bgSchedule, bgSchedule); }
@@ -10674,6 +10785,8 @@ function updateParamsSummary() {
   if (chatParams.maxtok !== "") bits.push("max " + chatParams.maxtok);
   const el = $("#params-summary");
   if (el) el.textContent = bits.length ? bits.join(" · ") : "defaults";
+  const pane = $("#rc-params-sum");
+  if (pane) pane.textContent = bits.length ? bits.join(" · ") : "defaults";
 }
 function loadPresets() { try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || "{}"); } catch { return {}; } }
 function savePresets(p) { try { localStorage.setItem(PRESETS_KEY, JSON.stringify(p)); } catch {} }
@@ -10707,13 +10820,9 @@ function initParams() {
   const presetSel = $("#p-preset");
   renderPresets();
 
-  const toggle = $("#params-toggle"), panel = $("#chat-params");
-  if (toggle && panel) toggle.addEventListener("click", () => {
-    const show = panel.hasAttribute("hidden");
-    if (show) panel.removeAttribute("hidden"); else panel.setAttribute("hidden", "");
-    toggle.classList.toggle("on", show);
-  });
-  if (sys)    sys.addEventListener("input",    () => { chatParams.system = sys.value; persistChatParams(); });
+  /* The parameters are a pane of the right column: the toolbar button
+     opens the column on it (see rcInit). */
+  if (sys)   sys.addEventListener("input",    () => { chatParams.system = sys.value; persistChatParams(); });
   if (temp)   temp.addEventListener("input",   () => { chatParams.temp   = temp.value.trim(); persistChatParams(); });
   if (maxtok) maxtok.addEventListener("input", () => { chatParams.maxtok = maxtok.value.trim(); persistChatParams(); });
 
@@ -13188,7 +13297,9 @@ function ctxPct(n, of) {
   if (p > 0 && p < 0.1) return "<0.1%";
   return (p < 10 ? p.toFixed(1).replace(/\.0$/, "") : Math.round(p)) + "%";
 }
-function ctxPanelOpen() { const p = $("#ctx-panel"); return !!p && !p.hidden; }
+/* The breakdown is the right column's Context pane: "open" is that pane
+   being on screen (the column open, the pane unfolded). */
+function ctxPanelOpen() { return rcPaneShown("context"); }
 
 function ctxRefreshSoon() {
   clearTimeout(ctxTimer);
@@ -13233,7 +13344,10 @@ function renderContext(rep) {
   const win = (rep.window && rep.window.tokens) || 0;
   const src = (rep.window && rep.window.source) || "unknown";
   const btnN = $("#ctx-toggle .ctx-btn-n");
-  if (btnN) btnN.textContent = fmtTok(total) + (win ? " · " + ctxPct(total, win) : "");
+  const glance = fmtTok(total) + (win ? " · " + ctxPct(total, win) : "");
+  if (btnN) btnN.textContent = glance;
+  const paneSum = $("#rc-ctx-sum");
+  if (paneSum) paneSum.textContent = glance;
   const tb = $("#ctx-toggle");
   if (tb) tb.title = "Context: about " + total.toLocaleString() + " tokens" +
     (win ? " of " + win.toLocaleString() + (src === "compaction" ? " (the compaction point)" : "") : "") +
@@ -13395,22 +13509,21 @@ function renderContextDetails(rep) {
   }
 }
 
-function openContextPanel() {
-  const p = $("#ctx-panel"), t = $("#ctx-toggle");
-  if (!p) return;
-  p.hidden = false;
-  if (t) t.classList.add("on");
+/* /context and the toolbar button: the right column, on its Context pane. */
+function openContextPanel() { rcReveal("context"); }
+
+/* The pane came on screen: draw what is in hand at once, then count again
+   with the section text the pane shows. */
+function ctxPaneShown() {
   const total = $("#ctx-total");
-  if (total && !ctxLast) total.textContent = "counting…";
+  if (ctxLast) renderContext(ctxLast);
+  else if (total) total.textContent = "counting…";
   ctxRefresh();
 }
 
 function initContext() {
-  const p = $("#ctx-panel"), t = $("#ctx-toggle");
-  if (t) t.addEventListener("click", () => {
-    if (p && !p.hidden) { p.hidden = true; t.classList.remove("on"); }
-    else openContextPanel();
-  });
+  /* The toolbar button opens the right column on the Context pane (see
+     rcInit); its label stays the running total. */
   const rf = $("#ctx-refresh");
   if (rf) rf.addEventListener("click", ctxRefresh);
   const wi = $("#ctx-window");
@@ -13446,6 +13559,373 @@ function initContext() {
   ctxRefreshSoon();
 }
 
+/* ===== The Chat tab's right column =====
+   The left column's mirror, holding what is about the open chat rather
+   than the list of chats, in vertical panes:
+
+     App         a Desktop project chat's app, live (hidden for other chats);
+     Background  this chat's background jobs, live, each opening on the
+                 Background tab;
+     Context     the breakdown the context button used to drop down;
+     Parameters  the per-chat parameters the Parameters button used to.
+
+   The column opens from its own toolbar button or Ctrl+. (Cmd+. on a Mac),
+   and the Parameters and context buttons open it on their pane. Its open
+   state, width and folded panes live in localStorage (every access in a
+   try: a private window may refuse it). On a phone it is a drawer over the
+   transcript; between that and a wide window, opening one column puts the
+   other away.
+
+   A chat belongs to a Desktop project by its session id: the desktop files
+   a project's conversation as `desktop-<project slug>` (desktop.html,
+   docs/desktop.md "Conversations live on the server"); `desktop-shell` is
+   the desktop's shell, not a project. The app comes from GET
+   /v1/apps/<slug> and is framed from the gateway's own app route,
+   /apps/<slug>/ (on the apps origin when the gateway has one), with the
+   desktop's sandbox: scripts and forms, never same-origin, so the app's
+   code cannot reach this page or its token. The frame's pasclaw.js asks
+   its parent for its state store; that broker is here too, scoped to this
+   frame's project exactly as the desktop's is. */
+const RC_OPEN_KEY = "pasclaw.rc.open", RC_WIDTH_KEY = "pasclaw.rc.width", RC_PANES_KEY = "pasclaw.rc.panes";
+const RC_PANES = ["app", "background", "context", "params"];
+const rc = { chat: undefined, project: "", frame: null, dirty: false, appSeq: 0, appsOrigin: null,
+             folded: {}, bgSig: "", hidLeft: false };
+
+function rcGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function rcPut(k, v) { try { localStorage.setItem(k, v); } catch {} }
+function rcChatTabActive() { const t = $("#tab-chat"); return !!t && t.classList.contains("active"); }
+/* The phone layout, where both columns are drawers (the left's test). */
+function rcIsOverlay() { return sidebarIsOverlay(); }
+/* Too narrow for both columns beside a readable transcript. */
+function rcIsCramped() {
+  return !rcIsOverlay() && !!(window.matchMedia && window.matchMedia("(max-width:1180px)").matches);
+}
+function rcOpen() { const c = $("#rc-col"); return !!c && !c.classList.contains("collapsed"); }
+function rcPaneShown(name) { return rcOpen() && !rc.folded[name] && !$("#rc-pane-" + name).hidden; }
+
+function rcLeft() { return { aside: document.querySelector("aside.sessions"), sp: $("#chat-splitter") }; }
+function rcSetOpen(open, remember) {
+  const col = $("#rc-col"), sp = $("#rc-splitter");
+  if (!col) return;
+  const was = rcOpen();
+  col.classList.toggle("collapsed", !open);
+  sp.classList.toggle("collapsed", !open);
+  /* The phone's drawer is a glance: a reload does not reopen it over the chat. */
+  if (remember !== false && !rcIsOverlay()) rcPut(RC_OPEN_KEY, open ? "1" : "0");
+  const { aside, sp: lsp } = rcLeft();
+  if (open && !was) {
+    if (rcIsOverlay()) closeSidebarIfOverlay();
+    else if (rcIsCramped() && aside && !aside.classList.contains("collapsed")) {
+      /* Put the chat list away for now; it comes back when this closes. */
+      aside.classList.add("collapsed"); if (lsp) lsp.classList.add("collapsed");
+      rc.hidLeft = true;
+    }
+  } else if (!open && was && rc.hidLeft) {
+    rc.hidLeft = false;
+    if (!rcIsOverlay() && aside) { aside.classList.remove("collapsed"); if (lsp) lsp.classList.remove("collapsed"); }
+  }
+  rcSyncButtons();
+  if (open && !was) {
+    rcSyncChat();
+    if (rcPaneShown("context")) ctxPaneShown();
+    if (rcPaneShown("background")) { rcRenderBg(); bgPoke(); }
+  }
+}
+
+function rcSyncButtons() {
+  const open = rcOpen(), t = $("#rc-toggle");
+  if (t) { t.classList.toggle("on", open); t.setAttribute("aria-expanded", String(open)); }
+  const p = $("#params-toggle"), c = $("#ctx-toggle");
+  if (p) p.classList.toggle("on", rcPaneShown("params"));
+  if (c) c.classList.toggle("on", rcPaneShown("context"));
+}
+
+/* Fold or unfold a pane; folded panes are remembered. */
+function rcFold(name, folded, remember) {
+  const sec = $("#rc-pane-" + name);
+  if (!sec) return;
+  rc.folded[name] = !!folded;
+  sec.querySelector(".rc-pane-btn").setAttribute("aria-expanded", String(!folded));
+  $("#rc-body-" + name).hidden = !!folded;
+  if (remember !== false) rcPut(RC_PANES_KEY, JSON.stringify(rc.folded));
+  rcSyncButtons();
+  if (folded || !rcOpen()) return;
+  if (name === "context") ctxPaneShown();
+  if (name === "background") { rc.bgSig = ""; rcRenderBg(); bgPoke(); }
+}
+
+/* Open the column on one pane: unfolded, scrolled to, and lit briefly. */
+function rcReveal(name) {
+  if (!rcChatTabActive()) showTab("chat");
+  rcSetOpen(true);
+  if (rc.folded[name]) rcFold(name, false);
+  const sec = $("#rc-pane-" + name), panes = $("#rc-panes");
+  if (!sec || !panes) return;
+  panes.scrollTo({ top: sec.offsetTop, behavior: "smooth" });   // .rc-panes is the offsetParent
+  sec.classList.add("rc-flash");
+  clearTimeout(sec._flash);
+  sec._flash = setTimeout(() => sec.classList.remove("rc-flash"), 900);
+}
+/* A toolbar button for a pane: opens the column there, or, when that pane
+   is already on screen, closes the column -- the toggle the popdown was. */
+function rcPaneButton(name) {
+  const sec = $("#rc-pane-" + name), panes = $("#rc-panes");
+  if (rcPaneShown(name) && sec && panes) {
+    const top = sec.getBoundingClientRect().top, box = panes.getBoundingClientRect();
+    if (top >= box.top - 2 && top < box.bottom - 40) { rcSetOpen(false); return; }
+  }
+  rcReveal(name);
+}
+
+/* The open chat changed (or the column opened): its jobs and its app. */
+function rcSyncChat() {
+  if (!rcOpen()) { rc.chat = undefined; return; }   // read afresh on open
+  let id = "";
+  try { id = activeSessionId || ""; } catch { return; }
+  if (id === rc.chat) return;
+  rc.chat = id;
+  rc.bgSig = "";
+  rcRenderBg();
+  rcLoadApp(false);
+}
+
+/* ---- Background: this chat's jobs ---- */
+function rcChatJobs() {
+  let id = "";
+  try { id = activeSessionId || ""; } catch {}
+  return id ? bg.jobs.filter(j => j.session === id) : [];
+}
+/* Polled at the Background tab's 2 s while one of this chat's jobs runs
+   in the pane on screen. */
+function rcBgWatching() {
+  return !document.hidden && rcChatTabActive() && rcPaneShown("background") &&
+         rcChatJobs().some(j => !j.finished_at);
+}
+function rcRenderBg() {
+  const box = $("#rc-bg-list"), count = $("#rc-bg-count");
+  if (!box) return;
+  const jobs = rcChatJobs(), live = jobs.filter(j => !j.finished_at).length;
+  if (count) count.textContent = live ? live + " running" : (jobs.length ? String(jobs.length) : "");
+  if (!rcOpen()) return;
+  if (!jobs.length) {
+    if (rc.bgSig !== "empty") {
+      box.innerHTML = `<div class="rc-bg-empty">No background work in this chat</div>`;
+      rc.bgSig = "empty";
+    }
+    return;
+  }
+  /* Rebuilt only when more than the clock changed. */
+  const sig = JSON.stringify(jobs.map(j => [j.handle, j.state, j.stopping, j.finished_at]));
+  if (sig === rc.bgSig) {
+    for (const j of jobs) {
+      const t = box.querySelector(`.rc-bg-item[data-h="${CSS.escape(j.handle)}"] .rc-bg-time`);
+      if (t) t.textContent = bgTimeText(j);
+    }
+    return;
+  }
+  rc.bgSig = sig;
+  box.innerHTML = jobs.map(j => {
+    const what = j.kind === "shell" ? j.command : j.prompt;
+    return `<button type="button" class="rc-bg-item" data-h="${escapeHtml(j.handle)}" title="Open on the Background tab">`
+         + `<span class="rc-bg-l1">${bgChip(j)}<span class="rc-bg-name">${escapeHtml(bgName(j))}</span>`
+         + `<span class="rc-bg-time">${bgTimeText(j)}</span></span>`
+         + `<span class="rc-bg-l2${j.kind === "shell" ? " mono" : ""}">${escapeHtml(what || "")}</span></button>`;
+  }).join("");
+  box.querySelectorAll(".rc-bg-item").forEach(el => el.addEventListener("click", () => {
+    if (rcIsOverlay()) rcSetOpen(false);
+    showTab("background");
+    bgOpen(el.dataset.h);
+  }));
+}
+
+/* ---- App: a Desktop project chat's app ---- */
+function rcProjectOf(id) {
+  const m = /^desktop-([a-z0-9]+(?:-[a-z0-9]+)*)$/.exec(id || "");
+  return m && m[1] !== "shell" && m[1].length <= 64 ? m[1] : "";
+}
+function rcAppURL(p) { return (rc.appsOrigin || "") + "/apps/" + encodeURIComponent(p) + "/"; }
+function rcDropApp() {
+  rc.project = ""; rc.frame = null; rc.dirty = false;
+  const wrap = $("#rc-app-wrap");
+  if (wrap) wrap.replaceChildren();
+}
+function rcAppNote(text) {
+  const n = $("#rc-app-note");
+  if (!n) return;
+  n.textContent = text || "";
+  n.hidden = !text;
+}
+async function rcLoadApp(force) {
+  const pane = $("#rc-pane-app");
+  if (!pane) return;
+  let id = "";
+  try { id = activeSessionId || ""; } catch {}
+  const p = rcProjectOf(id), seq = ++rc.appSeq;
+  if (!p) { rcDropApp(); pane.hidden = true; rcSyncButtons(); return; }
+  if (!force && p === rc.project && rc.frame) { pane.hidden = false; return; }
+  let app = null;
+  try {
+    const r = await gwFetch("/v1/apps/" + encodeURIComponent(p), { noPrompt: true });
+    if (r.ok) app = await r.json();
+  } catch {}
+  if (seq !== rc.appSeq) return;
+  if (!app || !app.exists) { rcDropApp(); pane.hidden = true; return; }
+  if (rc.appsOrigin === null) {
+    try {
+      const c = await (await gwFetch("/v1/desktop/config", { noPrompt: true })).json();
+      rc.appsOrigin = c && c.apps_isolated && /^https?:\/\/[^/]+$/.test(c.apps_origin || "") ? c.apps_origin : "";
+    } catch { rc.appsOrigin = ""; }
+    if (seq !== rc.appSeq) return;
+  }
+  pane.hidden = false;
+  $("#rc-app-name").textContent = app.name && app.name !== p ? app.name : p;
+  /* Opened as a top-level page an app is same-origin with this gateway --
+     it could read the token -- unless apps have an origin of their own. */
+  const open = $("#rc-app-open");
+  if (rc.appsOrigin && app.servable) { open.href = rcAppURL(p); open.title = "Open the app in its own tab"; }
+  else { open.href = "/desktop"; open.title = "Open in a window: PasClaw Desktop (" + p + ")"; }
+  $("#rc-app-reload").disabled = !app.servable;
+  if (!app.servable) {
+    rcDropApp();
+    rcAppNote("This app is a " + (app.kind || "process") + " program: it runs on the gateway's machine rather " +
+              "than in a page, so it does not show here. Run it from PasClaw Desktop.");
+    return;
+  }
+  /* A frame cannot send the bearer token: on a token-gated gateway the app
+     route answers 401 unless apps are served from their own origin. */
+  if (gwToken() && !rc.appsOrigin) {
+    let st = 0;
+    try { st = (await fetch(rcAppURL(p), { cache: "no-store", credentials: "omit" })).status; } catch {}
+    if (seq !== rc.appSeq) return;
+    if (st === 401) {
+      rcDropApp();
+      rcAppNote("This gateway needs its token, which an app frame cannot send. Start it with " +
+                "--apps-port to show apps here.");
+      return;
+    }
+  }
+  rcAppNote(app.ready === false ? "The app has no entry page yet." : "");
+  rc.project = p;
+  const f = document.createElement("iframe");
+  f.title = "App: " + (app.name || p);
+  /* Model-authored code: the desktop's sandbox, never allow-same-origin. */
+  f.setAttribute("sandbox", "allow-scripts allow-forms");
+  f.setAttribute("referrerpolicy", "no-referrer");
+  f.src = rcAppURL(p) + "?t=" + Date.now();
+  rc.frame = f; rc.dirty = false;
+  $("#rc-app-wrap").replaceChildren(f);
+}
+/* The app's SDK (pasclaw.js) asks its parent for its state, actions and
+   reads. Only this column's frame is answered, and only for its project. */
+window.addEventListener("message", async ev => {
+  const f = rc.frame, m = ev.data;
+  if (!f || ev.source !== f.contentWindow || !m || typeof m !== "object") return;
+  if (m.__pasclaw === "dirty") { rc.dirty = !!m.dirty; return; }
+  if (m.__pasclaw !== "state" || !rc.project) return;
+  const src = ev.source, base = "/v1/apps/" + encodeURIComponent(rc.project);
+  const reply = payload => { try { src.postMessage(Object.assign({ __pasclaw: "reply", id: m.id }, payload), "*"); } catch {} };
+  const call = async (url, opts) => {
+    const r = await gwFetch(url, Object.assign({ noPrompt: true }, opts));
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("http " + r.status));
+    return j;
+  };
+  const key = encodeURIComponent(String(m.key || ""));
+  try {
+    if (m.op === "get") { const j = await call(base + "/state/" + key); reply({ value: j.exists ? j.value : null }); }
+    else if (m.op === "set") {
+      await call(base + "/state/" + key, { method: "PUT", body: String(m.value == null ? "" : m.value),
+                                           headers: { "content-type": "text/plain" } });
+      reply({ value: true });
+    }
+    else if (m.op === "del") { await call(base + "/state/" + key, { method: "DELETE" }); reply({ value: true }); }
+    else if (m.op === "action") reply({ value: await call(base + "/action/" + key, { method: "POST", body: String(m.value || "") }) });
+    else if (m.op === "read") {
+      const j = await call(base + "/read/" + key + (m.value ? "?q=" + encodeURIComponent(String(m.value)) : ""));
+      reply({ value: j.items || [] });
+    }
+    else reply({ error: "unknown op" });
+  } catch (e) { reply({ error: e.message }); }
+});
+
+function rcInit() {
+  const col = $("#rc-col"), sp = $("#rc-splitter");
+  if (!col || !sp) return;
+  let folded = {};
+  try { folded = JSON.parse(rcGet(RC_PANES_KEY) || "{}") || {}; } catch {}
+  for (const name of RC_PANES) rcFold(name, !!folded[name], false);
+  const MIN = 260;
+  const maxW = () => Math.max(MIN, Math.min(720, window.innerWidth - 420));
+  const saved = parseInt(rcGet(RC_WIDTH_KEY), 10);
+  if (saved >= MIN) col.style.flexBasis = Math.min(saved, maxW()) + "px";
+
+  $("#rc-toggle").addEventListener("click", () => rcSetOpen(!rcOpen()));
+  $("#rc-close").addEventListener("click", () => rcSetOpen(false));
+  $("#params-toggle").addEventListener("click", () => rcPaneButton("params"));
+  $("#ctx-toggle").addEventListener("click", () => rcPaneButton("context"));
+  $("#rc-bg-all").addEventListener("click", () => { if (rcIsOverlay()) rcSetOpen(false); showTab("background"); });
+  $("#rc-app-reload").addEventListener("click", () => {
+    if (rc.dirty && !confirm("Reload the app?\n\nYou have unsaved changes in it, and reloading discards them.")) return;
+    rcLoadApp(true);
+  });
+  for (const name of RC_PANES)
+    $("#rc-pane-" + name + " .rc-pane-btn").addEventListener("click", () => rcFold(name, !rc.folded[name]));
+
+  /* Ctrl+. (Cmd+. on a Mac) on the Chat tab; Escape puts the phone drawer away. */
+  document.addEventListener("keydown", e => {
+    if (!rcChatTabActive()) return;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === ".") {
+      e.preventDefault();
+      rcSetOpen(!rcOpen());
+    } else if (e.key === "Escape" && rcIsOverlay() && rcOpen()) rcSetOpen(false, false);
+  });
+  /* On a phone the drawer covers the transcript: a tap beside it puts it
+     away, as the chat list's does. */
+  document.querySelector(".chat-pane").addEventListener("pointerdown", e => {
+    if (!rcIsOverlay() || !rcOpen() || e.target.closest("#rc-toggle,#params-toggle,#ctx-toggle")) return;
+    rcSetOpen(false, false);
+  });
+  /* Opening the chat list where both do not fit puts this column away. */
+  $("#sidebar-toggle").addEventListener("click", () => setTimeout(() => {
+    const { aside } = rcLeft();
+    if (!aside || aside.classList.contains("collapsed") || !rcOpen()) return;
+    if (rcIsOverlay() || rcIsCramped()) { rc.hidLeft = false; rcSetOpen(false, false); }
+  }, 0));
+
+  /* Drag the divider to resize; the app frame would swallow the pointer,
+     so it goes inert while the drag lasts. */
+  let dragging = false;
+  const wrap = $("#rc-app-wrap");
+  const onMove = e => {
+    if (!dragging) return;
+    const w = Math.max(MIN, Math.min(maxW(), col.getBoundingClientRect().right - e.clientX));
+    col.style.flexBasis = w + "px";
+    e.preventDefault();
+  };
+  const stop = () => {
+    if (!dragging) return;
+    dragging = false;
+    sp.classList.remove("drag");
+    document.body.style.userSelect = "";
+    if (wrap) wrap.style.pointerEvents = "";
+    rcPut(RC_WIDTH_KEY, String(Math.round(col.getBoundingClientRect().width)));
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", stop);
+  };
+  sp.addEventListener("pointerdown", e => {
+    dragging = true;
+    sp.classList.add("drag");
+    document.body.style.userSelect = "none";
+    if (wrap) wrap.style.pointerEvents = "none";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", stop);
+    e.preventDefault();
+  });
+
+  if (rcGet(RC_OPEN_KEY) === "1" && !rcIsOverlay()) rcSetOpen(true, false);
+  rcSyncButtons();
+}
+
 /* ===== Boot ===== */
 initTheme();
 initMode();
@@ -13453,6 +13933,7 @@ initToolDetails();
 loadModels();
 initParams();
 initContext();
+rcInit();
 // Restore the tab named in the URL hash (deep link / reload / bookmark).
 // No hash leaves the markup default (Chat) active untouched.
 if (location.hash.slice(1)) showTab(location.hash.slice(1));
