@@ -69,7 +69,7 @@ uses
   PasClaw.Logger,
   PasClaw.Apps,
   PasClaw.Projects.Store
-  {$IFNDEF FREEPASCALOS}   { FreePascalOS: no Indy, so no IMAP (see FetchHeaders) }
+  {$IFNDEF FREEPASCALOS}   { FreePascalOS: no OpenSSL for Indy's TLS, so no IMAP (see FetchHeaders) }
   , IdIMAP4, IdMessage, IdText, IdSSLOpenSSL, IdExplicitTLSClientServerBase
   {$ENDIF};
 
@@ -142,7 +142,7 @@ type
 function FetchHeaders(out Items: TMailItems; out Err: string): Boolean;
 begin
   SetLength(Items, 0);
-  Err := 'IMAP is not available on FreePascalOS';
+  Err := 'IMAP is not available on FreePascalOS (IMAP over TLS needs OpenSSL)';
   Result := False;
 end;
 {$ELSE}

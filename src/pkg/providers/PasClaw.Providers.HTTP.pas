@@ -161,7 +161,7 @@ implementation
 uses
   PasClaw.Utils,
 {$IF Defined(FREEPASCALOS)}
-  PasClaw.HTTP.FreePascalOS;     { libhttp: FreePascalOS has no Indy stack }
+  PasClaw.HTTP.FreePascalOS;     { libhttp: FreePascalOS has no OpenSSL for Indy's TLS }
 {$ELSEIF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
   System.Net.URLClient, System.Net.HttpClient;
 {$ELSE}

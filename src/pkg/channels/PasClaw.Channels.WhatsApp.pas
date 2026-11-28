@@ -55,9 +55,7 @@ interface
 
 uses
   SysUtils, Classes,
-  {$IFNDEF FREEPASCALOS}
-  IdContext, IdCustomHTTPServer,   { FreePascalOS: push only, no webhook }
-  {$ENDIF}
+  IdContext, IdCustomHTTPServer,
   PasClaw.Config,
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry;
@@ -83,12 +81,10 @@ type
     FRegistry:    TToolRegistry;
     FPush:        TWhatsAppPush;
     function VerifySignature(const Body, SignatureHeader: string): Boolean;
-    {$IFNDEF FREEPASCALOS}
     procedure HandleVerify(ARequest: TIdHTTPRequestInfo;
                            AResponse: TIdHTTPResponseInfo);
     procedure HandleEvents(ARequest: TIdHTTPRequestInfo;
                            AResponse: TIdHTTPResponseInfo);
-    {$ENDIF}
     procedure ProcessMessage(const FromNumber, Text: string);
   public
     constructor Create(const AccessToken, PhoneNumberId,
@@ -96,11 +92,9 @@ type
                        Cfg: TConfig; Provider: ILLMProvider;
                        Registry: TToolRegistry);
     destructor Destroy; override;
-    {$IFNDEF FREEPASCALOS}
     procedure HandleWebhook(AContext: TIdContext;
                             ARequest: TIdHTTPRequestInfo;
                             AResponse: TIdHTTPResponseInfo);
-    {$ENDIF}
   end;
 
 implementation
@@ -270,7 +264,6 @@ begin
   Result   := ConstantTimeEqual(Expected, Got);
 end;
 
-{$IFNDEF FREEPASCALOS}
 procedure TWhatsAppBot.HandleVerify(ARequest: TIdHTTPRequestInfo;
                                     AResponse: TIdHTTPResponseInfo);
 var
@@ -300,7 +293,6 @@ begin
   AResponse.ContentType := 'application/json';
   AResponse.ContentText := '{"error":"verify failed"}';
 end;
-{$ENDIF}
 
 procedure TWhatsAppBot.ProcessMessage(const FromNumber, Text: string);
 var
@@ -357,7 +349,6 @@ begin
   FPush.Push(FromNumber, Response);
 end;
 
-{$IFNDEF FREEPASCALOS}
 procedure TWhatsAppBot.HandleEvents(ARequest: TIdHTTPRequestInfo;
                                      AResponse: TIdHTTPResponseInfo);
 var
@@ -505,6 +496,5 @@ begin
     AResponse.ContentType := 'application/json';
   end;
 end;
-{$ENDIF}
 
 end.

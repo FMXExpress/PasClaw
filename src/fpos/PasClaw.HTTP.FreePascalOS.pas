@@ -1,7 +1,8 @@
 (*
   PasClaw.HTTP.FreePascalOS - outbound HTTP and HTTPS on FreePascalOS.
 
-  FreePascalOS has no Indy socket stack and no OpenSSL. It has its own
+  FreePascalOS has no OpenSSL, so Indy's HTTP client (on its FreePascalOS
+  socket stack, src/fpos/indy) speaks plain HTTP only. It has its own
   HTTP client, libhttp (Http.Client.THttpClient: HTTP/1.1 and HTTP/2,
   TLS 1.3 and 1.2 through libtls with certificate checks against the
   system's CA list), and this unit is PasClaw's way to it. It is what

@@ -88,7 +88,7 @@ uses
 {$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
   System.Net.HttpClient, System.Net.URLClient,
 {$ELSE}
-  IdHTTP, IdSSLOpenSSL, IdException, IdExceptionCore,
+  IdHTTP, {$IFNDEF FREEPASCALOS}IdSSLOpenSSL,{$ENDIF} IdException, IdExceptionCore,
 {$IFEND}
   PasClaw.CliUI, PasClaw.Logger, PasClaw.Utils,
   PasClaw.JSON, PasClaw.Config,
@@ -611,9 +611,11 @@ end;
 var
   Http: TIdHTTP;
   Stream: TSSEStream;
+  {$IFNDEF FREEPASCALOS}
   SSL: TIdSSLIOHandlerSocketOpenSSL;
-  URL: string;
   SSLErr: string;
+  {$ENDIF}
+  URL: string;
 begin
   Result := False;
   ErrMsg := '';
@@ -638,6 +640,12 @@ begin
 
     if (Length(URL) >= 8) and SameText(Copy(URL, 1, 8), 'https://') then
     begin
+      {$IFDEF FREEPASCALOS}
+      { Indy's TLS is OpenSSL, which FreePascalOS does not have. }
+      ErrMsg := 'an https gateway is not available on FreePascalOS (Indy''s TLS ' +
+                'needs OpenSSL); reach it over http, e.g. through an SSH tunnel';
+      Exit;
+      {$ELSE}
       if not EnsureOpenSSL(SSLErr) then
       begin
         ErrMsg := SSLErr;
@@ -647,6 +655,7 @@ begin
       SSL.SSLOptions.Method      := sslvTLSv1_2;
       SSL.SSLOptions.SSLVersions := [sslvTLSv1_2];
       Http.IOHandler := SSL;
+      {$ENDIF}
     end;
 
     Stream := TSSEStream.Create(@Ctx);

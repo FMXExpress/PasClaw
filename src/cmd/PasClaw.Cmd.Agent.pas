@@ -48,10 +48,8 @@ uses
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.PlanWrite,
   PasClaw.Tools.Worktree,
-  {$IFNDEF FREEPASCALOS}      { FreePascalOS: no Indy, so no gateway client }
   PasClaw.Cmd.Attach,         { --attach: the terminal as a gateway client }
   PasClaw.Client.Api,         { TChatTurnOptions -- what an attached turn asks for }
-  {$ENDIF}
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.DB,
   PasClaw.Tools.Cron,
@@ -397,7 +395,6 @@ end;
    `--attach --provider x` on the gateway's provider changes what the
    command means. Display-only flags (--quiet, --verbose, --brief) stay
    local and are fine. (Codex P1 on #613.) *)
-{$IFNDEF FREEPASCALOS}
 function AttachTurnOptions(const A: TAgentArgs; out Unsupported: string): TChatTurnOptions;
 var
   D: TAgentArgs;
@@ -432,7 +429,6 @@ begin
   { The gateway's own advisor setting answers an attached turn. }
   if (A.Advisor <> '') or A.NoAdvisor then Refuse('--advisor/--no-advisor');
 end;
-{$ENDIF}
 
 function ParseArgs(const Argv: array of string; var A: TAgentArgs): Boolean;
 var
@@ -2799,11 +2795,9 @@ var
   Cfg: TConfig;
   KindSelected: TShellBackendKind;
   BackendDesc, SessionProfile: string;
-  {$IFNDEF FREEPASCALOS}
   AttachURL, AttachReason, AttachWarn, Unsupported: string;
   AttachFail: Boolean;
   Turn: TChatTurnOptions;
-  {$ENDIF}
   AdvisorErr: string;
 begin
   if not ParseArgs(Argv, A) then
@@ -2848,15 +2842,6 @@ begin
   { Attach mode: a live gateway owns the session, this process is its
     terminal. Decided before any local machinery (embedder, sandbox,
     shell backend, registry) is set up, because none of it runs here. }
-  {$IFDEF FREEPASCALOS}
-  if A.Attach then
-  begin
-    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
-            '--attach is not available on FreePascalOS (no gateway client)');
-    Cfg.Free;
-    Exit(1);
-  end;
-  {$ELSE}
   if ResolveAttach(Cfg, A.Attach, AttachURL, AttachReason, AttachWarn, AttachFail) then
   begin
     try
@@ -2879,7 +2864,6 @@ begin
     Cfg.Free;
     Exit(1);
   end;
-  {$ENDIF}
   { The advisor: config, then --advisor / --no-advisor. Before any
     registry is built -- NewBuiltinRegistry lists the tool from these. }
   if not ApplyAdvisorFlags(Cfg, A.Advisor, A.NoAdvisor, AdvisorErr) then

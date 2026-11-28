@@ -42,9 +42,7 @@ interface
 
 uses
   SysUtils, Classes,
-  {$IFNDEF FREEPASCALOS}
-  IdContext, IdCustomHTTPServer,   { FreePascalOS: push only, no webhook }
-  {$ENDIF}
+  IdContext, IdCustomHTTPServer,
   PasClaw.Config,
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry;
@@ -74,11 +72,9 @@ type
                        Cfg: TConfig; Provider: ILLMProvider;
                        Registry: TToolRegistry);
     destructor Destroy; override;
-    {$IFNDEF FREEPASCALOS}
     procedure HandleWebhook(AContext: TIdContext;
                             ARequest: TIdHTTPRequestInfo;
                             AResponse: TIdHTTPResponseInfo);
-    {$ENDIF}
   end;
 
 implementation
@@ -332,7 +328,6 @@ begin
     if SourceId <> '' then FPush.Push(SourceId, Response);
 end;
 
-{$IFNDEF FREEPASCALOS}
 procedure TLineBot.HandleWebhook(AContext: TIdContext;
                                   ARequest: TIdHTTPRequestInfo;
                                   AResponse: TIdHTTPResponseInfo);
@@ -428,6 +423,5 @@ begin
     Root.Free;
   end;
 end;
-{$ENDIF}
 
 end.

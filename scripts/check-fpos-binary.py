@@ -14,8 +14,11 @@ and checks:
   - the libraries it needs are the system's: libsystem and libhttp among
     them, and nothing from a Linux system (libc, libssl, libdl ...);
   - the text it carries says what the FreePascalOS build leaves out
-    (the gateway's "not available on FreePascalOS"), names its platform
-    for `pasclaw version`, and has none of Indy's or OpenSSL's names.
+    (tui's "not available on FreePascalOS"), names its platform for
+    `pasclaw version`, has Indy on its FreePascalOS socket stack
+    (src/fpos/indy) and the web UI the gateway serves (the resource of
+    PasClaw.Gateway.WebUI), and none of OpenSSL's names: Indy's TLS is
+    left out there.
 
 Exits 0 and prints "fpos binary: OK" when all hold.
 """
@@ -87,12 +90,16 @@ def main():
     foreign = [n for n in needed if n.split('.so')[0] in ('libc', 'libssl', 'libcrypto', 'libdl', 'libpthread', 'libm', 'libsqlite3')]
     if foreign:
         fail('needs libraries FreePascalOS does not have: ' + ', '.join(foreign))
-    for text in (b'not available on FreePascalOS', b'FreePascalOS'):
+    for text, what in ((b'not available on FreePascalOS', 'what it leaves out'),
+                       (b'FreePascalOS', 'its platform'),
+                       (b'TIdStackFreePascalOS', "Indy's FreePascalOS socket stack"),
+                       (b'TIdHTTPServer', "the gateway's HTTP server"),
+                       (b'<title>PasClaw</title>', 'the web UI resource')):
         if text not in data:
-            fail('does not carry %r' % text.decode())
-    for text in (b'TIdHTTP', b'TIdTCPServer', b'SSL_CTX_new'):
+            fail('does not carry %r (%s)' % (text.decode(), what))
+    for text in (b'SSL_CTX_new', b'TIdSSLIOHandlerSocketOpenSSL'):
         if text in data:
-            fail('carries %r: Indy or OpenSSL was linked' % text.decode())
+            fail('carries %r: OpenSSL was linked' % text.decode())
     print('fpos binary: OK (%d bytes; needs %s)' % (len(data), ', '.join(needed)))
 
 
